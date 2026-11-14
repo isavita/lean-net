@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <mswsock.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,26 @@
 #define RN_NONE UINT32_MAX
 #define RN_WHEEL_SLOTS 1024u
 #define RN_WAKE_KEY ((ULONG_PTR)1)
+#define RN_MAX_ACCEPT_TARGETS 256u
+#define RN_MAX_ACCEPT_QUEUE 1000000u
+
+/* A configured channel has one acceptor producer and one worker consumer.
+ * Only SOCKET values cross it; each loop retains private protocol/buffer state.
+ * Both reactors are stopped and joined before their setup-time refs are freed.
+ */
+typedef struct rn_port_owner {
+  HANDLE handle;
+  atomic_uint references;
+} rn_port_owner;
+typedef struct rn_accept_channel {
+  SOCKET *sockets;
+  rn_port_owner *producer_port, *consumer_port;
+  uint32_t capacity;
+  atomic_uint head, tail, references;
+  atomic_int notified, producer_waiting, producer_closed, consumer_closed;
+} rn_accept_channel;
+_Static_assert(ATOMIC_INT_LOCK_FREE == 2,
+               "accept handoff needs lock-free atomics");
 
 enum rn_socket_state {
   RN_UNUSED,
@@ -30,6 +51,7 @@ enum rn_socket_state {
   RN_BOUND,
   RN_LISTENING,
   RN_ACCEPTING,
+  RN_DISPATCH_PENDING,
   RN_CONNECTED,
   RN_CLOSING
 };
@@ -45,6 +67,7 @@ typedef struct rn_operation {
 typedef struct rn_connection {
   SOCKET socket;
   uint32_t generation, state, pending, write_head, write_tail;
+  uint32_t dispatch_pending, dispatch_listener;
   LPFN_ACCEPTEX accept_ex;
   uint32_t paused_position;
   int paused;
@@ -71,6 +94,7 @@ typedef struct rn_timer {
 struct rn_reactor {
   rn_config config;
   HANDLE port;
+  rn_port_owner *port_owner;
   rn_connection *connections;
   rn_buffer *buffers;
   rn_write *writes;
@@ -84,9 +108,130 @@ struct rn_reactor {
   uint32_t outstanding;
   uint64_t timer_tick;
   int destroying, queue_error, cleanup_error, wsa_started;
+  int started;
+  rn_accept_channel **accept_targets;
+  uint32_t accept_target_count, accept_target_next;
+  rn_accept_channel *incoming_accepts;
 };
 
 static int rn_error(DWORD error) { return ln_windows_errno(error); }
+
+static uint32_t rn_channel_count(const rn_accept_channel *channel,
+                                 uint32_t head, uint32_t tail) {
+  return head >= tail ? head - tail : head + (2u * channel->capacity - tail);
+}
+static uint32_t rn_channel_next(const rn_accept_channel *channel,
+                                uint32_t index) {
+  return index + 1 == 2u * channel->capacity ? 0 : index + 1;
+}
+static int rn_channel_discard(rn_accept_channel *channel) {
+  int error = 0;
+  uint32_t tail = atomic_load(&channel->tail);
+  uint32_t head = atomic_load(&channel->head);
+  while (tail != head) {
+    if (closesocket(channel->sockets[tail % channel->capacity]) ==
+            SOCKET_ERROR &&
+        !error)
+      error = rn_error(WSAGetLastError());
+    tail = rn_channel_next(channel, tail);
+  }
+  atomic_store(&channel->tail, tail);
+  return -error;
+}
+static int rn_port_release(rn_port_owner *owner) {
+  if (atomic_fetch_sub(&owner->references, 1) != 1)
+    return 0;
+  int error = CloseHandle(owner->handle) ? 0 : -rn_error(GetLastError());
+  free(owner);
+  return error;
+}
+static int rn_channel_destroy(rn_accept_channel *channel) {
+  int error = rn_channel_discard(channel);
+  if (channel->producer_port) {
+    int released = rn_port_release(channel->producer_port);
+    if (released && !error)
+      error = released;
+  }
+  if (channel->consumer_port) {
+    int released = rn_port_release(channel->consumer_port);
+    if (released && !error)
+      error = released;
+  }
+  free(channel->sockets);
+  free(channel);
+  return error;
+}
+static int rn_channel_release(rn_accept_channel *channel) {
+  return atomic_fetch_sub(&channel->references, 1) == 1
+             ? rn_channel_destroy(channel)
+             : 0;
+}
+
+int rn_set_accept_targets(rn_reactor *acceptor, rn_reactor *const *workers,
+                          uint32_t count, uint32_t capacity) {
+  if (!acceptor || !workers || !count || count > RN_MAX_ACCEPT_TARGETS ||
+      !capacity || capacity > RN_MAX_ACCEPT_QUEUE)
+    return -EINVAL;
+  if (acceptor->started || acceptor->outstanding ||
+      acceptor->incoming_accepts || acceptor->accept_targets ||
+      acceptor->destroying)
+    return -EBUSY;
+  for (uint32_t i = 0; i < count; ++i) {
+    rn_reactor *worker = workers[i];
+    if (!worker || worker == acceptor)
+      return -EINVAL;
+    if (worker->started || worker->outstanding || worker->incoming_accepts ||
+        worker->accept_targets || worker->destroying)
+      return -EBUSY;
+    for (uint32_t j = 0; j < i; ++j)
+      if (workers[j] == worker)
+        return -EINVAL;
+  }
+  rn_accept_channel **channels = calloc(count, sizeof(*channels));
+  if (!channels)
+    return -ENOMEM;
+  int error = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    rn_accept_channel *channel = calloc(1, sizeof(*channel));
+    if (!channel) {
+      error = -ENOMEM;
+      break;
+    }
+    channels[i] = channel;
+    channel->capacity = capacity;
+    atomic_init(&channel->head, 0);
+    atomic_init(&channel->tail, 0);
+    atomic_init(&channel->references, 2);
+    atomic_init(&channel->notified, 0);
+    atomic_init(&channel->producer_waiting, 0);
+    atomic_init(&channel->producer_closed, 0);
+    atomic_init(&channel->consumer_closed, 0);
+    channel->sockets = malloc((size_t)capacity * sizeof(*channel->sockets));
+    if (!channel->sockets) {
+      error = -ENOMEM;
+      break;
+    }
+    channel->producer_port = acceptor->port_owner;
+    channel->consumer_port = workers[i]->port_owner;
+    atomic_fetch_add(&channel->producer_port->references, 1);
+    atomic_fetch_add(&channel->consumer_port->references, 1);
+  }
+  if (error) {
+    for (uint32_t i = 0; i < count; ++i)
+      if (channels[i]) {
+        int cleanup = rn_channel_destroy(channels[i]);
+        if (cleanup)
+          error = cleanup;
+      }
+    free(channels);
+    return error;
+  }
+  for (uint32_t i = 0; i < count; ++i)
+    workers[i]->incoming_accepts = channels[i];
+  acceptor->accept_targets = channels;
+  acceptor->accept_target_count = count;
+  return 0;
+}
 
 uint64_t rn_now_ms(void) { return (uint64_t)GetTickCount64(); }
 static uint64_t rn_token(uint32_t index, uint32_t generation) {
@@ -135,6 +280,7 @@ static uint32_t rn_alloc_connection(rn_reactor *r) {
       c->socket = INVALID_SOCKET;
       c->state = RN_FRESH;
       c->write_head = c->write_tail = RN_NONE;
+      c->dispatch_pending = RN_NONE;
       return i;
     }
   }
@@ -252,7 +398,8 @@ static void rn_close_native(rn_reactor *r, uint32_t index) {
    * socket belongs to a separate slot; cancel that handle before freeing. */
   for (uint32_t i = 0; was_listener && i < r->config.max_connections; ++i) {
     rn_connection *a = &r->connections[i];
-    if (a->state == RN_ACCEPTING && a->accept.listener == index)
+    if ((a->state == RN_ACCEPTING && a->accept.listener == index) ||
+        (a->state == RN_DISPATCH_PENDING && a->dispatch_listener == index))
       rn_close_native(r, i);
   }
   rn_finalize_connection(r, index);
@@ -350,10 +497,102 @@ static void rn_post_write(rn_reactor *r, uint32_t index) {
     rn_close_native(r, index);
   }
 }
+static void rn_release_transferred_slot(rn_reactor *r, uint32_t index) {
+  rn_connection *connection = &r->connections[index];
+  connection->socket = INVALID_SOCKET;
+  connection->state = RN_UNUSED;
+  if (connection->generation != UINT32_MAX)
+    r->free_connections[r->free_connection_count++] = index;
+}
+/* Successful publication transfers socket ownership even if the wake fails.
+ * The worker's queue/free path then remains responsible for closing it. */
+static int rn_dispatch_socket(rn_reactor *r, uint32_t index) {
+  rn_connection *connection = &r->connections[index];
+  uint32_t alive = 0;
+  for (uint32_t n = 0; n < r->accept_target_count; ++n) {
+    uint32_t target = (r->accept_target_next + n) % r->accept_target_count;
+    rn_accept_channel *channel = r->accept_targets[target];
+    if (atomic_load(&channel->consumer_closed))
+      continue;
+    ++alive;
+    uint32_t head = atomic_load(&channel->head);
+    uint32_t tail = atomic_load(&channel->tail);
+    if (rn_channel_count(channel, head, tail) == channel->capacity) {
+      /* Publish the request before rechecking capacity. A concurrent pop will
+       * either wake us or be visible to the second sequentially-consistent
+       * load. */
+      atomic_store(&channel->producer_waiting, 1);
+      tail = atomic_load(&channel->tail);
+      if (rn_channel_count(channel, head, tail) == channel->capacity)
+        continue;
+      atomic_store(&channel->producer_waiting, 0);
+    }
+    channel->sockets[head % channel->capacity] = connection->socket;
+    atomic_store(&channel->head, rn_channel_next(channel, head));
+    rn_release_transferred_slot(r, index);
+    r->accept_target_next = (target + 1) % r->accept_target_count;
+    if (!atomic_exchange(&channel->notified, 1) &&
+        !PostQueuedCompletionStatus(channel->consumer_port->handle, 0,
+                                    RN_WAKE_KEY, NULL))
+      rn_emit(r, RN_ERROR, 0, 0, 0, -rn_error(GetLastError()), RN_SETUP_ERROR,
+              0, 0);
+    return 1;
+  }
+  return alive ? 0 : -EPIPE;
+}
+static int rn_adopt_sockets(rn_reactor *r) {
+  rn_accept_channel *channel = r->incoming_accepts;
+  if (!channel)
+    return 0;
+  atomic_store(&channel->notified, 0);
+  while (r->free_connection_count && r->queue_count < r->config.max_events) {
+    uint32_t tail = atomic_load(&channel->tail);
+    if (tail == atomic_load(&channel->head))
+      break;
+    uint32_t index = rn_alloc_connection(r);
+    if (index == RN_NONE)
+      break;
+    rn_connection *connection = &r->connections[index];
+    connection->socket = channel->sockets[tail % channel->capacity];
+    atomic_store(&channel->tail, rn_channel_next(channel, tail));
+    if (atomic_exchange(&channel->producer_waiting, 0) &&
+        !atomic_load(&channel->producer_closed) &&
+        !PostQueuedCompletionStatus(channel->producer_port->handle, 0,
+                                    RN_WAKE_KEY, NULL))
+      return -rn_error(GetLastError());
+    uint64_t token = rn_token(index, connection->generation);
+    if (!CreateIoCompletionPort((HANDLE)connection->socket, r->port, 0, 0)) {
+      int error = rn_error(GetLastError());
+      rn_emit(r, RN_ERROR, token, 0, 0, -error, RN_SETUP_ERROR, 0, 0);
+      rn_close_native(r, index);
+      continue;
+    }
+    connection->state = RN_CONNECTED;
+    rn_emit(r, RN_ACCEPTED, token, 0, 0, 0, 0, 0, 0);
+    rn_post_read(r, index);
+    if (r->queue_count >= r->config.max_events)
+      break;
+  }
+  return 0;
+}
 static void rn_post_accept(rn_reactor *r, uint32_t listener) {
   rn_connection *l = &r->connections[listener];
   if (l->state != RN_LISTENING || l->pending != 0 || r->destroying)
     return;
+  if (l->dispatch_pending != RN_NONE) {
+    int dispatched = rn_dispatch_socket(r, l->dispatch_pending);
+    if (dispatched < 0) {
+      rn_emit(r, RN_ERROR, rn_token(listener, l->generation), 0, 0, dispatched,
+              RN_SETUP_ERROR, 0, 0);
+      rn_close_native(r, listener);
+      return;
+    }
+    if (!dispatched) {
+      rn_pause(r, listener);
+      return;
+    }
+    l->dispatch_pending = RN_NONE;
+  }
   uint32_t index = rn_alloc_connection(r);
   if (index == RN_NONE) {
     l->accept_paused = 1;
@@ -452,29 +691,47 @@ static void rn_completed(rn_reactor *r, rn_operation *op, DWORD bytes,
     if (!error && c->state != RN_CLOSING && l->state == RN_LISTENING) {
       SOCKET listener_socket = l->socket;
       int one = 1;
+      int option_failure = 0;
       if (setsockopt(c->socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
                      (const char *)&listener_socket,
                      sizeof(listener_socket)) == SOCKET_ERROR ||
           setsockopt(c->socket, IPPROTO_TCP, TCP_NODELAY, (const char *)&one,
-                     sizeof(one)) == SOCKET_ERROR)
+                     sizeof(one)) == SOCKET_ERROR) {
         error = rn_error(WSAGetLastError());
-      else if (CreateIoCompletionPort((HANDLE)c->socket, r->port, 0, 0) == NULL)
+        option_failure = 1;
+      } else if (!r->accept_target_count &&
+                 CreateIoCompletionPort((HANDLE)c->socket, r->port, 0, 0) ==
+                     NULL)
         error = rn_error(GetLastError());
       if (error) {
         uint32_t flags = RN_SETUP_ERROR;
         int pending = 0, pending_size = sizeof(pending);
-        if (getsockopt(c->socket, SOL_SOCKET, SO_ERROR, (char *)&pending,
+        if (option_failure &&
+            getsockopt(c->socket, SOL_SOCKET, SO_ERROR, (char *)&pending,
                        &pending_size) == 0 &&
             (pending == WSAECONNRESET || pending == WSAECONNABORTED ||
              pending == WSAENOTCONN || pending == WSAETIMEDOUT ||
              pending == WSAENETDOWN || pending == WSAENETUNREACH ||
-             pending == WSAEHOSTUNREACH || pending == WSAECONNREFUSED)) {
+             pending == WSAEHOSTUNREACH || pending == WSAECONNREFUSED) &&
+            (error == EINVAL || error == rn_error((DWORD)pending))) {
           error = rn_error((DWORD)pending);
           flags = RN_ACCEPT_ERROR;
         }
         rn_emit(r, RN_ERROR, rn_token(op->listener, l->generation), 0, 0,
                 -error, flags, 0, 0);
         rn_close_native(r, index);
+      } else if (r->accept_target_count) {
+        c->state = RN_DISPATCH_PENDING;
+        c->dispatch_listener = op->listener;
+        int dispatched = rn_dispatch_socket(r, index);
+        if (dispatched < 0) {
+          rn_emit(r, RN_ERROR, rn_token(op->listener, l->generation), 0, 0,
+                  dispatched, RN_SETUP_ERROR, 0, 0);
+          rn_close_native(r, op->listener);
+        } else if (!dispatched) {
+          l->dispatch_pending = index;
+          rn_pause(r, op->listener);
+        }
       } else {
         c->state = RN_CONNECTED;
         rn_emit(r, RN_ACCEPTED, token, 0, 0, 0, 0, 0, 0);
@@ -609,6 +866,16 @@ int rn_new(const rn_config *config, rn_reactor **out) {
     int cleanup = rn_free(r);
     return cleanup ? cleanup : -error;
   }
+  /* IOCP handles must not be duplicated with DuplicateHandle. Channels retain
+   * this original handle through a shared owner that outlives either reactor.
+   */
+  r->port_owner = calloc(1, sizeof(*r->port_owner));
+  if (!r->port_owner) {
+    int cleanup = rn_free(r);
+    return cleanup ? cleanup : -ENOMEM;
+  }
+  r->port_owner->handle = r->port;
+  atomic_init(&r->port_owner->references, 1);
   r->connections = calloc(config->max_connections, sizeof(*r->connections));
   r->buffers = calloc(r->buffer_count, sizeof(*r->buffers));
   r->writes = calloc(config->max_writes, sizeof(*r->writes));
@@ -733,12 +1000,15 @@ int rn_bind(rn_reactor *r, uint64_t token, const char *host, uint16_t port,
 int rn_start_listening(rn_reactor *r, uint64_t token, int backlog) {
   if (!r || backlog <= 0)
     return -EINVAL;
+  if (r->incoming_accepts)
+    return -EINVAL;
   rn_connection *c = rn_connection_get(r, token);
   if (!c || c->state != RN_BOUND)
     return -EINVAL;
   if (listen(c->socket, backlog) == SOCKET_ERROR)
     return -rn_error(WSAGetLastError());
   c->state = RN_LISTENING;
+  r->started = 1;
   rn_post_accept(r, rn_index(token));
   return 0;
 }
@@ -761,8 +1031,12 @@ int rn_step(rn_reactor *r, int timeout_ms) {
   if (!r || timeout_ms < -1)
     return -EINVAL;
   r->event_count = 0;
+  r->started = 1;
   if (r->queue_error)
     return -r->queue_error;
+  int adopt_error = rn_adopt_sockets(r);
+  if (adopt_error)
+    return adopt_error;
   rn_resume(r);
   rn_expire(r, rn_now_ms());
   DWORD wait = timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms;
@@ -790,6 +1064,9 @@ int rn_step(rn_reactor *r, int timeout_ms) {
     if (r->queue_count >= r->config.max_events)
       break;
   }
+  adopt_error = rn_adopt_sockets(r);
+  if (adopt_error)
+    return adopt_error;
   rn_expire(r, rn_now_ms());
   while (r->event_count < r->config.max_events && r->queue_count) {
     rn_event event = r->queued[r->queue_head];
@@ -965,6 +1242,14 @@ int rn_free(rn_reactor *r) {
     return -EINVAL;
   r->destroying = 1;
   int error = 0;
+  if (r->incoming_accepts) {
+    atomic_store(&r->incoming_accepts->consumer_closed, 1);
+    int discarded = rn_channel_discard(r->incoming_accepts);
+    if (discarded)
+      error = -discarded;
+  }
+  for (uint32_t i = 0; i < r->accept_target_count; ++i)
+    atomic_store(&r->accept_targets[i]->producer_closed, 1);
   if (r->connections)
     for (uint32_t i = 0; i < r->config.max_connections; ++i)
       rn_close_native(r, i);
@@ -988,15 +1273,30 @@ int rn_free(rn_reactor *r) {
     return error ? -error : -EBUSY;
   if (!error)
     error = r->cleanup_error;
+  for (uint32_t i = 0; i < r->accept_target_count; ++i) {
+    int released = rn_channel_release(r->accept_targets[i]);
+    if (released && !error)
+      error = -released;
+  }
+  if (r->incoming_accepts) {
+    int released = rn_channel_release(r->incoming_accepts);
+    if (released && !error)
+      error = -released;
+  }
   if (r->buffers)
     for (uint32_t i = 0; i < r->buffer_count; ++i)
       if (r->buffers[i].bytes)
         lean_dec(r->buffers[i].bytes);
-  if (r->port && !CloseHandle(r->port))
+  if (r->port_owner) {
+    int released = rn_port_release(r->port_owner);
+    if (released && !error)
+      error = -released;
+  } else if (r->port && !CloseHandle(r->port) && !error)
     error = rn_error(GetLastError());
   if (r->wsa_started && WSACleanup() == SOCKET_ERROR && !error)
     error = rn_error(WSAGetLastError());
   free(r->queued);
+  free(r->accept_targets);
   free(r->paused_connections);
   free(r->free_buffers);
   free(r->free_writes);

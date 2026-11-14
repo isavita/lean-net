@@ -14,6 +14,8 @@ structure NativeEvent where
 @[extern "shim_reactor_new"]
 opaque create (connections events writes buffers4k buffers16k buffers64k tickMs : UInt32) : IO UInt64
 @[extern "shim_reactor_free"] opaque free (handle : UInt64) : IO UInt64
+@[extern "shim_reactor_set_accept_targets"]
+opaque setAcceptTargets (handle : UInt64) (workers : @& Array UInt64) (queueCapacity : UInt32) : IO UInt64
 @[extern "shim_reactor_socket_new"] opaque socketNew (handle : UInt64) : IO UInt64
 @[extern "shim_reactor_bind"] opaque bind (handle token : UInt64) (host : @& String) (port : UInt16) (reusePort : UInt8) : IO UInt64
 @[extern "shim_reactor_start_listening"] opaque startListening (handle token : UInt64) (backlog : UInt32) : IO UInt64

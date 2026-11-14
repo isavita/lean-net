@@ -62,6 +62,12 @@ class WindowsNative(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("tests passed", result.stdout)
 
+    def test_acceptor_workers_backpressure_and_both_free_orders(self):
+        result = subprocess.run([str(self.binary), "--dispatch"], capture_output=True,
+                                text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("tests passed", result.stdout)
+
     def check_console(self, option):
         with subprocess.Popen([str(self.binary), option], stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, text=True,

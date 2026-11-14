@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 static lean_object *rn_io_number(int64_t value) {
     return lean_io_result_mk_ok(lean_box_uint64((uint64_t)value));
@@ -31,6 +32,25 @@ lean_object *shim_reactor_new(uint32_t connections, uint32_t events, uint32_t wr
 }
 lean_object *shim_reactor_free(uint64_t handle) {
     return rn_io_number(handle == 0 ? -EINVAL : rn_free(rn_handle(handle)));
+}
+lean_object *shim_reactor_set_accept_targets(uint64_t handle, b_lean_obj_arg handles,
+                                             uint32_t queue_capacity) {
+    size_t count = lean_array_size(handles);
+    if (handle == 0 || count == 0 || count > 256 || queue_capacity == 0)
+        return rn_io_number(-EINVAL);
+    rn_reactor **workers = malloc(count * sizeof(*workers));
+    if (workers == NULL) return rn_io_number(-ENOMEM);
+    for (size_t i = 0; i < count; ++i) {
+        uint64_t worker = lean_unbox_uint64(lean_array_uget_borrowed(handles, i));
+        if (worker == 0 || worker > INT64_MAX) {
+            free(workers);
+            return rn_io_number(-EINVAL);
+        }
+        workers[i] = rn_handle(worker);
+    }
+    int rc = rn_set_accept_targets(rn_handle(handle), workers, (uint32_t)count, queue_capacity);
+    free(workers);
+    return rn_io_number(rc);
 }
 lean_object *shim_reactor_socket_new(uint64_t handle) {
     if (handle == 0) return rn_io_number(-EINVAL);

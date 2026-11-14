@@ -13,7 +13,7 @@ lean_object *shim_reactor_group_new(b_lean_obj_arg handles) {
     rn_reactor **reactors = malloc(count * sizeof(*reactors));
     if (reactors == NULL) return rn_io_number(-ENOMEM);
     for (size_t i = 0; i < count; ++i) {
-        uint64_t handle = lean_unbox_uint64(lean_array_uget(handles, i));
+        uint64_t handle = lean_unbox_uint64(lean_array_uget_borrowed(handles, i));
         if (handle == 0 || handle > INT64_MAX) {
             free(reactors);
             return rn_io_number(-EINVAL);

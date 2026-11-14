@@ -40,6 +40,12 @@ typedef struct rn_event {
  * descriptors are exclusively owned by the reactor; they never escape. */
 int rn_new(const rn_config *config, rn_reactor **out);
 int rn_free(rn_reactor *reactor);
+/* Setup-only accept handoff. Configure before starting any member's loop or
+ * listener. Workers exclusively own adopted connections; only SOCKET/fd values
+ * cross preallocated SPSC channels. Stop and join all members before freeing
+ * either endpoint. Unsupported platforms return -ENOTSUP. */
+int rn_set_accept_targets(rn_reactor *acceptor, rn_reactor *const *workers,
+                          uint32_t count, uint32_t queue_capacity);
 int rn_socket_new(rn_reactor *reactor, uint64_t *out_token);
 int rn_bind(rn_reactor *reactor, uint64_t token, const char *host, uint16_t port,
             int reuse_port);
@@ -63,8 +69,8 @@ int rn_arm_timer(rn_reactor *reactor, uint64_t connection, uint32_t timer_kind,
 int rn_cancel_timer(rn_reactor *reactor, uint64_t connection, uint32_t timer_kind);
 int rn_close_after_writes(rn_reactor *reactor, uint64_t connection);
 int rn_close_connection(rn_reactor *reactor, uint64_t connection);
-/* Wake is the only API callable by another thread. No protocol/Lean objects
- * are touched; it wakes rn_step. The queue command protocol owns its data. */
+/* Wake is the only public runtime API callable by another thread. No protocol/
+ * Lean objects are touched; internal accept channels own transferred sockets. */
 int rn_wake(rn_reactor *reactor);
 uint64_t rn_now_ms(void);
 #endif

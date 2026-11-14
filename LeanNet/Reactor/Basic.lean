@@ -52,6 +52,20 @@ private def checkedZero (operation : String) (raw : UInt64) : IO Unit := do
   let value ← checked operation raw
   unless value == 0 do throw (IO.userError s!"{operation}: invalid native success result")
 
+/-- Peer failures reported by an accept operation do not invalidate the listener.
+    Resource exhaustion, configuration failures and invalid owned descriptors
+    remain fatal. Apply only after checking setup/close error flags. -/
+def isRecoverableAcceptError (code : Int) : IO Bool := do
+  if ← LeanNet.Errno.isInterrupted code then return true
+  if ← LeanNet.Errno.isWouldBlock code then return true
+  let codes ← [LeanNet.FFI.errnoEconnaborted, LeanNet.FFI.errnoEconnreset,
+    LeanNet.FFI.errnoEnetdown, LeanNet.FFI.errnoEnetunreach, LeanNet.FFI.errnoEhostunreach,
+    LeanNet.FFI.errnoEnonet, LeanNet.FFI.errnoEproto, LeanNet.FFI.errnoEnoprotoopt,
+    LeanNet.FFI.errnoEhostdown, LeanNet.FFI.errnoEopnotsupp, LeanNet.FFI.errnoEpipe,
+    LeanNet.FFI.errnoEnotconn, LeanNet.FFI.errnoEtimedout, LeanNet.FFI.errnoEconnrefused,
+    LeanNet.FFI.errnoEnetreset].mapM id
+  return codes.any (fun value => value != 0 && code == -(Int.ofNat value.toNat))
+
 private def destroy (reactor : Reactor) : IO Unit := do
   ensureAlive reactor
   reactor.alive.set false
@@ -64,6 +78,19 @@ def withReactor (config : Config) (use : Reactor → IO α) : IO α := do
   if handle == 0 then throw (IO.userError "reactor create: null native handle")
   let reactor : Reactor := ⟨handle, ← IO.mkRef true⟩
   try use reactor finally destroy reactor
+
+/-- Configure before starting any member's listener or loop. Each worker owns
+    its adopted connections. Stop and join every member before freeing any of
+    them; reactor brackets must enclose the complete worker lifetime. -/
+def Reactor.setAcceptTargets (acceptor : Reactor) (workers : Array Reactor)
+    (queueCapacity : UInt32 := 4096) : IO Unit := do
+  ensureAlive acceptor
+  let mut handles := #[]
+  for worker in workers do
+    ensureAlive worker
+    handles := handles.push worker.handle
+  checkedZero "reactor accept targets"
+    (← FFI.Reactor.setAcceptTargets acceptor.handle handles queueCapacity)
 
 def Reactor.socket (reactor : Reactor) : IO (Socket .fresh) := do
   ensureAlive reactor

@@ -20,7 +20,7 @@ def isWouldBlock (result : Int) : IO Bool := do
 
 /-- Include the native error number in exceptions without losing address errors. -/
 def error (operation : String) (result : Int) : IO IO.Error := do
-  if operation == "listen" && result ≤ -90000 then
+  if (operation == "listen" || operation == "reactor listen" || operation == "reactor bind") && result ≤ -90000 then
     let code := -result - 100000
     return IO.userError s!"{operation}: getaddrinfo error {code}"
   else if result < 0 then

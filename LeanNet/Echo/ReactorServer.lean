@@ -2,15 +2,6 @@ import LeanNet.Reactor.Basic
 
 namespace LeanNet.Echo.ReactorServer
 
-private def recoverableAccept (code : Int) : IO Bool := do
-  if ← LeanNet.Errno.isInterrupted code then return true
-  if ← LeanNet.Errno.isWouldBlock code then return true
-  let codes ← [LeanNet.FFI.errnoEconnaborted, LeanNet.FFI.errnoEconnreset,
-    LeanNet.FFI.errnoEnetdown, LeanNet.FFI.errnoEnetunreach, LeanNet.FFI.errnoEhostunreach,
-    LeanNet.FFI.errnoEnonet, LeanNet.FFI.errnoEproto, LeanNet.FFI.errnoEnoprotoopt,
-    LeanNet.FFI.errnoEhostdown, LeanNet.FFI.errnoEopnotsupp].mapM id
-  return codes.any (fun value => value != 0 && code == -(Int.ofNat value.toNat))
-
 private def dispatch (event : Reactor.Event) : IO Unit := do
   match event with
   | .read socket buffer offset length =>
@@ -21,7 +12,7 @@ private def dispatch (event : Reactor.Event) : IO Unit := do
     -- The reactor already disposed of failed peer sockets. Configuration and
     -- close failures are infrastructure faults and cannot be ignored.
     if (flags &&& 6) != 0 then throw (← LeanNet.Errno.error "reactor socket setup/close" code)
-    if (flags &&& 1) != 0 && !(← recoverableAccept code) then
+    if (flags &&& 1) != 0 && !(← Reactor.isRecoverableAcceptError code) then
       throw (← LeanNet.Errno.error "reactor accept" code)
     if code == -(Int.ofNat (← LeanNet.FFI.errnoEbadf).toNat) then
       throw (← LeanNet.Errno.error "reactor owned descriptor (library bug)" code)
@@ -73,10 +64,23 @@ def serve (host : String := "127.0.0.1") (port : UInt16 := 8080)
   let count ← if workers == 0 then Reactor.cpuCount else pure workers
   if count == 0 || count > 256 then throw (IO.userError "worker count must be between 1 and 256")
   Reactor.withEndpoint port <| Reactor.withReactors count config fun reactors => do
-    for reactor in reactors do
-      let fresh ← reactor.socket
-      let bound ← fresh.bind host port (count > 1)
-      let _ ← bound.listen 4096
-    Reactor.withGroup reactors fun group => runWorkers reactors group
+    if (System.Platform.isWindows || System.Platform.isOSX) && count > 1 then
+      -- A platform acceptor transfers untouched sockets; each worker registers
+      -- its own readiness/completion backend before starting connection I/O.
+      let acceptConfig : Reactor.Config := {
+        maxConnections := 4, maxEvents := 64, maxWrites := 1,
+        buffers4k := 1, buffers16k := 0, buffers64k := 0,
+        timerTickMs := config.timerTickMs }
+      Reactor.withReactor acceptConfig fun acceptor => do
+        acceptor.setAcceptTargets reactors config.maxConnections
+        let _ ← acceptor.listen host port
+        let members := reactors.push acceptor
+        Reactor.withGroup members fun group => runWorkers members group
+    else
+      for reactor in reactors do
+        let fresh ← reactor.socket
+        let bound ← fresh.bind host port (count > 1)
+        let _ ← bound.listen 4096
+      Reactor.withGroup reactors fun group => runWorkers reactors group
 
 end LeanNet.Echo.ReactorServer

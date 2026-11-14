@@ -1,5 +1,6 @@
 import LeanNet.FFI.Reactor
 import LeanNet.FFI.Errno
+import LeanNet.Reactor.Basic
 
 open LeanNet
 
@@ -25,6 +26,19 @@ private def retainedLease (reactor buffer : UInt64) : IO Unit := do
   check (view == "immutable pool bytes".toUTF8) "released immutable view changed"
 
 def main : IO Unit := do
+  for native in [FFI.errnoEpipe, FFI.errnoEnotconn, FFI.errnoEtimedout,
+      FFI.errnoEconnrefused, FFI.errnoEconnreset, FFI.errnoEconnaborted,
+      FFI.errnoEnetreset, FFI.errnoEnetdown, FFI.errnoEnetunreach,
+      FFI.errnoEhostunreach, FFI.errnoEintr, FFI.errnoEagain,
+      FFI.errnoEwouldblock] do
+    let code ← native
+    if code != 0 then
+      check (← Reactor.isRecoverableAcceptError (-(Int.ofNat code.toNat)))
+        s!"confirmed accept peer error is fatal: {code}"
+  check (!(← Reactor.isRecoverableAcceptError (-(Int.ofNat (← FFI.errnoEbadf).toNat))))
+    "invalid owned descriptor must remain fatal"
+  for code in [0, 1, -999999] do
+    check (!(← Reactor.isRecoverableAcceptError code)) "unexpected accept result accepted as peer failure"
   let reactor ← ok "create" (FFI.Reactor.create 8 32 16 1 0 0 1)
   check (reactor != 0) "null reactor"
   try

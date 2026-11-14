@@ -29,6 +29,16 @@ jobs:
         run: lake env lean test/ReactorStateTest.lean
       - name: Native buffers, timers and generations
         run: .lake/build/bin/lean-net-reactor-native-test
+      - name: Worker echo and FFI setup ownership (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          python3 test/test_reactor_setup.py -v
+          python3 test/test_reactor_echo.py -v
+      - name: Worker echo and FFI setup ownership (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          lake env python test/test_reactor_setup.py -v
+          lake env python test/test_reactor_echo.py -v
       - name: Echo acceptance
         if: runner.os != 'Windows'
         run: python3 test/test_echo.py -v
@@ -38,6 +48,9 @@ jobs:
       - name: Pooled I/O allocation and lifecycle sanitizers
         if: runner.os != 'Windows'
         run: python3 test/test_reactor_posix.py -v
+      - name: macOS accept handoff distribution and ownership
+        if: runner.os == 'macOS'
+        run: python3 test/test_reactor_dispatch.py -v
       - name: IOCP operations and cancellation lifetime
         if: runner.os == 'Windows'
         run: lake env python test/test_windows_native.py -v
