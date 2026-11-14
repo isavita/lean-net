@@ -1,0 +1,68 @@
+{
+  "conclusion": "failure",
+  "databaseId": 43648861318,
+  "headSha": "995751118bbe93f8a9c8946360b5842847985fe4",
+  "jobs": [
+    {
+      "completedAt": "2026-11-14T22:37:00Z",
+      "conclusion": "failure",
+      "databaseId": 132612611379,
+      "name": "build",
+      "startedAt": "2026-11-14T22:35:08Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Install native build dependencies",
+          "number": 3,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run leanprover/lean-action@v1",
+          "number": 4,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Build and test TCP, HTTP/1.1 and h2c",
+          "number": 5,
+          "status": "completed"
+        },
+        {
+          "conclusion": "failure",
+          "name": "Build and test TLS package",
+          "number": 6,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 12,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 13,
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/isavita/lean-net/actions/runs/43648861318/job/132612611379"
+    }
+  ],
+  "status": "completed",
+  "url": "https://github.com/isavita/lean-net/actions/runs/43648861318"
+}

@@ -58,6 +58,15 @@ class StaticCatalogNative(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             report = json.loads(result.stdout)
             self.assertEqual(report["cycles"], 1000); self.assertLessEqual(report["handles_after"], report["handles_before"])
+            if sys.platform == "win32":
+                self.assertEqual(report["unsupported_failure_cycles"], 1000)
+                self.assertLessEqual(report["failure_handles_after"], report["failure_handles_before"])
+                self.assertEqual(report["failure_owned_created"], 4000)
+                self.assertEqual(report["failure_owned_closed"], 4000)
+                print("Windows catalog failure-lifetime report: " + json.dumps({
+                    key: report[key] for key in ("security_init_handles_before", "security_init_handles_after",
+                        "unsupported_failure_cycles", "failure_handles_before", "failure_handles_after",
+                        "failure_owned_created", "failure_owned_closed")}, sort_keys=True))
             for variant in report["variants"]:
                 data = (directory / f"{variant['coding']}.bin").read_bytes()
                 self.assertEqual(len(data), variant["length"])

@@ -1,0 +1,607 @@
+﻿2026-11-14T22:35:09.4728932Z Current runner version: '2.338.2'
+2026-11-14T22:35:09.4754957Z ##[group]Runner Image Provisioner
+2026-11-14T22:35:09.4755848Z Hosted Compute Agent
+2026-11-14T22:35:09.4756423Z Version: 20261103.629
+2026-11-14T22:35:09.4757181Z Commit: 15dbd9ccb5dbf34fae002b6ed1a2670f52df37bc
+2026-11-14T22:35:09.4758221Z Build Date: 2026-11-03T17:26:59Z
+2026-11-14T22:35:09.4759079Z Worker ID: {906294f3-965a-4699-8435-995eff0304cc}
+2026-11-14T22:35:09.4759831Z Region: eastus
+2026-11-14T22:35:09.4760434Z Cloud: Azure
+2026-11-14T22:35:09.4760970Z ##[endgroup]
+2026-11-14T22:35:09.4762458Z ##[group]Operating System
+2026-11-14T22:35:09.4763123Z Ubuntu
+2026-11-14T22:35:09.4763683Z 26.04.1
+2026-11-14T22:35:09.4764270Z LTS
+2026-11-14T22:35:09.4764780Z ##[endgroup]
+2026-11-14T22:35:09.4765409Z ##[group]Runner Image
+2026-11-14T22:35:09.4765996Z Image: ubuntu-26.04
+2026-11-14T22:35:09.4766638Z Version: 20261111.196.1
+2026-11-14T22:35:09.4768122Z Included Software: https://github.com/actions/runner-images/blob/ubuntu26/20261111.196/images/ubuntu/Ubuntu2604-Readme.md
+2026-11-14T22:35:09.4769888Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu26%2F20261111.196
+2026-11-14T22:35:09.4770898Z ##[endgroup]
+2026-11-14T22:35:09.4772063Z ##[group]GITHUB_TOKEN Permissions
+2026-11-14T22:35:09.4774054Z Contents: read
+2026-11-14T22:35:09.4774678Z Metadata: read
+2026-11-14T22:35:09.4775236Z Packages: read
+2026-11-14T22:35:09.4775876Z ##[endgroup]
+2026-11-14T22:35:09.4778226Z Secret source: Actions
+2026-11-14T22:35:09.4779335Z Cache mode: write
+2026-11-14T22:35:09.4780015Z Prepare workflow directory
+2026-11-14T22:35:09.5186561Z Prepare all required actions
+2026-11-14T22:35:09.5234840Z Getting action download info
+2026-11-14T22:35:09.7211159Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-11-14T22:35:09.8529310Z Download action repository 'leanprover/lean-action@v1' (SHA:ba3fdfe5c4476c925da13bf11a005ddb47e47aee)
+2026-11-14T22:35:09.9733452Z Download action repository 'msys2/setup-msys2@v2' (SHA:ec48f7c5447b3140e2b088413ae3a55687bccb6e)
+2026-11-14T22:35:10.1884243Z Getting action download info
+2026-11-14T22:35:10.2549400Z Download action repository 'actions/cache@caa296126883cff596d87d8935842f9db880ef25' (SHA:caa296126883cff596d87d8935842f9db880ef25)
+2026-11-14T22:35:10.3779254Z Complete job name: tls (ubuntu-latest, python3)
+2026-11-14T22:35:10.4813300Z ##[group]Run actions/checkout@v7
+2026-11-14T22:35:10.4814272Z with:
+2026-11-14T22:35:10.4814723Z   repository: isavita/lean-net
+2026-11-14T22:35:10.4819307Z   token: ***
+2026-11-14T22:35:10.4819865Z   ssh-strict: true
+2026-11-14T22:35:10.4820306Z   ssh-user: git
+2026-11-14T22:35:10.4820748Z   persist-credentials: true
+2026-11-14T22:35:10.4821240Z   clean: true
+2026-11-14T22:35:10.4821684Z   sparse-checkout-cone-mode: true
+2026-11-14T22:35:10.4822338Z   fetch-depth: 1
+2026-11-14T22:35:10.4822948Z   fetch-tags: false
+2026-11-14T22:35:10.4823395Z   show-progress: true
+2026-11-14T22:35:10.4823872Z   lfs: false
+2026-11-14T22:35:10.4824309Z   submodules: false
+2026-11-14T22:35:10.4824752Z   set-safe-directory: true
+2026-11-14T22:35:10.4825257Z   allow-unsafe-pr-checkout: false
+2026-11-14T22:35:10.4826169Z ##[endgroup]
+2026-11-14T22:35:10.7919443Z Syncing repository: isavita/lean-net
+2026-11-14T22:35:10.7921404Z ##[group]Getting Git version info
+2026-11-14T22:35:10.7922698Z Working directory is '/home/runner/work/lean-net/lean-net'
+2026-11-14T22:35:10.7924522Z [command]/usr/bin/git version
+2026-11-14T22:35:10.7939418Z git version 2.56.1
+2026-11-14T22:35:10.7962156Z ##[endgroup]
+2026-11-14T22:35:10.7973999Z Temporarily overriding HOME='/home/runner/work/_temp/8b7a283b-46f7-469e-87a6-3c7258bb131e' before making global git config changes
+2026-11-14T22:35:10.7976531Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-14T22:35:10.7979239Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/lean-net/lean-net
+2026-11-14T22:35:10.8059094Z Deleting the contents of '/home/runner/work/lean-net/lean-net'
+2026-11-14T22:35:10.8062405Z ##[group]Determining repository object format
+2026-11-14T22:35:10.8064084Z ##[endgroup]
+2026-11-14T22:35:10.8064830Z ##[group]Initializing the repository
+2026-11-14T22:35:10.8069306Z [command]/usr/bin/git init /home/runner/work/lean-net/lean-net
+2026-11-14T22:35:10.8211692Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-14T22:35:10.8213784Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-14T22:35:10.8215180Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-14T22:35:10.8216122Z hint: call:
+2026-11-14T22:35:10.8216620Z hint:
+2026-11-14T22:35:10.8217363Z hint: 	git config --global init.defaultBranch <name>
+2026-11-14T22:35:10.8218592Z hint:
+2026-11-14T22:35:10.8219681Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-14T22:35:10.8220872Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-14T22:35:10.8221829Z hint:
+2026-11-14T22:35:10.8222342Z hint: 	git branch -m <name>
+2026-11-14T22:35:10.8222975Z hint:
+2026-11-14T22:35:10.8223774Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-14T22:35:10.8225585Z Initialized empty Git repository in /home/runner/work/lean-net/lean-net/.git/
+2026-11-14T22:35:10.8238383Z [command]/usr/bin/git remote add origin https://github.com/isavita/lean-net
+2026-11-14T22:35:10.8299328Z ##[endgroup]
+2026-11-14T22:35:10.8300255Z ##[group]Disabling automatic garbage collection
+2026-11-14T22:35:10.8303528Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-14T22:35:10.8341733Z ##[endgroup]
+2026-11-14T22:35:10.8343202Z ##[group]Setting up auth
+2026-11-14T22:35:10.8343837Z Removing SSH command configuration
+2026-11-14T22:35:10.8348318Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-14T22:35:10.8389751Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-14T22:35:10.8884221Z Removing HTTP extra header
+2026-11-14T22:35:10.8890252Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-14T22:35:10.8926771Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-14T22:35:10.9198526Z Removing includeIf entries pointing to credentials config files
+2026-11-14T22:35:10.9203729Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-14T22:35:10.9239544Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-14T22:35:10.9522828Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-1442407e-72f3-46cf-9186-43369441da9b.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-14T22:35:10.9562358Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/lean-net/lean-net/.git.path /home/runner/work/_temp/git-credentials-1442407e-72f3-46cf-9186-43369441da9b.config
+2026-11-14T22:35:10.9596484Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/lean-net/lean-net/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-1442407e-72f3-46cf-9186-43369441da9b.config
+2026-11-14T22:35:10.9635142Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-1442407e-72f3-46cf-9186-43369441da9b.config
+2026-11-14T22:35:10.9669363Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-1442407e-72f3-46cf-9186-43369441da9b.config
+2026-11-14T22:35:10.9699973Z ##[endgroup]
+2026-11-14T22:35:10.9701293Z ##[group]Fetching the repository
+2026-11-14T22:35:10.9708558Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +995751118bbe93f8a9c8946360b5842847985fe4:refs/remotes/origin/codex/static-files
+2026-11-14T22:35:11.2714208Z From https://github.com/isavita/lean-net
+2026-11-14T22:35:11.2716567Z  * [new ref]         995751118bbe93f8a9c8946360b5842847985fe4 -> origin/codex/static-files
+2026-11-14T22:35:11.2730571Z [command]/usr/bin/git branch --list --remote origin/codex/static-files
+2026-11-14T22:35:11.2760211Z   origin/codex/static-files
+2026-11-14T22:35:11.2769236Z [command]/usr/bin/git rev-parse refs/remotes/origin/codex/static-files
+2026-11-14T22:35:11.2794160Z 995751118bbe93f8a9c8946360b5842847985fe4
+2026-11-14T22:35:11.2799717Z ##[endgroup]
+2026-11-14T22:35:11.2800957Z ##[group]Determining the checkout info
+2026-11-14T22:35:11.2802381Z ##[endgroup]
+2026-11-14T22:35:11.2803811Z [command]/usr/bin/git sparse-checkout disable
+2026-11-14T22:35:11.2865158Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-14T22:35:11.2900538Z ##[group]Checking out the ref
+2026-11-14T22:35:11.2904793Z [command]/usr/bin/git checkout --progress --force -B codex/static-files refs/remotes/origin/codex/static-files
+2026-11-14T22:35:11.3210523Z Switched to a new branch 'codex/static-files'
+2026-11-14T22:35:11.3216547Z branch 'codex/static-files' set up to track 'origin/codex/static-files'.
+2026-11-14T22:35:11.3226747Z ##[endgroup]
+2026-11-14T22:35:11.3285179Z [command]/usr/bin/git log -1 --format=%H
+2026-11-14T22:35:11.3312652Z 995751118bbe93f8a9c8946360b5842847985fe4
+2026-11-14T22:35:11.4343330Z ##[group]Run leanprover/lean-action@v1
+2026-11-14T22:35:11.4344485Z with:
+2026-11-14T22:35:11.4345251Z   auto-config: false
+2026-11-14T22:35:11.4346099Z   build: false
+2026-11-14T22:35:11.4346882Z   test: false
+2026-11-14T22:35:11.4347657Z   lint: false
+2026-11-14T22:35:11.4348606Z   mk_all-check: false
+2026-11-14T22:35:11.4349489Z   use-mathlib-cache: auto
+2026-11-14T22:35:11.4350476Z   check-reservoir-eligibility: false
+2026-11-14T22:35:11.4351544Z   leanchecker: false
+2026-11-14T22:35:11.4352416Z   lean4checker: false
+2026-11-14T22:35:11.4353281Z   nanoda: false
+2026-11-14T22:35:11.4354127Z   nanoda-allow-sorry: true
+2026-11-14T22:35:11.4355039Z   axiom-audit: false
+2026-11-14T22:35:11.4356143Z   axiom-audit-allow: propext,Classical.choice,Quot.sound
+2026-11-14T22:35:11.4357428Z   use-github-cache: true
+2026-11-14T22:35:11.4358474Z   lake-package-directory: .
+2026-11-14T22:35:11.4359490Z   reinstall-transient-toolchain: false
+2026-11-14T22:35:11.4360537Z ##[endgroup]
+2026-11-14T22:35:11.4450145Z ##[start-action display=install elan;id=__leanprover_lean-action.__run]
+2026-11-14T22:35:11.4512707Z ##[group]Run : Install Elan
+2026-11-14T22:35:11.4513747Z [36;1m: Install Elan[0m
+2026-11-14T22:35:11.4514815Z [36;1m${GITHUB_ACTION_PATH}/scripts/install_elan.sh[0m
+2026-11-14T22:35:11.4571312Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:35:11.4572620Z ##[endgroup]
+2026-11-14T22:35:11.4720019Z ##[group]Elan Installation Output
+2026-11-14T22:35:11.5168409Z info: downloading installer
+2026-11-14T22:35:12.5647506Z info: downloading https://releases.lean-lang.org/lean4/v4.35.0/lean-4.35.0-linux.tar.zst
+2026-11-14T22:35:16.6820748Z info: installing /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0
+2026-11-14T22:35:24.0850308Z Lean (version 4.35.0, x86_64-unknown-linux-gnu, commit eb6cafb7290e8bd5f2937522d8d804f58f02bafc, Release)
+2026-11-14T22:35:24.1266709Z Lake version 5.0.0-src+eb6cafb (Lean version 4.35.0)
+2026-11-14T22:35:24.1318916Z ##[endgroup]
+2026-11-14T22:35:24.1319414Z 
+2026-11-14T22:35:24.1353213Z ##[end-action id=__leanprover_lean-action.__run;outcome=success;conclusion=success;duration_ms=12690]
+2026-11-14T22:35:24.1358702Z ##[start-action display=Run actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25;id=__leanprover_lean-action.cache-restore]
+2026-11-14T22:35:24.3888519Z ##[group]Run actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+2026-11-14T22:35:24.3889289Z with:
+2026-11-14T22:35:24.3889492Z   path: ./.lake
+2026-11-14T22:35:24.3890390Z   key: lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef-995751118bbe93f8a9c8946360b5842847985fe4
+2026-11-14T22:35:24.3891881Z   restore-keys: lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef
+2026-11-14T22:35:24.3892695Z   enableCrossOsArchive: false
+2026-11-14T22:35:24.3892993Z   fail-on-cache-miss: false
+2026-11-14T22:35:24.3893253Z   lookup-only: false
+2026-11-14T22:35:24.3893478Z ##[endgroup]
+2026-11-14T22:35:24.5939677Z Cache hit for restore-key: lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef-7404295a8a3025b67a4d70d2f33a10a2c04bbbf2
+2026-11-14T22:35:24.8351833Z Received 7064860 of 7064860 (100.0%), 39.6 MBs/sec
+2026-11-14T22:35:24.8353272Z Cache Size: ~7 MB (7064860 B)
+2026-11-14T22:35:24.8424105Z [command]/usr/bin/tar -xf /home/runner/work/_temp/a27b86fc-7192-4496-ab15-18872d077a2d/cache.tzst -P -C /home/runner/work/lean-net/lean-net --use-compress-program unzstd
+2026-11-14T22:35:24.9297689Z Cache restored successfully
+2026-11-14T22:35:25.4422276Z Cache restored from key: lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef-7404295a8a3025b67a4d70d2f33a10a2c04bbbf2
+2026-11-14T22:35:25.4559475Z ##[end-action id=__leanprover_lean-action.cache-restore;outcome=success;conclusion=success;duration_ms=1319]
+2026-11-14T22:35:25.4573405Z ##[start-action display=configure `lean-action`;id=__leanprover_lean-action.config]
+2026-11-14T22:35:25.4594987Z ##[group]Run : Configure Lean Action
+2026-11-14T22:35:25.4595316Z [36;1m: Configure Lean Action[0m
+2026-11-14T22:35:25.4595613Z [36;1m${GITHUB_ACTION_PATH}/scripts/config.sh[0m
+2026-11-14T22:35:25.4648211Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:35:25.4648610Z env:
+2026-11-14T22:35:25.4648832Z   AUTO_CONFIG: false
+2026-11-14T22:35:25.4649096Z   BUILD: false
+2026-11-14T22:35:25.4649297Z   TEST: false
+2026-11-14T22:35:25.4649494Z   LINT: false
+2026-11-14T22:35:25.4649694Z ##[endgroup]
+2026-11-14T22:35:25.4760316Z ##[group]Configure lean-action
+2026-11-14T22:35:25.4832383Z ##[end-action id=__leanprover_lean-action.config;outcome=success;conclusion=success;duration_ms=25]
+2026-11-14T22:35:25.4835235Z ##[start-action display=reinstall transient toolchain;id=__leanprover_lean-action.__run_2]
+2026-11-14T22:35:25.4842967Z ##[end-action id=__leanprover_lean-action.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:35:25.4845849Z ##[start-action display=ensure all files are imported;id=__leanprover_lean-action.mk_all]
+2026-11-14T22:35:25.4850052Z ##[end-action id=__leanprover_lean-action.mk_all;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:35:25.4851931Z ##[start-action display=detect mathlib;id=__leanprover_lean-action.detect-mathlib]
+2026-11-14T22:35:25.4871580Z ##[group]Run : Detect Mathlib
+2026-11-14T22:35:25.4871871Z [36;1m: Detect Mathlib[0m
+2026-11-14T22:35:25.4872165Z [36;1m${GITHUB_ACTION_PATH}/scripts/detect_mathlib.sh[0m
+2026-11-14T22:35:25.4924370Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:35:25.4924731Z ##[endgroup]
+2026-11-14T22:35:25.5032819Z ##[group]Detect Mathlib Output
+2026-11-14T22:35:25.5033423Z Trying to detect if project is downstream of Mathlib.
+2026-11-14T22:35:25.5048345Z Project is not downstream of Mathlib. Skipping Mathlib cache.
+2026-11-14T22:35:25.5049268Z ##[endgroup]
+2026-11-14T22:35:25.5049430Z 
+2026-11-14T22:35:25.5060320Z ##[end-action id=__leanprover_lean-action.detect-mathlib;outcome=success;conclusion=success;duration_ms=20]
+2026-11-14T22:35:25.5062817Z ##[start-action display=get mathlib cache;id=__leanprover_lean-action.__run_3]
+2026-11-14T22:35:25.5077673Z ##[end-action id=__leanprover_lean-action.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:35:25.5090276Z ##[start-action display=build isavita/lean-net;id=__leanprover_lean-action.build]
+2026-11-14T22:35:25.5094884Z ##[end-action id=__leanprover_lean-action.build;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:35:25.5098852Z ##[start-action display=test isavita/lean-net;id=__leanprover_lean-action.test]
+2026-11-14T22:35:25.5103253Z ##[end-action id=__leanprover_lean-action.test;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:35:25.5106238Z ##[start-action display=lint isavita/lean-net;id=__leanprover_lean-action.lint]
+2026-11-14T22:35:25.5110987Z ##[end-action id=__leanprover_lean-action.lint;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:35:25.5113159Z ##[start-action display=Run actions/cache/save@caa296126883cff596d87d8935842f9db880ef25;id=__leanprover_lean-action.__actions_cache]
+2026-11-14T22:35:25.6333720Z ##[group]Run actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+2026-11-14T22:35:25.6334254Z with:
+2026-11-14T22:35:25.6334504Z   path: ./.lake
+2026-11-14T22:35:25.6335690Z   key: lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef-995751118bbe93f8a9c8946360b5842847985fe4
+2026-11-14T22:35:25.6337028Z   enableCrossOsArchive: false
+2026-11-14T22:35:25.6337353Z ##[endgroup]
+2026-11-14T22:35:25.7998434Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/lean-net/lean-net --files-from manifest.txt --use-compress-program zstdmt
+2026-11-14T22:35:26.1355195Z Sent 7064978 of 7064978 (100.0%), 44.6 MBs/sec
+2026-11-14T22:35:26.3836599Z Cache saved with key: lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef-995751118bbe93f8a9c8946360b5842847985fe4
+2026-11-14T22:35:26.3915818Z ##[end-action id=__leanprover_lean-action.__actions_cache;outcome=success;conclusion=success;duration_ms=880]
+2026-11-14T22:35:26.3919990Z ##[start-action display=check reservoir eligibility;id=__leanprover_lean-action.__run_4]
+2026-11-14T22:35:26.3926370Z ##[end-action id=__leanprover_lean-action.__run_4;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:35:26.3929942Z ##[start-action display=check environment with leanchecker;id=__leanprover_lean-action.__run_5]
+2026-11-14T22:35:26.3935037Z ##[end-action id=__leanprover_lean-action.__run_5;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:35:26.3937626Z ##[start-action display=check environment with nanoda;id=__leanprover_lean-action.nanoda]
+2026-11-14T22:35:26.3941511Z ##[end-action id=__leanprover_lean-action.nanoda;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:35:26.3943930Z ##[start-action display=audit axioms with axiom-audit;id=__leanprover_lean-action.axiom-audit]
+2026-11-14T22:35:26.3947297Z ##[end-action id=__leanprover_lean-action.axiom-audit;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:35:26.3998759Z ##[group]Run sudo apt-get update
+2026-11-14T22:35:26.3999119Z [36;1msudo apt-get update[0m
+2026-11-14T22:35:26.3999567Z [36;1msudo apt-get install -y libssl-dev zlib1g-dev libbrotli-dev pkg-config openssl curl[0m
+2026-11-14T22:35:26.4000108Z [36;1mecho "LEAN_NET_TEST_OPENSSL=openssl" >> "$GITHUB_ENV"[0m
+2026-11-14T22:35:26.4000492Z [36;1mecho "LEAN_NET_TEST_CURL=curl" >> "$GITHUB_ENV"[0m
+2026-11-14T22:35:26.4050980Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:35:26.4051342Z ##[endgroup]
+2026-11-14T22:35:26.4900319Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-11-14T22:35:26.5178233Z Get:6 https://packages.microsoft.com/ubuntu/26.04/prod resolute InRelease [3964 B]
+2026-11-14T22:35:26.5310046Z Hit:2 http://azure.archive.ubuntu.com/ubuntu resolute InRelease
+2026-11-14T22:35:26.5342755Z Get:3 http://azure.archive.ubuntu.com/ubuntu resolute-updates InRelease [137 kB]
+2026-11-14T22:35:26.5374215Z Get:4 http://azure.archive.ubuntu.com/ubuntu resolute-backports InRelease [137 kB]
+2026-11-14T22:35:26.5396116Z Get:5 http://azure.archive.ubuntu.com/ubuntu resolute-security InRelease [137 kB]
+2026-11-14T22:35:26.5535022Z Get:7 https://packages.microsoft.com/ubuntu/26.04/prod resolute/main arm64 Packages [143 kB]
+2026-11-14T22:35:26.5762166Z Get:8 https://packages.microsoft.com/ubuntu/26.04/prod resolute/main amd64 Packages [158 kB]
+2026-11-14T22:35:26.5929300Z Get:9 http://azure.archive.ubuntu.com/ubuntu resolute-updates/main amd64v3 Packages [869 kB]
+2026-11-14T22:35:26.5999070Z Get:10 http://azure.archive.ubuntu.com/ubuntu resolute-updates/main Translation-en [195 kB]
+2026-11-14T22:35:26.6079542Z Get:11 http://azure.archive.ubuntu.com/ubuntu resolute-updates/universe amd64v3 Packages [390 kB]
+2026-11-14T22:35:26.6080884Z Get:12 http://azure.archive.ubuntu.com/ubuntu resolute-updates/universe Translation-en [122 kB]
+2026-11-14T22:35:26.6260185Z Get:13 http://azure.archive.ubuntu.com/ubuntu resolute-security/main amd64v3 Packages [718 kB]
+2026-11-14T22:35:26.6283277Z Get:14 http://azure.archive.ubuntu.com/ubuntu resolute-security/main Translation-en [157 kB]
+2026-11-14T22:35:26.6309145Z Get:15 http://azure.archive.ubuntu.com/ubuntu resolute-security/universe amd64v3 Packages [220 kB]
+2026-11-14T22:35:26.6315718Z Get:16 http://azure.archive.ubuntu.com/ubuntu resolute-security/universe Translation-en [72.5 kB]
+2026-11-14T22:35:26.6330297Z Get:17 http://azure.archive.ubuntu.com/ubuntu resolute-security/restricted amd64v3 Packages [590 kB]
+2026-11-14T22:35:26.6367402Z Get:18 http://azure.archive.ubuntu.com/ubuntu resolute-security/restricted Translation-en [122 kB]
+2026-11-14T22:35:28.8237390Z Fetched 4172 kB in 0s (11.3 MB/s)
+2026-11-14T22:35:29.5215775Z Reading package lists...
+2026-11-14T22:35:29.5572896Z Reading package lists...
+2026-11-14T22:35:29.7335197Z Building dependency tree...
+2026-11-14T22:35:29.7342672Z Reading state information...
+2026-11-14T22:35:29.7695184Z libssl-dev is already the newest version (3.5.5-1ubuntu3.7).
+2026-11-14T22:35:29.7696487Z zlib1g-dev is already the newest version (1:1.3.dfsg+really1.3.1-1ubuntu3.2).
+2026-11-14T22:35:29.7697860Z pkg-config is already the newest version (2.5.1-4).
+2026-11-14T22:35:29.7699573Z openssl is already the newest version (3.5.5-1ubuntu3.7).
+2026-11-14T22:35:29.7700365Z curl is already the newest version (8.18.0-1ubuntu2.8).
+2026-11-14T22:35:29.8324315Z Solving dependencies...
+2026-11-14T22:35:29.9394799Z The following NEW packages will be installed:
+2026-11-14T22:35:29.9398851Z   libbrotli-dev
+2026-11-14T22:35:29.9605997Z 0 upgraded, 1 newly installed, 0 to remove and 24 not upgraded.
+2026-11-14T22:35:29.9606576Z Need to get 371 kB of archives.
+2026-11-14T22:35:29.9607067Z After this operation, 1061 kB of additional disk space will be used.
+2026-11-14T22:35:29.9607678Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-11-14T22:35:30.0796905Z Get:2 http://azure.archive.ubuntu.com/ubuntu resolute-updates/main amd64v3 libbrotli-dev amd64 1.2.0-3ubuntu0.1 [371 kB]
+2026-11-14T22:35:30.4354038Z Fetched 371 kB in 0s (2636 kB/s)
+2026-11-14T22:35:30.4587567Z Selecting previously unselected package libbrotli-dev:amd64.
+2026-11-14T22:35:30.4922853Z (Reading database ... 
+2026-11-14T22:35:30.4923419Z (Reading database ... 5%
+2026-11-14T22:35:30.4923983Z (Reading database ... 10%
+2026-11-14T22:35:30.4924478Z (Reading database ... 15%
+2026-11-14T22:35:30.4924917Z (Reading database ... 20%
+2026-11-14T22:35:30.4925767Z (Reading database ... 25%
+2026-11-14T22:35:30.4926642Z (Reading database ... 30%
+2026-11-14T22:35:30.4927131Z (Reading database ... 35%
+2026-11-14T22:35:30.4927569Z (Reading database ... 40%
+2026-11-14T22:35:30.4928290Z (Reading database ... 45%
+2026-11-14T22:35:30.4928946Z (Reading database ... 50%
+2026-11-14T22:35:30.5824225Z (Reading database ... 55%
+2026-11-14T22:35:31.1301085Z (Reading database ... 60%
+2026-11-14T22:35:32.1762006Z (Reading database ... 65%
+2026-11-14T22:35:32.5936397Z (Reading database ... 70%
+2026-11-14T22:35:32.7767099Z (Reading database ... 75%
+2026-11-14T22:35:32.9416448Z (Reading database ... 80%
+2026-11-14T22:35:33.1311770Z (Reading database ... 85%
+2026-11-14T22:35:33.3382473Z (Reading database ... 90%
+2026-11-14T22:35:33.4918099Z (Reading database ... 95%
+2026-11-14T22:35:33.4918617Z (Reading database ... 100%
+2026-11-14T22:35:33.4919165Z (Reading database ... 213946 files and directories currently installed.)
+2026-11-14T22:35:33.4964943Z Preparing to unpack .../libbrotli-dev_1.2.0-3ubuntu0.1_amd64v3.deb ...
+2026-11-14T22:35:33.4999741Z Unpacking libbrotli-dev:amd64 (1.2.0-3ubuntu0.1) ...
+2026-11-14T22:35:33.5581539Z Setting up libbrotli-dev:amd64 (1.2.0-3ubuntu0.1) ...
+2026-11-14T22:35:34.2241853Z 
+2026-11-14T22:35:34.2242485Z Running kernel seems to be up-to-date.
+2026-11-14T22:35:34.2242832Z 
+2026-11-14T22:35:34.2242973Z Restarting services...
+2026-11-14T22:35:34.2343405Z 
+2026-11-14T22:35:34.2343839Z Service restarts being deferred:
+2026-11-14T22:35:34.2347364Z  systemctl restart hosted-compute-agent.service
+2026-11-14T22:35:34.2348242Z 
+2026-11-14T22:35:34.2348587Z No containers need to be restarted.
+2026-11-14T22:35:34.2348930Z 
+2026-11-14T22:35:34.2349168Z No user sessions are running outdated binaries.
+2026-11-14T22:35:34.2349548Z 
+2026-11-14T22:35:34.2349895Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+2026-11-14T22:35:35.1850833Z ##[group]Run pkg-config --atleast-version=1.1.1 openssl
+2026-11-14T22:35:35.1851292Z [36;1mpkg-config --atleast-version=1.1.1 openssl[0m
+2026-11-14T22:35:35.1851633Z [36;1mpkg-config --modversion openssl[0m
+2026-11-14T22:35:35.1851947Z [36;1mpkg-config --cflags --libs openssl[0m
+2026-11-14T22:35:35.1852265Z [36;1m"$LEAN_NET_TEST_OPENSSL" version[0m
+2026-11-14T22:35:35.1852561Z [36;1m"$LEAN_NET_TEST_CURL" --version[0m
+2026-11-14T22:35:35.1853092Z [36;1mlake env python3 -c 'import ssl, sys; print(sys.version); print(ssl.OPENSSL_VERSION); assert ssl.HAS_TLSv1_3'[0m
+2026-11-14T22:35:35.1904079Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:35:35.1904460Z env:
+2026-11-14T22:35:35.1904683Z   LEAN_NET_TEST_OPENSSL: openssl
+2026-11-14T22:35:35.1904963Z   LEAN_NET_TEST_CURL: curl
+2026-11-14T22:35:35.1905210Z ##[endgroup]
+2026-11-14T22:35:35.2215314Z 3.5.5
+2026-11-14T22:35:35.2233848Z  -lssl -lcrypto
+2026-11-14T22:35:35.2263482Z OpenSSL 3.5.5 27 Jan 2026 (Library: OpenSSL 3.5.5 27 Jan 2026)
+2026-11-14T22:35:35.2336894Z curl 8.18.0 (x86_64-pc-linux-gnu) libcurl/8.18.0 OpenSSL/3.5.5 zlib/1.3.1 brotli/1.2.0 zstd/1.5.7 libidn2/2.3.8 libpsl/0.21.2 libssh2/1.11.1 nghttp2/1.68.0 librtmp/2.3 mit-krb5/1.22.1 OpenLDAP/2.6.10
+2026-11-14T22:35:35.2338176Z Release-Date: 2026-01-07, security patched: 8.18.0-1ubuntu2.8
+2026-11-14T22:35:35.2339112Z Protocols: dict file ftp ftps gopher gophers http https imap imaps ipfs ipns ldap ldaps mqtt pop3 pop3s rtmp rtsp scp sftp smb smbs smtp smtps telnet tftp ws wss
+2026-11-14T22:35:35.2340442Z Features: alt-svc AsynchDNS brotli GSS-API HSTS HTTP2 HTTPS-proxy IDN IPv6 Kerberos Largefile libz NTLM PSL SPNEGO SSL threadsafe TLS-SRP UnixSockets zstd
+2026-11-14T22:35:37.8624703Z 3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]
+2026-11-14T22:35:37.8625388Z OpenSSL 3.5.5 27 Jan 2026
+2026-11-14T22:35:37.9264691Z ##[group]Run lake env python3 -m pip install --require-hashes --target "$RUNNER_TEMP/lean-net-http2-test-deps" -r test/requirements-http2.txt
+2026-11-14T22:35:37.9265748Z [36;1mlake env python3 -m pip install --require-hashes --target "$RUNNER_TEMP/lean-net-http2-test-deps" -r test/requirements-http2.txt[0m
+2026-11-14T22:35:37.9266512Z [36;1mecho "PYTHONPATH=$RUNNER_TEMP/lean-net-http2-test-deps" >> "$GITHUB_ENV"[0m
+2026-11-14T22:35:37.9315758Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:35:37.9316106Z env:
+2026-11-14T22:35:37.9316321Z   LEAN_NET_TEST_OPENSSL: openssl
+2026-11-14T22:35:37.9316594Z   LEAN_NET_TEST_CURL: curl
+2026-11-14T22:35:37.9316832Z ##[endgroup]
+2026-11-14T22:35:38.9869345Z Collecting hpack==4.2.0 (from -r test/requirements-http2.txt (line 2))
+2026-11-14T22:35:39.0435777Z   Downloading hpack-4.2.0-py3-none-any.whl (34 kB)
+2026-11-14T22:35:39.2180068Z Installing collected packages: hpack
+2026-11-14T22:35:39.2630319Z Successfully installed hpack-4.2.0
+2026-11-14T22:35:39.3597223Z ##[group]Run lake build lean-net-http1 lean-net-http2-reactor-fixture lean-net-static-fixture
+2026-11-14T22:35:39.3598208Z [36;1mlake build lean-net-http1 lean-net-http2-reactor-fixture lean-net-static-fixture[0m
+2026-11-14T22:35:39.3599100Z [36;1mlake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture lean-net-tls-static-fixture[0m
+2026-11-14T22:35:39.3648464Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:35:39.3648824Z env:
+2026-11-14T22:35:39.3649042Z   LEAN_NET_TEST_OPENSSL: openssl
+2026-11-14T22:35:39.3649308Z   LEAN_NET_TEST_CURL: curl
+2026-11-14T22:35:39.3649637Z   PYTHONPATH: /home/runner/work/_temp/lean-net-http2-test-deps
+2026-11-14T22:35:39.3649999Z ##[endgroup]
+2026-11-14T22:35:40.2589498Z ✔ [2/10] Built LeanNet.Bytes (448ms)
+2026-11-14T22:35:40.3619229Z ✔ [3/19] Built LeanNet.FFI.Errno (525ms)
+2026-11-14T22:35:40.3679727Z ✔ [4/19] Built LeanNet.FFI.Reactor (529ms)
+2026-11-14T22:35:40.4605388Z ✔ [6/21] Built LeanNet.Socket.State (683ms)
+2026-11-14T22:35:40.8649415Z ✔ [8/24] Built LeanNet.FileRegion (600ms)
+2026-11-14T22:35:40.8678753Z ✔ [9/24] Built LeanNet.FFI.Static (504ms)
+2026-11-14T22:35:41.2619278Z ✔ [11/24] Built LeanNet.HTTP1.Protocol (854ms)
+2026-11-14T22:35:41.6609245Z ✔ [12/26] Built LeanNet.HTTP1.Config (827ms)
+2026-11-14T22:35:41.8619695Z ✔ [13/26] Built LeanNet.FileSource (1.0s)
+2026-11-14T22:35:42.2640508Z ✔ [14/26] Built LeanNet.Socket.Handle (1.8s)
+2026-11-14T22:35:42.4645321Z ✔ [15/26] Built LeanNet.HTTP1.Router (631ms)
+2026-11-14T22:35:42.8699449Z ✔ [16/26] Built LeanNet.HTTP2.Push (569ms)
+2026-11-14T22:35:42.9675856Z ✔ [17/26] Built LeanNet.HTTP1.Encoding (1.8s)
+2026-11-14T22:35:43.3740535Z ✔ [18/28] Built LeanNet.TCP.Connection (512ms)
+2026-11-14T22:35:43.4769314Z ✔ [19/30] Built LeanNet.TCP.Listener (465ms)
+2026-11-14T22:35:44.2929481Z ✔ [20/34] Built LeanNet.Reactor.Basic (1.8s)
+2026-11-14T22:35:44.4929514Z ✔ [21/36] Built LeanNet.HTTP1.Parser (2.8s)
+2026-11-14T22:35:44.7896391Z ✔ [22/38] Built LeanNet.HTTP2.Frame (1.4s)
+2026-11-14T22:35:45.0939624Z ✔ [23/38] Built LeanNet.Echo.ReactorServer (738ms)
+2026-11-14T22:35:45.3959509Z ✔ [24/39] Built LeanNet.HTTP.WorkerPool (897ms)
+2026-11-14T22:35:45.6979492Z ✔ [25/39] Built LeanNet.HTTP.Transport (661ms)
+2026-11-14T22:35:45.8979717Z ✔ [26/39] Built LeanNet.HTTP2.HPACK (2.5s)
+2026-11-14T22:35:45.9975501Z ✔ [28/39] Built LeanNet.HTTP1.Machine (1.2s)
+2026-11-14T22:35:46.5010062Z ✔ [29/45] Built LeanNet.Echo.Server (555ms)
+2026-11-14T22:35:46.5039039Z ✔ [30/45] Built LeanNet.HTTP2.Priority (1.1s)
+2026-11-14T22:35:47.1059321Z ✔ [31/96] Built LeanNet.HTTP1.Handlers (573ms)
+2026-11-14T22:35:47.3039397Z ✔ [32/96] Built LeanNet.HTTP2.Stream (1.5s)
+2026-11-14T22:35:47.3068914Z ✔ [33/96] Built LeanNet.HTTP2.Request (1.3s)
+2026-11-14T22:35:47.5049414Z ✔ [35/96] Built LeanNet.HTTP.Static.Date (950ms)
+2026-11-14T22:35:47.5082127Z ✔ [36/96] Built LeanNet.Bytes:c.o (198ms)
+2026-11-14T22:35:47.6059335Z ✔ [37/96] Built LeanNet.FFI.Errno:c.o (366ms)
+2026-11-14T22:35:47.7059646Z ✔ [40/96] Built LeanNet.Socket.State:c.o (269ms)
+2026-11-14T22:35:47.9069450Z ✔ [41/96] Built LeanNet.FFI.Reactor:c.o (284ms)
+2026-11-14T22:35:48.0103093Z ✔ [42/96] Built LeanNet.HTTP.Static.Path (946ms)
+2026-11-14T22:35:48.0104213Z ✔ [43/96] Built LeanNet.FileRegion:c.o (250ms)
+2026-11-14T22:35:48.1073441Z ✔ [44/96] Built LeanNet.FFI.Static:c.o (163ms)
+2026-11-14T22:35:48.7099386Z ✔ [45/96] Built LeanNet.Echo.ReactorServer:c.o (616ms)
+2026-11-14T22:35:48.8079006Z ✔ [46/96] Built LeanNet.Echo.Server:c.o (136ms)
+2026-11-14T22:35:48.9089598Z ✔ [48/96] Built LeanNet.FileSource:c.o (897ms)
+2026-11-14T22:35:49.2129671Z ✔ [49/96] Built LeanNet.Socket.Handle:c.o (1.7s)
+2026-11-14T22:35:49.4119299Z ✔ [52/96] Built LeanNet.HTTP1.Protocol:c.o (574ms)
+2026-11-14T22:35:49.6179421Z ✔ [53/96] Built LeanNet.HTTP1.Config:c.o (206ms)
+2026-11-14T22:35:49.8159506Z ✔ [54/96] Built LeanNet.HTTP1.Router:c.o (299ms)
+2026-11-14T22:35:50.2148191Z ✔ [55/96] Built LeanNet.Reactor.Basic:c.o (2.2s)
+2026-11-14T22:35:50.3160299Z ✔ [56/96] Built LeanNet.HTTP2.Push:c.o (126ms)
+2026-11-14T22:35:50.4159349Z ✔ [57/96] Built LeanNet.HTTP1.Encoding:c.o (1.3s)
+2026-11-14T22:35:50.5159326Z ✔ [58/96] Built LeanNet.HTTP1.Handlers:c.o (183ms)
+2026-11-14T22:35:51.1155569Z ✔ [59/96] Built LeanNet.HTTP1.Machine:c.o (1.3s)
+2026-11-14T22:35:51.7194148Z ✔ [60/96] Built LeanNet.HTTP2.Frame:c.o (1.2s)
+2026-11-14T22:35:52.3269368Z ✔ [61/96] Built LeanNet.HTTP2.Priority:c.o (1.2s)
+2026-11-14T22:35:52.4249691Z ✔ [62/99] Built LeanNet.HTTP.WorkerPool:c.o (754ms)
+2026-11-14T22:35:52.6249380Z ✔ [64/99] Built LeanNet.HTTP1.Parser:c.o (3.7s)
+2026-11-14T22:35:52.6279817Z ✔ [65/99] Built LeanNet.HTTP.Transport:c.o (346ms)
+2026-11-14T22:35:53.0289291Z ✔ [66/99] Built LeanNet.HTTP.CLI (500ms)
+2026-11-14T22:35:53.0318701Z ✔ [67/99] Built LeanNet.HTTP2.HPACK:c.o (2.6s)
+2026-11-14T22:35:53.6299607Z ✔ [69/102] Built LeanNet.HTTP2.Stream:c.o (1.2s)
+2026-11-14T22:35:53.7289798Z ✔ [70/102] Built LeanNet.HTTP.Static.Path:c.o (646ms)
+2026-11-14T22:35:53.9329660Z ✔ [71/102] Built LeanNet.HTTP2.Request:c.o (1.3s)
+2026-11-14T22:35:54.0327713Z ✔ [72/102] Built LeanNet.HTTP.Static.Date:c.o (933ms)
+2026-11-14T22:35:54.0329037Z ✔ [73/102] Built LeanNet.HTTP.CLI:c.o (341ms)
+2026-11-14T22:35:55.0361588Z ✔ [74/102] Built LeanNet.HTTP.Static.Selection (1.1s)
+2026-11-14T22:35:56.3470039Z ✔ [75/102] Built «lean-net»/socket_shim.static (3.7s)
+2026-11-14T22:35:56.7454771Z ✔ [77/102] Built LeanNet.HTTP.Static.Selection:c.o (1.7s)
+2026-11-14T22:35:56.8456762Z ✔ [78/102] Built LeanNet.HTTP.Static.Catalog (1.5s)
+2026-11-14T22:35:56.9489675Z ✔ [79/102] Built LeanNet.HTTP2.Connection (3.2s)
+2026-11-14T22:35:57.7499607Z ✔ [80/102] Built LeanNet.HTTP2.Machine (830ms)
+2026-11-14T22:35:58.4519586Z ✔ [81/102] Built LeanNet.HTTP.Static.Catalog:c.o (1.6s)
+2026-11-14T22:35:58.5517596Z ✔ [82/102] Built LeanNet.HTTP2.Machine:c.o (818ms)
+2026-11-14T22:36:00.2569607Z ✔ [83/102] Built LeanNet.HTTP.ReactorServer (2.5s)
+2026-11-14T22:36:00.9569150Z ✔ [84/102] Built LeanNet.HTTP.Static (686ms)
+2026-11-14T22:36:01.0583630Z ✔ [85/102] Built LeanNet.HTTP.Static:c.o (138ms)
+2026-11-14T22:36:01.0638890Z ✔ [86/102] Built test.HTTP2ReactorFixture (808ms)
+2026-11-14T22:36:01.5599662Z ✔ [87/102] Built test.HTTP2ReactorFixture:c.o (467ms)
+2026-11-14T22:36:02.1589847Z ✔ [88/102] Built test.StaticReactorFixture (617ms)
+2026-11-14T22:36:02.3599363Z ✔ [89/102] Built test.StaticReactorFixture:c.o (210ms)
+2026-11-14T22:36:02.8609335Z ✔ [90/102] Built LeanNet.HTTP1.Server (1.8s)
+2026-11-14T22:36:03.4639440Z ✔ [91/102] Built LeanNet.HTTP2.Server (568ms)
+2026-11-14T22:36:03.6659466Z ✔ [92/102] Built LeanNet.HTTP2.Server:c.o (206ms)
+2026-11-14T22:36:04.1679419Z ✔ [93/102] Built LeanNet (507ms)
+2026-11-14T22:36:04.3679661Z ✔ [94/102] Built LeanNet:c.o (149ms)
+2026-11-14T22:36:04.8689407Z ✔ [95/102] Built HTTPMain (573ms)
+2026-11-14T22:36:05.0699382Z ✔ [96/102] Built HTTPMain:c.o (218ms)
+2026-11-14T22:36:05.6689830Z ✔ [97/102] Built LeanNet.HTTP2.Connection:c.o (8.7s)
+2026-11-14T22:36:05.6690507Z ✔ [98/102] Built LeanNet.HTTP1.Server:c.o (2.7s)
+2026-11-14T22:36:06.7702523Z ✔ [99/102] Built LeanNet.HTTP.ReactorServer:c.o (6.5s)
+2026-11-14T22:36:07.0732489Z ✔ [100/102] Built «lean-net-http1»:exe (287ms)
+2026-11-14T22:36:07.0733435Z ✔ [101/102] Built «lean-net-http2-reactor-fixture»:exe (304ms)
+2026-11-14T22:36:07.0734403Z ✔ [102/102] Built «lean-net-static-fixture»:exe (292ms)
+2026-11-14T22:36:07.0751481Z Build completed successfully (102 jobs).
+2026-11-14T22:36:10.9646303Z ✔ [83/115] Built LeanNetTLS.FFI.Raw (323ms)
+2026-11-14T22:36:11.0659449Z ✔ [84/115] Built LeanNetTLS.ReactorConfig (460ms)
+2026-11-14T22:36:11.0660086Z ✔ [85/115] Built LeanNetTLS.FFI.Raw:c.o (113ms)
+2026-11-14T22:36:11.3669294Z ✔ [86/115] Built LeanNetTLS.ReactorConfig:c.o (267ms)
+2026-11-14T22:36:11.4657677Z ✔ [87/115] Built «lean-net-tls»/tls_shim.static (1.3s)
+2026-11-14T22:36:11.5684470Z ✔ [89/115] Built LeanNetTLS.FFI.Worker (379ms)
+2026-11-14T22:36:11.7689724Z ✔ [90/115] Built LeanNetTLS.Session (754ms)
+2026-11-14T22:36:11.7691229Z ✔ [91/115] Built LeanNetTLS.FFI.Worker:c.o (172ms)
+2026-11-14T22:36:12.2691114Z ✔ [92/115] Built test.TLSInterruptibleTest (498ms)
+2026-11-14T22:36:12.5732993Z ✔ [93/115] Built test.TLSInterruptibleTest:c.o (273ms)
+2026-11-14T22:36:12.6723351Z ✔ [94/115] Built LeanNetTLS.Session:c.o (862ms)
+2026-11-14T22:36:12.7726272Z ✔ [95/115] Built LeanNetTLS.Reactor (1.2s)
+2026-11-14T22:36:12.8728831Z ✖ [96/115] Building «lean-net-tls-interruptible-test»:exe (196ms)
+2026-11-14T22:36:12.8731003Z trace: .> /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang -o /home/runner/work/lean-net/lean-net/tls/.lake/build/bin/lean-net-tls-interruptible-test @/home/runner/work/lean-net/lean-net/tls/.lake/build/bin/lean-net-tls-interruptible-test.rsp
+2026-11-14T22:36:12.8732879Z info: stderr:
+2026-11-14T22:36:12.8733427Z ld.lld: error: undefined reference: pthread_mutex_trylock@GLIBC_2.34
+2026-11-14T22:36:12.8734456Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:12.8735159Z 
+2026-11-14T22:36:12.8735448Z ld.lld: error: undefined reference: pthread_join@GLIBC_2.34
+2026-11-14T22:36:12.8736383Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:12.8737054Z 
+2026-11-14T22:36:12.8737284Z ld.lld: error: undefined reference: stat@GLIBC_2.33
+2026-11-14T22:36:12.8738392Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:12.8739069Z 
+2026-11-14T22:36:12.8739355Z ld.lld: error: undefined reference: pthread_create@GLIBC_2.34
+2026-11-14T22:36:12.8740277Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:12.8740925Z 
+2026-11-14T22:36:12.8741221Z ld.lld: error: undefined reference: __isoc23_strtol@GLIBC_2.38
+2026-11-14T22:36:12.8742165Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:12.8743218Z clang: error: linker command failed with exit code 1 (use -v to see invocation)
+2026-11-14T22:36:12.8744395Z error: external command '/home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang' exited with code 1
+2026-11-14T22:36:13.1732160Z ✔ [97/115] Built LeanNetTLS.ReactorServer (350ms)
+2026-11-14T22:36:13.3819488Z ✔ [98/115] Built LeanNetTLS.ReactorServer:c.o (223ms)
+2026-11-14T22:36:13.7839246Z ✔ [99/115] Built test.TLSStaticFixture (663ms)
+2026-11-14T22:36:14.0819030Z ✔ [100/115] Built LeanNetTLS.Server (678ms)
+2026-11-14T22:36:14.0848821Z ✔ [101/115] Built test.TLSStaticFixture:c.o (277ms)
+2026-11-14T22:36:14.1820674Z ✔ [102/115] Built LeanNetTLS.Server:c.o (161ms)
+2026-11-14T22:36:14.2849423Z ✔ [103/115] Built test.TLSReactorFixture (1.1s)
+2026-11-14T22:36:14.5829084Z ✔ [104/115] Built LeanNetTLS (533ms)
+2026-11-14T22:36:14.7839654Z ✔ [105/115] Built LeanNetTLS:c.o (151ms)
+2026-11-14T22:36:14.8830705Z ✔ [106/115] Built test.TLSFixture (620ms)
+2026-11-14T22:36:14.8832615Z ✔ [107/115] Built test.TLSReactorFixture:c.o (635ms)
+2026-11-14T22:36:14.9835625Z ✔ [108/115] Built test.TLSFixture:c.o (151ms)
+2026-11-14T22:36:15.1859379Z ✔ [109/115] Built LeanNetTLS.Reactor:c.o (2.3s)
+2026-11-14T22:36:15.2899340Z ✔ [110/115] Built Main (500ms)
+2026-11-14T22:36:15.4832346Z ✔ [111/115] Built Main:c.o (250ms)
+2026-11-14T22:36:15.4833102Z ✖ [112/115] Building «lean-net-tls-fixture»:exe (317ms)
+2026-11-14T22:36:15.4834862Z trace: .> /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang -o /home/runner/work/lean-net/lean-net/tls/.lake/build/bin/lean-net-tls-fixture @/home/runner/work/lean-net/lean-net/tls/.lake/build/bin/lean-net-tls-fixture.rsp
+2026-11-14T22:36:15.4836590Z info: stderr:
+2026-11-14T22:36:15.4837109Z ld.lld: error: undefined reference: pthread_mutex_trylock@GLIBC_2.34
+2026-11-14T22:36:15.4838236Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4839349Z 
+2026-11-14T22:36:15.4839530Z ld.lld: error: undefined reference: pthread_join@GLIBC_2.34
+2026-11-14T22:36:15.4840255Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4840651Z 
+2026-11-14T22:36:15.4840796Z ld.lld: error: undefined reference: stat@GLIBC_2.33
+2026-11-14T22:36:15.4841298Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4841685Z 
+2026-11-14T22:36:15.4841862Z ld.lld: error: undefined reference: pthread_create@GLIBC_2.34
+2026-11-14T22:36:15.4842418Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4842796Z 
+2026-11-14T22:36:15.4842968Z ld.lld: error: undefined reference: __isoc23_strtol@GLIBC_2.38
+2026-11-14T22:36:15.4843491Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4844103Z clang: error: linker command failed with exit code 1 (use -v to see invocation)
+2026-11-14T22:36:15.4844888Z error: external command '/home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang' exited with code 1
+2026-11-14T22:36:15.4845645Z ✖ [113/115] Building «lean-net-tls-reactor-fixture»:exe (307ms)
+2026-11-14T22:36:15.4846799Z trace: .> /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang -o /home/runner/work/lean-net/lean-net/tls/.lake/build/bin/lean-net-tls-reactor-fixture @/home/runner/work/lean-net/lean-net/tls/.lake/build/bin/lean-net-tls-reactor-fixture.rsp
+2026-11-14T22:36:15.4847848Z info: stderr:
+2026-11-14T22:36:15.4848504Z ld.lld: error: undefined reference: pthread_mutex_trylock@GLIBC_2.34
+2026-11-14T22:36:15.4849092Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4849486Z 
+2026-11-14T22:36:15.4849642Z ld.lld: error: undefined reference: pthread_join@GLIBC_2.34
+2026-11-14T22:36:15.4850177Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4850544Z 
+2026-11-14T22:36:15.4850680Z ld.lld: error: undefined reference: stat@GLIBC_2.33
+2026-11-14T22:36:15.4851159Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4851515Z 
+2026-11-14T22:36:15.4851678Z ld.lld: error: undefined reference: pthread_create@GLIBC_2.34
+2026-11-14T22:36:15.4852413Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4852790Z 
+2026-11-14T22:36:15.4853074Z ld.lld: error: undefined reference: __isoc23_strtol@GLIBC_2.38
+2026-11-14T22:36:15.4853598Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4854189Z clang: error: linker command failed with exit code 1 (use -v to see invocation)
+2026-11-14T22:36:15.4854857Z error: external command '/home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang' exited with code 1
+2026-11-14T22:36:15.4855569Z ✖ [114/115] Building «lean-net-tls-static-fixture»:exe (352ms)
+2026-11-14T22:36:15.4856692Z trace: .> /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang -o /home/runner/work/lean-net/lean-net/tls/.lake/build/bin/lean-net-tls-static-fixture @/home/runner/work/lean-net/lean-net/tls/.lake/build/bin/lean-net-tls-static-fixture.rsp
+2026-11-14T22:36:15.4857715Z info: stderr:
+2026-11-14T22:36:15.4858283Z ld.lld: error: undefined reference: pthread_mutex_trylock@GLIBC_2.34
+2026-11-14T22:36:15.4858850Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4859233Z 
+2026-11-14T22:36:15.4859393Z ld.lld: error: undefined reference: pthread_join@GLIBC_2.34
+2026-11-14T22:36:15.4859902Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4860270Z 
+2026-11-14T22:36:15.4860584Z ld.lld: error: undefined reference: stat@GLIBC_2.33
+2026-11-14T22:36:15.4861466Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4862069Z 
+2026-11-14T22:36:15.4862317Z ld.lld: error: undefined reference: pthread_create@GLIBC_2.34
+2026-11-14T22:36:15.4863147Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4863746Z 
+2026-11-14T22:36:15.4863991Z ld.lld: error: undefined reference: __isoc23_strtol@GLIBC_2.38
+2026-11-14T22:36:15.4864705Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.4865292Z clang: error: linker command failed with exit code 1 (use -v to see invocation)
+2026-11-14T22:36:15.4865969Z error: external command '/home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang' exited with code 1
+2026-11-14T22:36:15.6836267Z ✖ [115/115] Building «lean-net-tls»:exe (198ms)
+2026-11-14T22:36:15.6838961Z trace: .> /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang -o /home/runner/work/lean-net/lean-net/tls/.lake/build/bin/lean-net-tls @/home/runner/work/lean-net/lean-net/tls/.lake/build/bin/lean-net-tls.rsp
+2026-11-14T22:36:15.6841175Z info: stderr:
+2026-11-14T22:36:15.6841885Z ld.lld: error: undefined reference: pthread_mutex_trylock@GLIBC_2.34
+2026-11-14T22:36:15.6843192Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.6844005Z 
+2026-11-14T22:36:15.6844423Z ld.lld: error: undefined reference: pthread_join@GLIBC_2.34
+2026-11-14T22:36:15.6845500Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.6846286Z 
+2026-11-14T22:36:15.6846572Z ld.lld: error: undefined reference: stat@GLIBC_2.33
+2026-11-14T22:36:15.6847576Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.6864947Z 
+2026-11-14T22:36:15.6865226Z ld.lld: error: undefined reference: pthread_create@GLIBC_2.34
+2026-11-14T22:36:15.6866097Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.6866712Z 
+2026-11-14T22:36:15.6866977Z ld.lld: error: undefined reference: __isoc23_strtol@GLIBC_2.38
+2026-11-14T22:36:15.6867809Z >>> referenced by /usr/lib/x86_64-linux-gnu/libssl.so (disallowed by --no-allow-shlib-undefined)
+2026-11-14T22:36:15.6868890Z clang: error: linker command failed with exit code 1 (use -v to see invocation)
+2026-11-14T22:36:15.6869874Z error: external command '/home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang' exited with code 1
+2026-11-14T22:36:15.6870698Z Some required targets logged failures:
+2026-11-14T22:36:15.6871335Z - «lean-net-tls-interruptible-test»:exe
+2026-11-14T22:36:15.6871872Z - «lean-net-tls-fixture»:exe
+2026-11-14T22:36:15.6872348Z - «lean-net-tls-reactor-fixture»:exe
+2026-11-14T22:36:15.6872869Z - «lean-net-tls-static-fixture»:exe
+2026-11-14T22:36:15.6873338Z - «lean-net-tls»:exe
+2026-11-14T22:36:15.7005003Z error: build failed
+2026-11-14T22:36:15.7511346Z ##[error]Process completed with exit code 1.
+2026-11-14T22:36:15.7650957Z Post job cleanup.
+2026-11-14T22:36:15.8520546Z [command]/usr/bin/git version
+2026-11-14T22:36:15.8568501Z git version 2.56.1
+2026-11-14T22:36:15.8611093Z Temporarily overriding HOME='/home/runner/work/_temp/dab490a3-07b3-4231-924f-d99321f1a5c6' before making global git config changes
+2026-11-14T22:36:15.8612490Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-14T22:36:15.8617390Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/lean-net/lean-net
+2026-11-14T22:36:15.8657723Z Removing SSH command configuration
+2026-11-14T22:36:15.8665271Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-14T22:36:15.8715637Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-14T22:36:15.9070670Z Removing HTTP extra header
+2026-11-14T22:36:15.9077514Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-14T22:36:15.9151577Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-14T22:36:15.9523802Z Removing includeIf entries pointing to credentials config files
+2026-11-14T22:36:15.9531359Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-14T22:36:15.9562022Z includeif.gitdir:/home/runner/work/lean-net/lean-net/.git.path
+2026-11-14T22:36:15.9563163Z includeif.gitdir:/home/runner/work/lean-net/lean-net/.git/worktrees/*.path
+2026-11-14T22:36:15.9564348Z includeif.gitdir:/github/workspace/.git.path
+2026-11-14T22:36:15.9565280Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-11-14T22:36:15.9580649Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/lean-net/lean-net/.git.path
+2026-11-14T22:36:15.9607870Z /home/runner/work/_temp/git-credentials-1442407e-72f3-46cf-9186-43369441da9b.config
+2026-11-14T22:36:15.9619218Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/lean-net/lean-net/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-1442407e\-72f3\-46cf\-9186\-43369441da9b\.config
+2026-11-14T22:36:15.9658319Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/lean-net/lean-net/.git/worktrees/*.path
+2026-11-14T22:36:15.9713392Z /home/runner/work/_temp/git-credentials-1442407e-72f3-46cf-9186-43369441da9b.config
+2026-11-14T22:36:15.9722827Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/lean-net/lean-net/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-1442407e\-72f3\-46cf\-9186\-43369441da9b\.config
+2026-11-14T22:36:15.9757366Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-11-14T22:36:15.9781149Z /github/runner_temp/git-credentials-1442407e-72f3-46cf-9186-43369441da9b.config
+2026-11-14T22:36:15.9789060Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-1442407e\-72f3\-46cf\-9186\-43369441da9b\.config
+2026-11-14T22:36:15.9823913Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-11-14T22:36:15.9847319Z /github/runner_temp/git-credentials-1442407e-72f3-46cf-9186-43369441da9b.config
+2026-11-14T22:36:15.9855849Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-1442407e\-72f3\-46cf\-9186\-43369441da9b\.config
+2026-11-14T22:36:15.9891639Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-14T22:36:16.0166226Z Removing credentials config '/home/runner/work/_temp/git-credentials-1442407e-72f3-46cf-9186-43369441da9b.config'
+2026-11-14T22:36:16.0322784Z Cleaning up orphan processes

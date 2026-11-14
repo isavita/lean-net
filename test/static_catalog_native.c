@@ -350,35 +350,53 @@ int main(int argc, char **argv) {
   REQUIRE(rn_file_prepare_residency_budget(8 * 1024 * 1024) == 0);
   no_private_pack_name(root);
 #ifdef _WIN32
+  /* Actual Windows CI traced the cold +7 process handles to this SDDL call
+     (Event/ETW/Thread/ALPC, with all four builder file handles closed). Warm
+     only that API, then require 1,000 forced failures to remain strictly flat. */
+  unsigned security_cold_before = handles();
+  PSECURITY_DESCRIPTOR warmed_security = NULL;
+  REQUIRE(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;OW)", SDDL_REVISION_1,
+                                                               &warmed_security, NULL));
+  REQUIRE(LocalFree(warmed_security) == NULL);
+  unsigned security_cold_after = handles();
   handle_snapshot failed_snapshot_before, failed_snapshot_after;
   snapshot_handles(&failed_snapshot_before);
   unsigned failed_before = handles();
-  capture_owned_handles = 1;
-  sc_builder *unsupported = builder(root, 8192, 1);
-  unsigned failed_after_create = handles();
-  unsupported_disposition = 1;
-  REQUIRE(sc_builder_prepare(unsupported) == -ENOTSUP);
-  unsigned failed_after_prepare = handles();
-  dispose(unsupported);
-  unsigned failed_after_dispose = handles();
-  capture_owned_handles = 0;
-  no_private_pack_name(root);
-  unsigned failed_after_enumerate = handles();
-  snapshot_handles(&failed_snapshot_after);
-  fprintf(stderr,
-          "unsupported disposition handles: before=%u create=%u prepare=%u dispose=%u "
-          "enumerate=%u owned_created=%u owned_closed=%u owned_open=%u scan=%u/%u\n",
-          failed_before, failed_after_create, failed_after_prepare, failed_after_dispose,
-          failed_after_enumerate, owned_created, owned_closed, owned_count,
-          failed_snapshot_before.count, failed_snapshot_after.count);
-  describe_new_handles(&failed_snapshot_before, &failed_snapshot_after);
-  fprintf(stderr, "security descriptor handles=%lu/%lu\n", (unsigned long)security_before,
-          (unsigned long)security_after);
-  for (unsigned i = 0; i < owned_created; ++i)
-    fprintf(stderr, "owned CreateFile stage%u handles=%lu/%lu\n", i,
-            (unsigned long)create_before[i], (unsigned long)create_after[i]);
-  REQUIRE(owned_count == 0 && owned_created == owned_closed);
-  REQUIRE(failed_after_enumerate <= failed_before);
+  unsigned failed_after = failed_before, failed_created = 0, failed_closed = 0;
+  for (unsigned cycle = 0; cycle < 1000; ++cycle) {
+    owned_count = owned_created = owned_closed = 0;
+    capture_owned_handles = 1;
+    sc_builder *unsupported = builder(root, 8192, 1);
+    unsigned failed_after_create = handles();
+    unsupported_disposition = 1;
+    REQUIRE(sc_builder_prepare(unsupported) == -ENOTSUP);
+    unsigned failed_after_prepare = handles();
+    dispose(unsupported);
+    unsigned failed_after_dispose = handles();
+    capture_owned_handles = 0;
+    no_private_pack_name(root);
+    failed_after = handles();
+    if (failed_after > failed_before || owned_count || owned_created != 4 || owned_closed != 4) {
+      snapshot_handles(&failed_snapshot_after);
+      fprintf(stderr,
+              "unsupported disposition cycle=%u handles: before=%u create=%u prepare=%u "
+              "dispose=%u enumerate=%u owned_created=%u owned_closed=%u owned_open=%u scan=%u/%u\n",
+              cycle, failed_before, failed_after_create, failed_after_prepare, failed_after_dispose,
+              failed_after, owned_created, owned_closed, owned_count, failed_snapshot_before.count,
+              failed_snapshot_after.count);
+      describe_new_handles(&failed_snapshot_before, &failed_snapshot_after);
+      fprintf(stderr, "security descriptor handles=%lu/%lu cold=%u/%u\n",
+              (unsigned long)security_before, (unsigned long)security_after, security_cold_before,
+              security_cold_after);
+      for (unsigned i = 0; i < owned_created; ++i)
+        fprintf(stderr, "owned CreateFile stage%u handles=%lu/%lu\n", i,
+                (unsigned long)create_before[i], (unsigned long)create_after[i]);
+    }
+    REQUIRE(owned_count == 0 && owned_created == 4 && owned_closed == 4);
+    REQUIRE(failed_after <= failed_before);
+    failed_created += owned_created;
+    failed_closed += owned_closed;
+  }
 #endif
   sc_builder *b = builder(root, 8 * 1024 * 1024, 16);
   observed = b;
@@ -521,7 +539,15 @@ int main(int argc, char **argv) {
   }
   unsigned after = handles();
   REQUIRE(after <= before);
-  printf(",\"packed_size\":%llu,\"cycles\":1000,\"handles_before\":%u,\"handles_after\":%u}\n",
+  printf(",\"packed_size\":%llu,\"cycles\":1000,\"handles_before\":%u,\"handles_after\":%u",
          (unsigned long long)packed_size, before, after);
+#ifdef _WIN32
+  printf(",\"security_init_handles_before\":%u,\"security_init_handles_after\":%u,"
+         "\"unsupported_failure_cycles\":1000,\"failure_handles_before\":%u,"
+         "\"failure_handles_after\":%u,\"failure_owned_created\":%u,\"failure_owned_closed\":%u",
+         security_cold_before, security_cold_after, failed_before, failed_after, failed_created,
+         failed_closed);
+#endif
+  printf("}\n");
   return 0;
 }

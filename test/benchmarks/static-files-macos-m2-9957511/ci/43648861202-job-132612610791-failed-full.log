@@ -1,0 +1,774 @@
+﻿2026-11-14T22:35:09.8013637Z Current runner version: '2.338.2'
+2026-11-14T22:35:09.8040266Z ##[group]Runner Image Provisioner
+2026-11-14T22:35:09.8041199Z Hosted Compute Agent
+2026-11-14T22:35:09.8041808Z Version: 20261103.629
+2026-11-14T22:35:09.8042406Z Commit: 15dbd9ccb5dbf34fae002b6ed1a2670f52df37bc
+2026-11-14T22:35:09.8043115Z Build Date: 2026-11-03T17:26:59Z
+2026-11-14T22:35:09.8043767Z Worker ID: {9018ab94-d27a-442f-8459-55618a7b2688}
+2026-11-14T22:35:09.8044426Z Region: northcentralus
+2026-11-14T22:35:09.8044986Z Cloud: Azure
+2026-11-14T22:35:09.8045471Z ##[endgroup]
+2026-11-14T22:35:09.8046828Z ##[group]Operating System
+2026-11-14T22:35:09.8047485Z Microsoft Windows Server 2025
+2026-11-14T22:35:09.8048055Z 10.0.26100
+2026-11-14T22:35:09.8048548Z Datacenter
+2026-11-14T22:35:09.8049394Z ##[endgroup]
+2026-11-14T22:35:09.8049951Z ##[group]Runner Image
+2026-11-14T22:35:09.8050520Z Image: windows-2025-vs2026
+2026-11-14T22:35:09.8051120Z Version: 20261103.298.1
+2026-11-14T22:35:09.8052666Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20261103.298/images/windows/Windows2025-VS2026-Readme.md
+2026-11-14T22:35:09.8054480Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20261103.298
+2026-11-14T22:35:09.8055474Z ##[endgroup]
+2026-11-14T22:35:09.8056610Z ##[group]GITHUB_TOKEN Permissions
+2026-11-14T22:35:09.8058566Z Contents: read
+2026-11-14T22:35:09.8059140Z Metadata: read
+2026-11-14T22:35:09.8059714Z Packages: read
+2026-11-14T22:35:09.8060253Z ##[endgroup]
+2026-11-14T22:35:09.8062284Z Secret source: Actions
+2026-11-14T22:35:09.8063216Z Cache mode: write
+2026-11-14T22:35:09.8063880Z Prepare workflow directory
+2026-11-14T22:35:09.8500362Z Prepare all required actions
+2026-11-14T22:35:09.8550323Z Getting action download info
+2026-11-14T22:35:10.0744788Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-11-14T22:35:10.2079636Z Download action repository 'msys2/setup-msys2@v2' (SHA:ec48f7c5447b3140e2b088413ae3a55687bccb6e)
+2026-11-14T22:35:10.3945211Z Download action repository 'leanprover/lean-action@v1' (SHA:ba3fdfe5c4476c925da13bf11a005ddb47e47aee)
+2026-11-14T22:35:10.7535269Z Getting action download info
+2026-11-14T22:35:10.8354073Z Download action repository 'actions/cache@caa296126883cff596d87d8935842f9db880ef25' (SHA:caa296126883cff596d87d8935842f9db880ef25)
+2026-11-14T22:35:11.0925229Z Complete job name: native (windows-latest)
+2026-11-14T22:35:11.2544333Z ##[group]Run actions/checkout@v7
+2026-11-14T22:35:11.2545331Z with:
+2026-11-14T22:35:11.2545744Z   repository: isavita/lean-net
+2026-11-14T22:35:11.2550767Z   token: ***
+2026-11-14T22:35:11.2551271Z   ssh-strict: true
+2026-11-14T22:35:11.2551775Z   ssh-user: git
+2026-11-14T22:35:11.2552278Z   persist-credentials: true
+2026-11-14T22:35:11.2552839Z   clean: true
+2026-11-14T22:35:11.2553345Z   sparse-checkout-cone-mode: true
+2026-11-14T22:35:11.2553943Z   fetch-depth: 1
+2026-11-14T22:35:11.2554423Z   fetch-tags: false
+2026-11-14T22:35:11.2554954Z   show-progress: true
+2026-11-14T22:35:11.2555482Z   lfs: false
+2026-11-14T22:35:11.2555908Z   submodules: false
+2026-11-14T22:35:11.2556313Z   set-safe-directory: true
+2026-11-14T22:35:11.2556777Z   allow-unsafe-pr-checkout: false
+2026-11-14T22:35:11.2557499Z ##[endgroup]
+2026-11-14T22:35:11.4032812Z Syncing repository: isavita/lean-net
+2026-11-14T22:35:11.4035208Z ##[group]Getting Git version info
+2026-11-14T22:35:11.4036014Z Working directory is 'D:\a\lean-net\lean-net'
+2026-11-14T22:35:11.5001035Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-11-14T22:35:11.8404609Z git version 2.56.0.windows.4
+2026-11-14T22:35:11.8457656Z ##[endgroup]
+2026-11-14T22:35:11.8474669Z Temporarily overriding HOME='D:\a\_temp\8146ee5a-a6f5-42e6-9e1c-c6383d2e92d4' before making global git config changes
+2026-11-14T22:35:11.8478830Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-14T22:35:11.8485306Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\lean-net\lean-net
+2026-11-14T22:35:11.9150992Z Deleting the contents of 'D:\a\lean-net\lean-net'
+2026-11-14T22:35:11.9156058Z ##[group]Determining repository object format
+2026-11-14T22:35:11.9157707Z ##[endgroup]
+2026-11-14T22:35:11.9159012Z ##[group]Initializing the repository
+2026-11-14T22:35:11.9167078Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\lean-net\lean-net
+2026-11-14T22:35:12.0033789Z Initialized empty Git repository in D:/a/lean-net/lean-net/.git/
+2026-11-14T22:35:12.0079812Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/isavita/lean-net
+2026-11-14T22:35:12.0803527Z ##[endgroup]
+2026-11-14T22:35:12.0804547Z ##[group]Disabling automatic garbage collection
+2026-11-14T22:35:12.0813049Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-11-14T22:35:12.1184861Z ##[endgroup]
+2026-11-14T22:35:12.1186349Z ##[group]Setting up auth
+2026-11-14T22:35:12.1187497Z Removing SSH command configuration
+2026-11-14T22:35:12.1196854Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-11-14T22:35:12.1577182Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-11-14T22:35:13.6615923Z Removing HTTP extra header
+2026-11-14T22:35:13.6625919Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-14T22:35:13.7002689Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-11-14T22:35:14.2634579Z Removing includeIf entries pointing to credentials config files
+2026-11-14T22:35:14.2645119Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-14T22:35:14.3032582Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-11-14T22:35:14.8774443Z [command]"C:\Program Files\Git\bin\git.exe" config --file D:\a\_temp\git-credentials-1acaaa96-c28c-4567-9466-dc2eda870c56.config http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-11-14T22:35:14.9174532Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/lean-net/lean-net/.git.path D:\a\_temp\git-credentials-1acaaa96-c28c-4567-9466-dc2eda870c56.config
+2026-11-14T22:35:14.9554376Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:D:/a/lean-net/lean-net/.git/worktrees/*.path D:\a\_temp\git-credentials-1acaaa96-c28c-4567-9466-dc2eda870c56.config
+2026-11-14T22:35:15.0003030Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-1acaaa96-c28c-4567-9466-dc2eda870c56.config
+2026-11-14T22:35:15.0412138Z [command]"C:\Program Files\Git\bin\git.exe" config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-1acaaa96-c28c-4567-9466-dc2eda870c56.config
+2026-11-14T22:35:15.0808617Z ##[endgroup]
+2026-11-14T22:35:15.0809075Z ##[group]Fetching the repository
+2026-11-14T22:35:15.0824838Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +995751118bbe93f8a9c8946360b5842847985fe4:refs/remotes/origin/codex/static-files
+2026-11-14T22:35:16.2224812Z From https://github.com/isavita/lean-net
+2026-11-14T22:35:16.2225775Z  * [new ref]         995751118bbe93f8a9c8946360b5842847985fe4 -> origin/codex/static-files
+2026-11-14T22:35:16.2269746Z [command]"C:\Program Files\Git\bin\git.exe" branch --list --remote origin/codex/static-files
+2026-11-14T22:35:16.2839463Z   origin/codex/static-files
+2026-11-14T22:35:16.2881512Z [command]"C:\Program Files\Git\bin\git.exe" rev-parse refs/remotes/origin/codex/static-files
+2026-11-14T22:35:16.3309789Z 995751118bbe93f8a9c8946360b5842847985fe4
+2026-11-14T22:35:16.3345272Z ##[endgroup]
+2026-11-14T22:35:16.3345724Z ##[group]Determining the checkout info
+2026-11-14T22:35:16.3346280Z ##[endgroup]
+2026-11-14T22:35:16.3353612Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-11-14T22:35:16.3836839Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-11-14T22:35:16.4220748Z ##[group]Checking out the ref
+2026-11-14T22:35:16.4230639Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B codex/static-files refs/remotes/origin/codex/static-files
+2026-11-14T22:35:16.5690842Z Switched to a new branch 'codex/static-files'
+2026-11-14T22:35:16.5797323Z branch 'codex/static-files' set up to track 'origin/codex/static-files'.
+2026-11-14T22:35:16.5855567Z ##[endgroup]
+2026-11-14T22:35:16.6461968Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-11-14T22:35:16.6832808Z 995751118bbe93f8a9c8946360b5842847985fe4
+2026-11-14T22:35:16.7305962Z ##[group]Run msys2/setup-msys2@v2
+2026-11-14T22:35:16.7306271Z with:
+2026-11-14T22:35:16.7306443Z   msystem: MINGW64
+2026-11-14T22:35:16.7306624Z   update: true
+2026-11-14T22:35:16.7307005Z   install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib mingw-w64-x86_64-brotli mingw-w64-x86_64-pkgconf
+2026-11-14T22:35:16.7307460Z   path-type: minimal
+2026-11-14T22:35:16.7307650Z   release: true
+2026-11-14T22:35:16.7308160Z   platform-check-severity: fatal
+2026-11-14T22:35:16.7308483Z   cache: true
+2026-11-14T22:35:16.7308651Z ##[endgroup]
+2026-11-14T22:35:16.8773552Z ##[warning][msystem-mingw64] MINGW64 is deprecated. Migrate to UCRT64 or CLANG64. To acknowledge and suppress this warning, add 'msystem-mingw64' to 'suppress-deprecation-warnings'.
+2026-11-14T22:35:16.8781561Z ##[group]Downloading MSYS2...
+2026-11-14T22:35:17.4025461Z ##[endgroup]
+2026-11-14T22:35:17.4026036Z ##[group]Extracting MSYS2...
+2026-11-14T22:35:17.4043845Z [command]C:\hostedtoolcache\windows\msys2-installer\0.0.20260927\x64\base.exe -y
+2026-11-14T22:35:17.5907391Z 
+2026-11-14T22:35:17.5908347Z 7-Zip SFX 26.02 ZS v1.5.7 R1 (x64) : Copyright (c) 1999- Igor Pavlov, 2016- Tino Reichardt, 2022- Sergey G. Brester : 2026-06-27
+2026-11-14T22:35:17.5909176Z 
+2026-11-14T22:35:17.5910986Z Extracting archive: C:\hostedtoolcache\windows\msys2-installer\0.0.20260927\x64\base.exe
+2026-11-14T22:35:17.5911877Z --
+2026-11-14T22:35:17.5912720Z Path = C:\hostedtoolcache\windows\msys2-installer\0.0.20260927\x64\base.exe
+2026-11-14T22:35:17.5913636Z Type = 7z
+2026-11-14T22:35:17.5913823Z 
+2026-11-14T22:35:17.7828468Z   0%
+2026-11-14T22:35:17.7828799Z     
+2026-11-14T22:35:17.9847253Z   0% 613 - msys64\var\lib\pacman\local\findutils-4.11.0-2
+2026-11-14T22:35:17.9847929Z                                                          
+2026-11-14T22:35:18.1879725Z   1% 1154 - msys64\usr\lib\terminfo\61\att2350
+2026-11-14T22:35:18.1880303Z                                               
+2026-11-14T22:35:18.3923278Z   1% 1668 - msys64\usr\lib\terminfo\64\diablo1620-m8
+2026-11-14T22:35:18.3924077Z                                                     
+2026-11-14T22:35:18.5938835Z   1% 2092 - msys64\usr\lib\terminfo\6b\kermit-am
+2026-11-14T22:35:18.5939514Z                                                 
+2026-11-14T22:35:18.7973763Z   1% 2590 - msys64\usr\lib\terminfo\70\pe6100
+2026-11-14T22:35:18.7974307Z                                              
+2026-11-14T22:35:19.0005721Z   1% 3081 - msys64\usr\lib\terminfo\74\tvi920b-p-vb
+2026-11-14T22:35:19.0006284Z                                                    
+2026-11-14T22:35:19.2036197Z   2% 3524 - msys64\usr\lib\terminfo\77\wyse60-42-w
+2026-11-14T22:35:19.2036949Z                                                   
+2026-11-14T22:35:19.4074585Z   2% 3998 - msys64\usr\share\bash-completion\completions-core\dmypy.bash
+2026-11-14T22:35:19.4075779Z                                                                         
+2026-11-14T22:35:19.6097416Z   3% 4472 - msys64\usr\share\bash-completion\completions-core\rpm2targz.bash
+2026-11-14T22:35:19.6098195Z                                                                             
+2026-11-14T22:35:19.8140073Z   3% 4959 - msys64\usr\share\doc\bash\bash.html
+2026-11-14T22:35:19.8140660Z                                                
+2026-11-14T22:35:20.0162505Z   6% 5184 - msys64\usr\share\doc\xz\api\lzma12_8h.js
+2026-11-14T22:35:20.0163111Z                                                     
+2026-11-14T22:35:20.2194150Z  12% 5546 - msys64\usr\share\locale\de\LC_MESSAGES\gnupg2.mo
+2026-11-14T22:35:20.2194854Z                                                             
+2026-11-14T22:35:20.4229077Z  21% 5894 - msys64\usr\share\locale\kk\LC_TIME\coreutils.mo
+2026-11-14T22:35:20.4229828Z                                                            
+2026-11-14T22:35:20.6255054Z  32% 6232 - msys64\usr\share\locale\uk\LC_MESSAGES\gettext-tools.mo
+2026-11-14T22:35:20.6258367Z                                                                    
+2026-11-14T22:35:20.8291235Z  36% 6674 - msys64\usr\share\man\man1\help.1.gz
+2026-11-14T22:35:20.8291807Z                                                
+2026-11-14T22:35:21.0343916Z  36% 7186 - msys64\usr\share\man\man3\CURLINFO_SSL_ENGINES.3.gz
+2026-11-14T22:35:21.0344452Z                                                                
+2026-11-14T22:35:21.2352278Z  37% 7676 - msys64\usr\share\man\man3\curs_move.3x.gz
+2026-11-14T22:35:21.2352918Z                                                      
+2026-11-14T22:35:21.4387521Z  37% 7914 - msys64\usr\share\man\man3\init_extended_color_sp.3x.gz
+2026-11-14T22:35:21.4388168Z                                                                   
+2026-11-14T22:35:21.6424511Z  37% 8417 - msys64\usr\share\man\man3\post_menu.3x.gz
+2026-11-14T22:35:21.6425233Z                                                      
+2026-11-14T22:35:21.8448022Z  38% 8907 - msys64\usr\share\man\sr\man1\xzmore.1.gz
+2026-11-14T22:35:21.8448766Z                                                     
+2026-11-14T22:35:22.0481537Z  44% 9390 - msys64\usr\share\terminfo\61\att510d
+2026-11-14T22:35:22.0482125Z                                                 
+2026-11-14T22:35:22.2503044Z  44% 9917 - msys64\usr\share\terminfo\64\ds40-2
+2026-11-14T22:35:22.2503618Z                                                
+2026-11-14T22:35:22.5438838Z  45% 10442 - msys64\usr\share\terminfo\6d\morphos
+2026-11-14T22:35:22.5439503Z                                                  
+2026-11-14T22:35:22.7349526Z  45% 10871 - msys64\usr\share\terminfo\71\qnx
+2026-11-14T22:35:22.7350116Z                                              
+2026-11-14T22:35:22.9379251Z  45% 11355 - msys64\usr\share\terminfo\76\vc103
+2026-11-14T22:35:22.9379865Z                                                
+2026-11-14T22:35:23.1416685Z  45% 11869 - msys64\usr\share\terminfo\78\xterm+sm+1002
+2026-11-14T22:35:23.1417315Z                                                        
+2026-11-14T22:35:23.3449252Z  46% 12401 - msys64\usr\share\zoneinfo\Europe\Bratislava
+2026-11-14T22:35:23.3449918Z                                                         
+2026-11-14T22:35:23.5491821Z  46% 12891 - msys64\usr\share\zoneinfo\posix\Australia\ACT
+2026-11-14T22:35:23.5492533Z                                                           
+2026-11-14T22:35:23.7508236Z  46% 13379 - msys64\usr\share\zoneinfo\right\Antarctica\Vostok
+2026-11-14T22:35:23.7508754Z                                                               
+2026-11-14T22:35:23.9547138Z  46% 13872 - msys64\var\lib\pacman\local\libasprintf-0.22.5-1\mtree
+2026-11-14T22:35:23.9548190Z                                                                    
+2026-11-14T22:35:24.1595672Z  49% 14144 - msys64\usr\bin\curl.exe
+2026-11-14T22:35:24.1596197Z                                     
+2026-11-14T22:35:24.3656536Z  70% 14340 - msys64\usr\bin\msys-uuid-1.dll
+2026-11-14T22:35:24.3657142Z                                            
+2026-11-14T22:35:24.3658016Z Everything is Ok
+2026-11-14T22:35:24.3682352Z ##[endgroup]
+2026-11-14T22:35:24.3683229Z ##[group]Disable Key Refresh...
+2026-11-14T22:35:24.3703417Z ##[endgroup]
+2026-11-14T22:35:24.3718854Z ##[group]Restoring package cache...
+2026-11-14T22:35:24.5960314Z Cache hit for restore-key: msys2-pkgs-upd:true-conf:0d176907-files:af13f1eeb0bcf19c9bd649e2aa4f99a2d657663a66c4c56088b414832014741e
+2026-11-14T22:35:25.4251208Z Received 97141540 of 97141540 (100.0%), 125.2 MBs/sec
+2026-11-14T22:35:25.4255513Z Cache Size: ~93 MB (97141540 B)
+2026-11-14T22:35:25.4335243Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/ece39d83-1dce-4ed7-b926-86f7b3554106/cache.tzst -P -C D:/a/lean-net/lean-net --force-local --use-compress-program "zstd -d"
+2026-11-14T22:35:25.7395226Z Cache restored successfully
+2026-11-14T22:35:25.7457424Z Cache restore for msys2-pkgs-upd:true-conf:0d176907, got msys2-pkgs-upd:true-conf:0d176907-files:af13f1eeb0bcf19c9bd649e2aa4f99a2d657663a66c4c56088b414832014741e
+2026-11-14T22:35:25.7460489Z Cache restore for msys2-pkgs-upd:true-conf:0d176907, got msys2-pkgs-upd:true-conf:0d176907-files:af13f1eeb0bcf19c9bd649e2aa4f99a2d657663a66c4c56088b414832014741e
+2026-11-14T22:35:25.7461609Z ##[endgroup]
+2026-11-14T22:35:25.7461966Z ##[group]Starting MSYS2 for the first time...
+2026-11-14T22:35:25.8715159Z [command]C:\Windows\system32\cmd.exe /D /S /C D:\a\_temp\setup-msys2\msys2.cmd -c "'uname' '-a'"
+2026-11-14T22:35:25.9358276Z [1;32mMSYS2 is starting for the first time. Executing the initial setup.[1;0m
+2026-11-14T22:35:26.0433820Z Copying skeleton files.
+2026-11-14T22:35:26.0434510Z These files are for the users to personalise their msys2 experience.
+2026-11-14T22:35:26.0435018Z 
+2026-11-14T22:35:26.0435269Z They will never be overwritten nor automatically updated.
+2026-11-14T22:35:26.0435696Z 
+2026-11-14T22:35:26.1081355Z './.bashrc' -> '/home/runneradmin/.bashrc'
+2026-11-14T22:35:26.1264457Z './.bash_profile' -> '/home/runneradmin/.bash_profile'
+2026-11-14T22:35:26.1443257Z './.profile' -> '/home/runneradmin/.profile'
+2026-11-14T22:35:26.2162480Z 'C:\Windows\system32\drivers\etc\hosts' -> '/etc/hosts'
+2026-11-14T22:35:26.2704387Z 'C:\Windows\system32\drivers\etc\protocol' -> '/etc/protocols'
+2026-11-14T22:35:26.3245264Z 'C:\Windows\system32\drivers\etc\services' -> '/etc/services'
+2026-11-14T22:35:26.3782747Z 'C:\Windows\system32\drivers\etc\networks' -> '/etc/networks'
+2026-11-14T22:35:26.5754898Z gpg: /etc/pacman.d/gnupg/trustdb.gpg: trustdb created
+2026-11-14T22:35:26.5840190Z gpg: no ultimately trusted keys found
+2026-11-14T22:35:26.8925658Z gpg: starting migration from earlier GnuPG versions
+2026-11-14T22:35:26.9512554Z gpg: porting secret keys from '/etc/pacman.d/gnupg/secring.gpg' to gpg-agent
+2026-11-14T22:35:26.9516500Z gpg: migration succeeded
+2026-11-14T22:35:27.0025075Z ==> Generating pacman master key. This may take some time.
+2026-11-14T22:35:27.0222343Z gpg: Generating pacman keyring master key...
+2026-11-14T22:35:28.0360208Z gpg: directory '/etc/pacman.d/gnupg/openpgp-revocs.d' created
+2026-11-14T22:35:28.0613117Z gpg: revocation certificate stored as '/etc/pacman.d/gnupg/openpgp-revocs.d/1542310023B2CE70192A5DE48118F363DA71071B.rev'
+2026-11-14T22:35:28.0613809Z gpg: Done
+2026-11-14T22:35:28.0821485Z ==> Updating trust database...
+2026-11-14T22:35:28.1252992Z gpg: marginals needed: 3  completes needed: 1  trust model: pgp
+2026-11-14T22:35:28.1253671Z gpg: depth: 0  valid:   1  signed:   0  trust: 0-, 0q, 0n, 0m, 0f, 1u
+2026-11-14T22:35:28.2665436Z ==> Appending keys from msys2.gpg...
+2026-11-14T22:35:28.8848592Z ==> Locally signing trusted keys in keyring...
+2026-11-14T22:35:29.4559168Z   -> Locally signed 5 keys.
+2026-11-14T22:35:29.4715085Z ==> Importing owner trust values...
+2026-11-14T22:35:29.4915626Z gpg: setting ownertrust to 4
+2026-11-14T22:35:29.4916055Z gpg: setting ownertrust to 4
+2026-11-14T22:35:29.4917604Z gpg: setting ownertrust to 4
+2026-11-14T22:35:29.4917974Z gpg: setting ownertrust to 4
+2026-11-14T22:35:29.4918338Z gpg: setting ownertrust to 4
+2026-11-14T22:35:29.5216615Z ==> Disabling revoked keys in keyring...
+2026-11-14T22:35:29.8019148Z   -> Disabled 4 keys.
+2026-11-14T22:35:29.8183084Z ==> Updating trust database...
+2026-11-14T22:35:29.8662495Z gpg: marginals needed: 3  completes needed: 1  trust model: pgp
+2026-11-14T22:35:29.8693367Z gpg: depth: 0  valid:   1  signed:   5  trust: 0-, 0q, 0n, 0m, 0f, 1u
+2026-11-14T22:35:29.8736467Z gpg: depth: 1  valid:   5  signed:   7  trust: 0-, 0q, 0n, 5m, 0f, 0u
+2026-11-14T22:35:29.8751885Z gpg: depth: 2  valid:   4  signed:   2  trust: 4-, 0q, 0n, 0m, 0f, 0u
+2026-11-14T22:35:29.8755716Z gpg: next trustdb check due at 2027-02-10
+2026-11-14T22:35:29.9172000Z pacman-key (pacman) 6.1.0
+2026-11-14T22:35:29.9172797Z Copyright (c) 2010-2024 Pacman Development Team <pacman-dev@lists.archlinux.org>.
+2026-11-14T22:35:29.9173383Z 
+2026-11-14T22:35:29.9336116Z This is free software; see the source for copying conditions.
+2026-11-14T22:35:29.9337144Z There is NO WARRANTY, to the extent permitted by law.
+2026-11-14T22:35:30.1555619Z [1;32mInitial setup complete. MSYS2 is now ready to use.[1;0m
+2026-11-14T22:35:30.1746044Z MINGW64_NT-10.0-26100 runnervmm7ud1 3.6.10-c770e1b9.x86_64 2026-09-26 06:38 UTC x86_64 Msys
+2026-11-14T22:35:30.1795583Z ##[endgroup]
+2026-11-14T22:35:30.1796031Z ##[group]Disable CheckSpace...
+2026-11-14T22:35:30.2605945Z [command]C:\Windows\system32\cmd.exe /D /S /C D:\a\_temp\setup-msys2\msys2.cmd -c "'sed' '-i' 's/^CheckSpace/#CheckSpace/g' '/etc/pacman.conf'"
+2026-11-14T22:35:30.4832837Z ##[endgroup]
+2026-11-14T22:35:30.4833225Z ##[group]Updating packages...
+2026-11-14T22:35:30.5681731Z [command]C:\Windows\system32\cmd.exe /D /S /C D:\a\_temp\setup-msys2\msys2.cmd -c "'pacman' '--noconfirm' '-Syuu' '--overwrite' '*'"
+2026-11-14T22:35:31.3863466Z :: Synchronizing package databases...
+2026-11-14T22:35:33.2497949Z  clangarm64 downloading...
+2026-11-14T22:35:33.2498479Z  mingw32 downloading...
+2026-11-14T22:35:33.2498928Z  mingw64 downloading...
+2026-11-14T22:35:33.2499387Z  ucrt64 downloading...
+2026-11-14T22:35:33.2499761Z  clang64 downloading...
+2026-11-14T22:35:33.2500089Z  msys downloading...
+2026-11-14T22:35:33.7930563Z :: Starting core system upgrade...
+2026-11-14T22:35:33.9640409Z warning: terminate other MSYS2 programs before proceeding
+2026-11-14T22:35:33.9641050Z resolving dependencies...
+2026-11-14T22:35:33.9748774Z looking for conflicting packages...
+2026-11-14T22:35:33.9766871Z 
+2026-11-14T22:35:33.9767503Z Packages (4) bash-5.3.20-3  filesystem-2026.10.18-3  msys2-runtime-3.6.12-1  pacman-6.1.0-29
+2026-11-14T22:35:33.9768205Z 
+2026-11-14T22:35:33.9768321Z Total Installed Size:  54.05 MiB
+2026-11-14T22:35:33.9768649Z Net Upgrade Size:      -0.14 MiB
+2026-11-14T22:35:33.9768851Z 
+2026-11-14T22:35:33.9776571Z :: Proceed with installation? [Y/n] 
+2026-11-14T22:35:33.9777143Z checking keyring...
+2026-11-14T22:35:34.0300731Z checking package integrity...
+2026-11-14T22:35:34.7305459Z loading package files...
+2026-11-14T22:35:34.7394410Z checking for file conflicts...
+2026-11-14T22:35:34.7395591Z :: Processing package changes...
+2026-11-14T22:35:34.7417860Z upgrading bash...
+2026-11-14T22:35:34.9171690Z upgrading filesystem...
+2026-11-14T22:35:34.9703386Z upgrading msys2-runtime...
+2026-11-14T22:35:35.1412689Z upgrading pacman...
+2026-11-14T22:35:35.5261424Z :: To complete this update all MSYS2 processes including this terminal will be closed. Confirm to proceed [Y/n] 
+2026-11-14T22:35:35.7678441Z ##[endgroup]
+2026-11-14T22:35:35.7678986Z ##[group]Killing remaining tasks...
+2026-11-14T22:35:35.8501213Z [command]C:\Windows\system32\taskkill.exe /F /FI "MODULES eq msys-2.0.dll"
+2026-11-14T22:35:35.9715302Z 
+2026-11-14T22:35:35.9715821Z INFO: No tasks running with the specified criteria.
+2026-11-14T22:35:35.9753702Z ##[endgroup]
+2026-11-14T22:35:35.9754301Z ##[group]Final system upgrade...
+2026-11-14T22:35:36.0581668Z [command]C:\Windows\system32\cmd.exe /D /S /C D:\a\_temp\setup-msys2\msys2.cmd -c "'pacman' '--noconfirm' '-Syuu' '--overwrite' '*'"
+2026-11-14T22:35:36.7896427Z :: Synchronizing package databases...
+2026-11-14T22:35:37.5332651Z  clangarm64 downloading...
+2026-11-14T22:35:37.5333421Z  mingw32 downloading...
+2026-11-14T22:35:37.5334121Z  mingw64 downloading...
+2026-11-14T22:35:37.5334511Z  ucrt64 downloading...
+2026-11-14T22:35:37.5334885Z  clang64 downloading...
+2026-11-14T22:35:37.5335251Z  msys downloading...
+2026-11-14T22:35:38.0509501Z :: Starting core system upgrade...
+2026-11-14T22:35:38.2186270Z  there is nothing to do
+2026-11-14T22:35:38.2186720Z :: Starting full system upgrade...
+2026-11-14T22:35:38.2455921Z resolving dependencies...
+2026-11-14T22:35:38.2538040Z looking for conflicting packages...
+2026-11-14T22:35:38.2624917Z 
+2026-11-14T22:35:38.2627320Z Packages (25) brotli-1.2.1-1  bsdtar-3.8.11-2  ca-certificates-20260816-4  coreutils-9.0-1  curl-8.23.0-2  dash-0.5.13.5-1  file-5.48-2  gcc-libs-16.2.0-1  libcurl-8.23.0-2  libexpat-2.10.0-1  liblz4-1.11.1-1  libnghttp2-1.71.0-2  libnghttp3-1.19.0-1  libngtcp2-1.26.0-2  libopenssl-4.1.0-1  libpcre2_8-10.49-1  libpsl-0.23.2-2  libreadline-8.3.006-2  libsqlite-3.54.1-1  libssh2-1.11.1-2  nano-9.3-1  openssl-4.1.0-1  tzcode-2026f-1  wget-1.25.0-5  zlib-1.4-1
+2026-11-14T22:35:38.2629209Z 
+2026-11-14T22:35:38.2629314Z Total Installed Size:  65.97 MiB
+2026-11-14T22:35:38.2629603Z Net Upgrade Size:       1.07 MiB
+2026-11-14T22:35:38.2629781Z 
+2026-11-14T22:35:38.2669042Z :: Proceed with installation? [Y/n] 
+2026-11-14T22:35:38.2669913Z checking keyring...
+2026-11-14T22:35:38.3178562Z checking package integrity...
+2026-11-14T22:35:41.3154737Z loading package files...
+2026-11-14T22:35:41.3801794Z checking for file conflicts...
+2026-11-14T22:35:41.3862368Z :: Running pre-transaction hooks...
+2026-11-14T22:35:41.3863295Z (1/1) Removing old entries from the info directory file...
+2026-11-14T22:35:41.5508510Z :: Processing package changes...
+2026-11-14T22:35:41.5509238Z upgrading gcc-libs...
+2026-11-14T22:35:41.5711314Z upgrading brotli...
+2026-11-14T22:35:41.5847289Z upgrading libexpat...
+2026-11-14T22:35:41.5899764Z upgrading liblz4...
+2026-11-14T22:35:41.5951787Z upgrading libopenssl...
+2026-11-14T22:35:41.6303185Z upgrading zlib...
+2026-11-14T22:35:41.6390344Z upgrading bsdtar...
+2026-11-14T22:35:41.6482571Z upgrading openssl...
+2026-11-14T22:35:41.7755942Z upgrading coreutils...
+2026-11-14T22:35:42.1446008Z upgrading libpcre2_8...
+2026-11-14T22:35:42.1505577Z upgrading ca-certificates...
+2026-11-14T22:35:42.7415959Z upgrading libnghttp3...
+2026-11-14T22:35:42.7493592Z upgrading libngtcp2...
+2026-11-14T22:35:42.7587726Z upgrading libnghttp2...
+2026-11-14T22:35:42.7659884Z upgrading libpsl...
+2026-11-14T22:35:42.7773647Z upgrading libssh2...
+2026-11-14T22:35:42.9671784Z upgrading libcurl...
+2026-11-14T22:35:42.9745585Z upgrading curl...
+2026-11-14T22:35:43.5322475Z upgrading dash...
+2026-11-14T22:35:43.6498323Z upgrading file...
+2026-11-14T22:35:43.6842161Z upgrading libreadline...
+2026-11-14T22:35:43.7227923Z upgrading libsqlite...
+2026-11-14T22:35:43.7337925Z upgrading nano...
+2026-11-14T22:35:43.8639994Z upgrading tzcode...
+2026-11-14T22:35:46.1656294Z upgrading wget...
+2026-11-14T22:35:46.3007868Z :: Running post-transaction hooks...
+2026-11-14T22:35:46.3008417Z (1/1) Updating the info directory file...
+2026-11-14T22:35:46.6823315Z ##[endgroup]
+2026-11-14T22:35:46.6823900Z ##[group]Installing additional packages through pacman...
+2026-11-14T22:35:46.7619968Z [command]C:\Windows\system32\cmd.exe /D /S /C D:\a\_temp\setup-msys2\msys2.cmd -c "'pacman' '--noconfirm' '-S' '--needed' '--overwrite' '*' 'mingw-w64-x86_64-gcc' 'mingw-w64-x86_64-zlib' 'mingw-w64-x86_64-brotli' 'mingw-w64-x86_64-pkgconf'"
+2026-11-14T22:35:47.5142024Z resolving dependencies...
+2026-11-14T22:35:47.5257197Z looking for conflicting packages...
+2026-11-14T22:35:47.5286697Z 
+2026-11-14T22:35:47.5291077Z Packages (21) mingw-w64-x86_64-binutils-2.47-4  mingw-w64-x86_64-cc-libs-16.2.0-7  mingw-w64-x86_64-crt-14.0.0.r598.ge3d18511f-1  mingw-w64-x86_64-gettext-runtime-1.0-1  mingw-w64-x86_64-gmp-6.3.0-2  mingw-w64-x86_64-headers-14.0.0.r598.ge3d18511f-1  mingw-w64-x86_64-isl-0.28-1  mingw-w64-x86_64-libgcc-16.2.0-7  mingw-w64-x86_64-libiconv-1.19.1-1  mingw-w64-x86_64-libstdc++-16.2.0-7  mingw-w64-x86_64-libwinpthread-14.0.0.r598.ge3d18511f-1  mingw-w64-x86_64-mpc-1.4.1-1  mingw-w64-x86_64-mpfr-4.2.2-3  mingw-w64-x86_64-tzdata-2026f-1  mingw-w64-x86_64-windows-default-manifest-20260815-1  mingw-w64-x86_64-winpthreads-14.0.0.r598.ge3d18511f-1  mingw-w64-x86_64-zstd-1.5.7-2  mingw-w64-x86_64-brotli-1.2.1-1  mingw-w64-x86_64-gcc-16.2.0-7  mingw-w64-x86_64-pkgconf-1~3.0.10-1  mingw-w64-x86_64-zlib-1.4-2
+2026-11-14T22:35:47.5294782Z 
+2026-11-14T22:35:47.5294903Z Total Installed Size:  474.42 MiB
+2026-11-14T22:35:47.5295115Z 
+2026-11-14T22:35:47.5329276Z :: Proceed with installation? [Y/n] 
+2026-11-14T22:35:47.5330206Z checking keyring...
+2026-11-14T22:35:47.5728763Z checking package integrity...
+2026-11-14T22:35:51.1269969Z loading package files...
+2026-11-14T22:35:51.1904530Z checking for file conflicts...
+2026-11-14T22:35:51.4949022Z :: Processing package changes...
+2026-11-14T22:35:51.4949633Z installing mingw-w64-x86_64-libwinpthread...
+2026-11-14T22:35:51.5007544Z installing mingw-w64-x86_64-libgcc...
+2026-11-14T22:35:51.5067866Z installing mingw-w64-x86_64-tzdata...
+2026-11-14T22:35:53.4612023Z installing mingw-w64-x86_64-libstdc++...
+2026-11-14T22:35:53.4729939Z installing mingw-w64-x86_64-cc-libs...
+2026-11-14T22:35:53.4756166Z installing mingw-w64-x86_64-libiconv...
+2026-11-14T22:35:53.5046245Z installing mingw-w64-x86_64-gettext-runtime...
+2026-11-14T22:35:53.6601926Z installing mingw-w64-x86_64-zlib...
+2026-11-14T22:35:53.6927613Z installing mingw-w64-x86_64-zstd...
+2026-11-14T22:35:53.7141559Z installing mingw-w64-x86_64-binutils...
+2026-11-14T22:35:53.9649698Z installing mingw-w64-x86_64-headers...
+2026-11-14T22:35:55.4321542Z installing mingw-w64-x86_64-crt...
+2026-11-14T22:35:56.2783412Z installing mingw-w64-x86_64-gmp...
+2026-11-14T22:35:56.2947068Z installing mingw-w64-x86_64-isl...
+2026-11-14T22:35:56.3691839Z installing mingw-w64-x86_64-mpfr...
+2026-11-14T22:35:56.3945409Z installing mingw-w64-x86_64-mpc...
+2026-11-14T22:35:56.4022934Z installing mingw-w64-x86_64-windows-default-manifest...
+2026-11-14T22:35:56.4055932Z installing mingw-w64-x86_64-winpthreads...
+2026-11-14T22:35:56.4174464Z installing mingw-w64-x86_64-gcc...
+2026-11-14T22:35:57.9498112Z Optional dependencies for mingw-w64-x86_64-gcc
+2026-11-14T22:35:57.9498719Z     mingw-w64-x86_64-libatomic
+2026-11-14T22:35:57.9499143Z     mingw-w64-x86_64-libgomp: OpenMP
+2026-11-14T22:35:57.9499644Z     mingw-w64-x86_64-libquadmath: Quad Math
+2026-11-14T22:35:57.9500160Z installing mingw-w64-x86_64-brotli...
+2026-11-14T22:35:57.9745940Z installing mingw-w64-x86_64-pkgconf...
+2026-11-14T22:35:58.0240356Z ##[endgroup]
+2026-11-14T22:35:58.0240755Z ##[group]Saving package cache...
+2026-11-14T22:35:58.1071133Z [command]C:\Windows\system32\cmd.exe /D /S /C D:\a\_temp\setup-msys2\msys2.cmd -c "'paccache' '-r' '-f' '-u' '-k0'"
+2026-11-14T22:35:58.9115433Z ==> no candidate packages found for pruning
+2026-11-14T22:35:59.0077240Z [command]C:\Windows\system32\cmd.exe /D /S /C D:\a\_temp\setup-msys2\msys2.cmd -c "'paccache' '-r' '-f' '-k1'"
+2026-11-14T22:35:59.2301987Z ==> no candidate packages found for pruning
+2026-11-14T22:35:59.5294030Z Cache unchanged, skipping save for msys2-pkgs-upd:true-conf:0d176907-files:af13f1eeb0bcf19c9bd649e2aa4f99a2d657663a66c4c56088b414832014741e
+2026-11-14T22:35:59.6095993Z [command]C:\Windows\system32\cmd.exe /D /S /C D:\a\_temp\setup-msys2\msys2.cmd -c "'pacman' '--noconfirm' '-Scc'"
+2026-11-14T22:36:00.2947826Z 
+2026-11-14T22:36:00.2948299Z Cache directory: /var/cache/pacman/pkg/
+2026-11-14T22:36:00.3114650Z :: Do you want to remove ALL files from cache? [Y/n] 
+2026-11-14T22:36:00.3115611Z removing all files from cache...
+2026-11-14T22:36:00.3115907Z 
+2026-11-14T22:36:00.3116084Z Database directory: /var/lib/pacman/
+2026-11-14T22:36:00.3135779Z :: Do you want to remove unused repositories? [Y/n] 
+2026-11-14T22:36:00.3137263Z removing unused sync repositories...
+2026-11-14T22:36:00.3191319Z ##[endgroup]
+2026-11-14T22:36:00.3510792Z ##[group]Run $mingw = (Join-Path $env:MSYS2_LOCATION 'mingw64').Replace('\', '/')
+2026-11-14T22:36:00.3511429Z [36;1m$mingw = (Join-Path $env:MSYS2_LOCATION 'mingw64').Replace('\', '/')[0m
+2026-11-14T22:36:00.3511951Z [36;1m"$mingw/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append[0m
+2026-11-14T22:36:00.3512560Z [36;1m"PKG_CONFIG_PATH=$mingw/lib/pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append[0m
+2026-11-14T22:36:00.3834739Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-11-14T22:36:00.3835199Z env:
+2026-11-14T22:36:00.3835432Z   MSYSTEM: MINGW64
+2026-11-14T22:36:00.3835731Z   MSYS2_LOCATION: D:\a\_temp\msys64
+2026-11-14T22:36:00.3836063Z ##[endgroup]
+2026-11-14T22:36:00.9367697Z ##[group]Run leanprover/lean-action@v1
+2026-11-14T22:36:00.9368026Z with:
+2026-11-14T22:36:00.9368257Z   auto-config: false
+2026-11-14T22:36:00.9368904Z   build: false
+2026-11-14T22:36:00.9369096Z   test: false
+2026-11-14T22:36:00.9369258Z   lint: false
+2026-11-14T22:36:00.9369422Z   mk_all-check: false
+2026-11-14T22:36:00.9369624Z   use-mathlib-cache: auto
+2026-11-14T22:36:00.9369862Z   check-reservoir-eligibility: false
+2026-11-14T22:36:00.9370113Z   leanchecker: false
+2026-11-14T22:36:00.9370307Z   lean4checker: false
+2026-11-14T22:36:00.9370489Z   nanoda: false
+2026-11-14T22:36:00.9370676Z   nanoda-allow-sorry: true
+2026-11-14T22:36:00.9370883Z   axiom-audit: false
+2026-11-14T22:36:00.9371142Z   axiom-audit-allow: propext,Classical.choice,Quot.sound
+2026-11-14T22:36:00.9371466Z   use-github-cache: true
+2026-11-14T22:36:00.9371688Z   lake-package-directory: .
+2026-11-14T22:36:00.9371948Z   reinstall-transient-toolchain: false
+2026-11-14T22:36:00.9372228Z env:
+2026-11-14T22:36:00.9372389Z   MSYSTEM: MINGW64
+2026-11-14T22:36:00.9372629Z   PKG_CONFIG_PATH: D:/a/_temp/msys64/mingw64/lib/pkgconfig
+2026-11-14T22:36:00.9372916Z ##[endgroup]
+2026-11-14T22:36:00.9437181Z ##[start-action display=install elan;id=__leanprover_lean-action.__run]
+2026-11-14T22:36:00.9581151Z ##[group]Run : Install Elan
+2026-11-14T22:36:00.9581404Z [36;1m: Install Elan[0m
+2026-11-14T22:36:00.9581658Z [36;1m${GITHUB_ACTION_PATH}/scripts/install_elan.sh[0m
+2026-11-14T22:36:00.9597701Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:36:00.9598079Z env:
+2026-11-14T22:36:00.9598244Z   MSYSTEM: MINGW64
+2026-11-14T22:36:00.9598490Z   PKG_CONFIG_PATH: D:/a/_temp/msys64/mingw64/lib/pkgconfig
+2026-11-14T22:36:00.9598794Z ##[endgroup]
+2026-11-14T22:36:01.2099116Z ##[group]Elan Installation Output
+2026-11-14T22:36:01.5782939Z info: downloading installer
+2026-11-14T22:36:01.9435557Z Archive:  elan-init.zip
+2026-11-14T22:36:01.9934447Z   inflating: elan-init.exe           
+2026-11-14T22:36:02.7830519Z info: downloading https://releases.lean-lang.org/lean4/v4.35.0/lean-4.35.0-windows.tar.zst
+2026-11-14T22:36:11.5065658Z info: installing C:\Users\runneradmin\.elan\toolchains\leanprover--lean4---v4.35.0
+2026-11-14T22:36:59.4223758Z Lean (version 4.35.0, x86_64-w64-windows-gnu, commit eb6cafb7290e8bd5f2937522d8d804f58f02bafc, Release)
+2026-11-14T22:36:59.5379341Z Lake version 5.0.0-src+eb6cafb (Lean version 4.35.0)
+2026-11-14T22:36:59.5490267Z ##[endgroup]
+2026-11-14T22:36:59.5490498Z 
+2026-11-14T22:36:59.5564615Z ##[end-action id=__leanprover_lean-action.__run;outcome=success;conclusion=success;duration_ms=58612]
+2026-11-14T22:36:59.5567815Z ##[start-action display=Run actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25;id=__leanprover_lean-action.cache-restore]
+2026-11-14T22:36:59.9708229Z ##[group]Run actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+2026-11-14T22:36:59.9709626Z with:
+2026-11-14T22:36:59.9709811Z   path: ./.lake
+2026-11-14T22:36:59.9710690Z   key: lake-Windows-X64-b8f62651dca7e5644e597b79e3b8688baff05ac5809ca0bc437ed856acbb5802-ff5e483db4943fe96e281e60e690d16ffcbadb652c871f1ccbc77322db31200d-995751118bbe93f8a9c8946360b5842847985fe4
+2026-11-14T22:36:59.9712145Z   restore-keys: lake-Windows-X64-b8f62651dca7e5644e597b79e3b8688baff05ac5809ca0bc437ed856acbb5802-ff5e483db4943fe96e281e60e690d16ffcbadb652c871f1ccbc77322db31200d
+2026-11-14T22:36:59.9712921Z   enableCrossOsArchive: false
+2026-11-14T22:36:59.9713154Z   fail-on-cache-miss: false
+2026-11-14T22:36:59.9713364Z   lookup-only: false
+2026-11-14T22:36:59.9713544Z env:
+2026-11-14T22:36:59.9713715Z   MSYSTEM: MINGW64
+2026-11-14T22:36:59.9713963Z   PKG_CONFIG_PATH: D:/a/_temp/msys64/mingw64/lib/pkgconfig
+2026-11-14T22:36:59.9714255Z ##[endgroup]
+2026-11-14T22:37:00.3399769Z Cache not found for input keys: lake-Windows-X64-b8f62651dca7e5644e597b79e3b8688baff05ac5809ca0bc437ed856acbb5802-ff5e483db4943fe96e281e60e690d16ffcbadb652c871f1ccbc77322db31200d-995751118bbe93f8a9c8946360b5842847985fe4, lake-Windows-X64-b8f62651dca7e5644e597b79e3b8688baff05ac5809ca0bc437ed856acbb5802-ff5e483db4943fe96e281e60e690d16ffcbadb652c871f1ccbc77322db31200d
+2026-11-14T22:37:00.3496808Z ##[end-action id=__leanprover_lean-action.cache-restore;outcome=success;conclusion=success;duration_ms=792]
+2026-11-14T22:37:00.3500342Z ##[start-action display=configure `lean-action`;id=__leanprover_lean-action.config]
+2026-11-14T22:37:00.3648802Z ##[group]Run : Configure Lean Action
+2026-11-14T22:37:00.3649126Z [36;1m: Configure Lean Action[0m
+2026-11-14T22:37:00.3649405Z [36;1m${GITHUB_ACTION_PATH}/scripts/config.sh[0m
+2026-11-14T22:37:00.3666977Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:37:00.3667358Z env:
+2026-11-14T22:37:00.3667518Z   MSYSTEM: MINGW64
+2026-11-14T22:37:00.3667772Z   PKG_CONFIG_PATH: D:/a/_temp/msys64/mingw64/lib/pkgconfig
+2026-11-14T22:37:00.3668093Z   AUTO_CONFIG: false
+2026-11-14T22:37:00.3668292Z   BUILD: false
+2026-11-14T22:37:00.3668460Z   TEST: false
+2026-11-14T22:37:00.3668621Z   LINT: false
+2026-11-14T22:37:00.3668788Z ##[endgroup]
+2026-11-14T22:37:00.4477383Z ##[group]Configure lean-action
+2026-11-14T22:37:00.5239926Z ##[end-action id=__leanprover_lean-action.config;outcome=success;conclusion=success;duration_ms=173]
+2026-11-14T22:37:00.5243966Z ##[start-action display=reinstall transient toolchain;id=__leanprover_lean-action.__run_2]
+2026-11-14T22:37:00.5251218Z ##[end-action id=__leanprover_lean-action.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:37:00.5255062Z ##[start-action display=ensure all files are imported;id=__leanprover_lean-action.mk_all]
+2026-11-14T22:37:00.5259060Z ##[end-action id=__leanprover_lean-action.mk_all;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:37:00.5260836Z ##[start-action display=detect mathlib;id=__leanprover_lean-action.detect-mathlib]
+2026-11-14T22:37:00.5404439Z ##[group]Run : Detect Mathlib
+2026-11-14T22:37:00.5404726Z [36;1m: Detect Mathlib[0m
+2026-11-14T22:37:00.5405001Z [36;1m${GITHUB_ACTION_PATH}/scripts/detect_mathlib.sh[0m
+2026-11-14T22:37:00.5422161Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:37:00.5422552Z env:
+2026-11-14T22:37:00.5422731Z   MSYSTEM: MINGW64
+2026-11-14T22:37:00.5422996Z   PKG_CONFIG_PATH: D:/a/_temp/msys64/mingw64/lib/pkgconfig
+2026-11-14T22:37:00.5423306Z ##[endgroup]
+2026-11-14T22:37:00.6445025Z ##[group]Detect Mathlib Output
+2026-11-14T22:37:00.6445826Z Trying to detect if project is downstream of Mathlib.
+2026-11-14T22:37:00.7079197Z Project is not downstream of Mathlib. Skipping Mathlib cache.
+2026-11-14T22:37:00.7080488Z ##[endgroup]
+2026-11-14T22:37:00.7080676Z 
+2026-11-14T22:37:00.7135964Z ##[end-action id=__leanprover_lean-action.detect-mathlib;outcome=success;conclusion=success;duration_ms=187]
+2026-11-14T22:37:00.7138268Z ##[start-action display=get mathlib cache;id=__leanprover_lean-action.__run_3]
+2026-11-14T22:37:00.7150573Z ##[end-action id=__leanprover_lean-action.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:37:00.7161003Z ##[start-action display=build isavita/lean-net;id=__leanprover_lean-action.build]
+2026-11-14T22:37:00.7165025Z ##[end-action id=__leanprover_lean-action.build;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:37:00.7167759Z ##[start-action display=test isavita/lean-net;id=__leanprover_lean-action.test]
+2026-11-14T22:37:00.7171958Z ##[end-action id=__leanprover_lean-action.test;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:37:00.7174521Z ##[start-action display=lint isavita/lean-net;id=__leanprover_lean-action.lint]
+2026-11-14T22:37:00.7178194Z ##[end-action id=__leanprover_lean-action.lint;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:37:00.7180159Z ##[start-action display=Run actions/cache/save@caa296126883cff596d87d8935842f9db880ef25;id=__leanprover_lean-action.__actions_cache]
+2026-11-14T22:37:00.9386231Z ##[group]Run actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+2026-11-14T22:37:00.9386630Z with:
+2026-11-14T22:37:00.9386806Z   path: ./.lake
+2026-11-14T22:37:00.9387679Z   key: lake-Windows-X64-b8f62651dca7e5644e597b79e3b8688baff05ac5809ca0bc437ed856acbb5802-ff5e483db4943fe96e281e60e690d16ffcbadb652c871f1ccbc77322db31200d-995751118bbe93f8a9c8946360b5842847985fe4
+2026-11-14T22:37:00.9388617Z   enableCrossOsArchive: false
+2026-11-14T22:37:00.9388834Z env:
+2026-11-14T22:37:00.9388993Z   MSYSTEM: MINGW64
+2026-11-14T22:37:00.9389300Z   PKG_CONFIG_PATH: D:/a/_temp/msys64/mingw64/lib/pkgconfig
+2026-11-14T22:37:00.9389593Z ##[endgroup]
+2026-11-14T22:37:01.2097408Z [warning]Path Validation Error: Path(s) specified in the action for caching do(es) not exist, hence no cache is being saved.
+2026-11-14T22:37:01.2209207Z ##[end-action id=__leanprover_lean-action.__actions_cache;outcome=success;conclusion=success;duration_ms=502]
+2026-11-14T22:37:01.2273211Z ##[start-action display=check reservoir eligibility;id=__leanprover_lean-action.__run_4]
+2026-11-14T22:37:01.2278381Z ##[end-action id=__leanprover_lean-action.__run_4;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:37:01.2281267Z ##[start-action display=check environment with leanchecker;id=__leanprover_lean-action.__run_5]
+2026-11-14T22:37:01.2285407Z ##[end-action id=__leanprover_lean-action.__run_5;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:37:01.2287438Z ##[start-action display=check environment with nanoda;id=__leanprover_lean-action.nanoda]
+2026-11-14T22:37:01.2291308Z ##[end-action id=__leanprover_lean-action.nanoda;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:37:01.2293529Z ##[start-action display=audit axioms with axiom-audit;id=__leanprover_lean-action.axiom-audit]
+2026-11-14T22:37:01.2296536Z ##[end-action id=__leanprover_lean-action.axiom-audit;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:37:01.6307782Z ##[group]Run lake build lean-net-echo lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture
+2026-11-14T22:37:01.6308998Z [36;1mlake build lean-net-echo lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture[0m
+2026-11-14T22:37:01.6325938Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:37:01.6326327Z env:
+2026-11-14T22:37:01.6326498Z   MSYSTEM: MINGW64
+2026-11-14T22:37:01.6326755Z   PKG_CONFIG_PATH: D:/a/_temp/msys64/mingw64/lib/pkgconfig
+2026-11-14T22:37:01.6327057Z ##[endgroup]
+2026-11-14T22:37:06.8367941Z ✔ [1/16] Built LeanNet.Bytes (1.2s)
+2026-11-14T22:37:06.8374794Z ✔ [2/16] Built LeanNet.FFI.Raw (1.2s)
+2026-11-14T22:37:06.8376947Z ✔ [3/16] Built LeanNet.Socket.State (1.3s)
+2026-11-14T22:37:06.8383718Z ✔ [4/16] Built LeanNet.FFI.Reactor (1.3s)
+2026-11-14T22:37:08.0387756Z ✔ [5/18] Built LeanNet.FFI.Errno (1.2s)
+2026-11-14T22:37:08.1582039Z ✔ [6/21] Built LeanNet.FileRegion (1.3s)
+2026-11-14T22:37:08.1583940Z ✔ [7/21] Built LeanNet.FFI.Static (1.2s)
+2026-11-14T22:37:08.1585121Z ✔ [8/21] Built LeanNet.HTTP1.Request (1.3s)
+2026-11-14T22:37:09.4888062Z ✔ [9/22] Built LeanNet.HTTP1.Date (1.4s)
+2026-11-14T22:37:09.8226242Z ✔ [10/23] Built LeanNet.HTTP1.Protocol (1.7s)
+2026-11-14T22:37:09.9345641Z ✔ [11/24] Built LeanNet.FileSource (1.8s)
+2026-11-14T22:37:10.3776379Z ✔ [12/24] Built LeanNet.Socket.Handle (2.2s)
+2026-11-14T22:37:11.2566055Z ✔ [13/26] Built LeanNet.HTTP1.Response (1.7s)
+2026-11-14T22:37:11.7310001Z ✔ [14/26] Built LeanNet.TCP.Connection (1.4s)
+2026-11-14T22:37:12.3821437Z ✔ [15/26] Built LeanNet.Reactor.Basic (2.5s)
+2026-11-14T22:37:12.9576331Z ✔ [16/26] Built LeanNet.TCP.Listener (1.7s)
+2026-11-14T22:37:13.9464048Z ✔ [17/26] Built LeanNet.HTTP1.Parser (4.0s)
+2026-11-14T22:37:14.1628428Z ✔ [18/26] Built LeanNet.HTTP1.Config (1.8s)
+2026-11-14T22:37:14.3766441Z ✔ [19/26] Built LeanNet.HTTP1.Encoding (2.6s)
+2026-11-14T22:37:14.4819670Z ✔ [20/28] Built LeanNet.HTTP2.Push (1.6s)
+2026-11-14T22:37:15.3359475Z ✔ [21/29] Built LeanNet.Echo.ReactorServer (1.5s)
+2026-11-14T22:37:15.5611293Z ✔ [22/30] Built LeanNet.HTTP1.Router (1.3s)
+2026-11-14T22:37:16.3442431Z ✔ [23/33] Built LeanNet.HTTP1.Machine (1.0s)
+2026-11-14T22:37:16.7921240Z ✔ [24/36] Built LeanNet.Echo.Server (1.5s)
+2026-11-14T22:37:16.7976372Z ✔ [25/36] Built LeanNet.HTTP2.Frame (2.3s)
+2026-11-14T22:37:17.8709806Z ✔ [26/36] Built LeanNet.HTTP1.Handlers (1.6s)
+2026-11-14T22:37:18.9955913Z ✔ [27/38] Built LeanNet.HTTP2.HPACK (3.5s)
+2026-11-14T22:37:18.9976075Z ✔ [28/38] Built LeanNet.HTTP2.Priority (2.2s)
+2026-11-14T22:37:19.3488702Z ✔ [29/39] Built LeanNet.HTTP2.Stream (2.5s)
+2026-11-14T22:37:20.0316462Z ✔ [30/94] Built LeanNet.HTTP.WorkerPool (2.1s)
+2026-11-14T22:37:20.4911401Z ✔ [31/94] Built LeanNet.HTTP.Transport (1.5s)
+2026-11-14T22:37:20.7100030Z ✔ [32/94] Built LeanNet.HTTP2.Preface (1.4s)
+2026-11-14T22:37:20.8238759Z ✔ [33/94] Built LeanNet.Bytes:c.o (310ms)
+2026-11-14T22:37:21.0701811Z ✔ [34/94] Built LeanNet.FFI.Raw:c.o (261ms)
+2026-11-14T22:37:21.1731966Z ✔ [35/94] Built LeanNet.FFI.Errno:c.o (419ms)
+2026-11-14T22:37:21.2860403Z ✔ [36/94] Built LeanNet.HTTP2.Request (2.2s)
+2026-11-14T22:37:21.2881545Z ✔ [37/94] Built LeanNet.Socket.State:c.o (310ms)
+2026-11-14T22:37:21.4006655Z ✔ [38/94] Built LeanNet.TCP.Listener:c.o (138ms)
+2026-11-14T22:37:21.5156957Z ✔ [39/94] Built LeanNet.TCP.Connection:c.o (158ms)
+2026-11-14T22:37:21.8306735Z ✔ [40/94] Built LeanNet.FFI.Reactor:c.o (419ms)
+2026-11-14T22:37:21.8428345Z ✔ [41/94] Built LeanNet.FileRegion:c.o (356ms)
+2026-11-14T22:37:21.9395011Z ✔ [42/94] Built LeanNet.HTTP.Static.Date (1.0s)
+2026-11-14T22:37:22.0593261Z ✔ [43/94] Built LeanNet.FFI.Static:c.o (212ms)
+2026-11-14T22:37:22.7073740Z ✔ [44/94] Built LeanNet.Echo.ReactorServer:c.o (711ms)
+2026-11-14T22:37:22.8026626Z ✔ [45/94] Built LeanNet.FileSource:c.o (1.0s)
+2026-11-14T22:37:22.9101223Z ✔ [46/94] Built LeanNet.Echo.Server:c.o (150ms)
+2026-11-14T22:37:23.0243432Z ✔ [47/94] Built LeanNet.HTTP1.Request:c.o (232ms)
+2026-11-14T22:37:23.2499484Z ✔ [48/94] Built LeanNet.Socket.Handle:c.o (2.0s)
+2026-11-14T22:37:23.4780457Z ✔ [49/94] Built LeanNet.HTTP1.Protocol:c.o (617ms)
+2026-11-14T22:37:23.4799884Z ✔ [50/94] Built LeanNet.HTTP1.Date:c.o (225ms)
+2026-11-14T22:37:23.9364265Z ✔ [51/94] Built LeanNet.HTTP1.Response:c.o (489ms)
+2026-11-14T22:37:24.1446486Z ✔ [52/94] Built LeanNet.HTTP1.Config:c.o (229ms)
+2026-11-14T22:37:24.3824480Z ✔ [53/94] Built LeanNet.Reactor.Basic:c.o (2.4s)
+2026-11-14T22:37:24.4823581Z ✔ [54/94] Built LeanNet.HTTP1.Router:c.o (334ms)
+2026-11-14T22:37:24.5858634Z ✔ [55/94] Built LeanNet.HTTP2.Push:c.o (137ms)
+2026-11-14T22:37:24.8131448Z ✔ [56/94] Built LeanNet.HTTP1.Handlers:c.o (212ms)
+2026-11-14T22:37:24.9163074Z ✔ [57/94] Built LeanNet.HTTP1.Encoding:c.o (1.4s)
+2026-11-14T22:37:25.7869300Z ✔ [58/94] Built LeanNet.HTTP1.Machine:c.o (1.4s)
+2026-11-14T22:37:26.2322451Z ✔ [59/94] Built LeanNet.HTTP2.Frame:c.o (1.3s)
+2026-11-14T22:37:26.2522757Z ✔ [60/94] Built LeanNet.HTTP2.Stream:c.o (1.3s)
+2026-11-14T22:37:27.0619600Z ✔ [61/97] Built LeanNet.HTTP1.Parser:c.o (3.0s)
+2026-11-14T22:37:27.3931546Z ✔ [62/97] Built LeanNet.HTTP2.Priority:c.o (1.2s)
+2026-11-14T22:37:27.3962455Z ✔ [63/97] Built LeanNet.HTTP.WorkerPool:c.o (1.2s)
+2026-11-14T22:37:27.4208219Z ✔ [64/97] Built LeanNet.HTTP.Transport:c.o (337ms)
+2026-11-14T22:37:28.5263994Z ✔ [65/97] Built LeanNet.HTTP2.HPACK:c.o (2.8s)
+2026-11-14T22:37:28.7500295Z ✔ [66/100] Built LeanNet.HTTP2.Request:c.o (1.4s)
+2026-11-14T22:37:28.7501059Z ✔ [67/100] Built LeanNet.HTTP2.Preface:c.o (1.4s)
+2026-11-14T22:37:28.9707080Z ✔ [68/103] Built LeanNet.HTTP.Static.Path (1.5s)
+2026-11-14T22:37:29.6325711Z ✔ [69/103] Built LeanNet.HTTP.Static.Date:c.o (1.1s)
+2026-11-14T22:37:30.6075817Z ✔ [71/106] Built LeanNet.HTTP.Static.Path:c.o (919ms)
+2026-11-14T22:37:30.9538145Z ✔ [72/106] Built test.ReactorNativeTest (2.2s)
+2026-11-14T22:37:33.7343279Z ✔ [73/106] Built LeanNet.HTTP.Static.Selection (3.2s)
+2026-11-14T22:37:33.7403641Z ✔ [74/106] Built test.ReactorNativeTest:c.o (2.8s)
+2026-11-14T22:37:34.1849218Z ✔ [75/106] Built LeanNet.HTTP2.Connection (5.4s)
+2026-11-14T22:37:35.2197235Z ✔ [76/106] Built «lean-net»/socket_shim.static (6.3s)
+2026-11-14T22:37:35.7094007Z ✔ [78/106] Built LeanNet.HTTP.Static.Selection:c.o (1.0s)
+2026-11-14T22:37:36.4771519Z ✔ [79/106] Built «lean-net-reactor-native-test»:exe (733ms)
+2026-11-14T22:37:36.5785484Z ✔ [80/106] Built LeanNet.HTTP.Static.Catalog (2.9s)
+2026-11-14T22:37:37.1368769Z ✔ [81/106] Built LeanNet.HTTP2.Machine (1.9s)
+2026-11-14T22:37:38.0034482Z ✔ [82/106] Built LeanNet.HTTP2.Machine:c.o (875ms)
+2026-11-14T22:37:38.7286369Z ✔ [83/106] Built LeanNet.HTTP.Static.Catalog:c.o (2.1s)
+2026-11-14T22:37:40.6900393Z ✔ [84/106] Built LeanNet.HTTP.ReactorServer (3.5s)
+2026-11-14T22:37:42.4716294Z ✔ [85/106] Built LeanNet.HTTP.Static (1.8s)
+2026-11-14T22:37:42.4798693Z ✔ [86/106] Built test.HTTP2ReactorFixture (1.8s)
+2026-11-14T22:37:42.7009764Z ✔ [87/106] Built LeanNet.HTTP.Static:c.o (183ms)
+2026-11-14T22:37:43.6785745Z ✔ [88/106] Built LeanNet.HTTP2.Connection:c.o (9.6s)
+2026-11-14T22:37:44.3601594Z ✔ [89/106] Built test.HTTP1ReactorFixture (1.9s)
+2026-11-14T22:37:44.4638627Z ✔ [90/106] Built test.HTTP2ReactorFixture:c.o (715ms)
+2026-11-14T22:37:45.3379829Z ✔ [91/106] Built test.HTTP1ReactorFixture:c.o (893ms)
+2026-11-14T22:37:45.6528858Z ✔ [92/106] Built LeanNet.HTTP1.Server (3.0s)
+2026-11-14T22:37:46.0816472Z ✔ [93/106] Built test.StaticReactorFixture (1.7s)
+2026-11-14T22:37:46.2917699Z ✔ [94/106] Built test.StaticReactorFixture:c.o (232ms)
+2026-11-14T22:37:47.1469532Z ✔ [95/106] Built LeanNet.HTTP2.Server (1.4s)
+2026-11-14T22:37:48.2820346Z ✔ [96/106] Built LeanNet (1.2s)
+2026-11-14T22:37:48.2883289Z ✔ [97/106] Built LeanNet.HTTP2.Server:c.o (1.1s)
+2026-11-14T22:37:48.5779255Z ✔ [98/106] Built LeanNet.HTTP.ReactorServer:c.o (7.9s)
+2026-11-14T22:37:48.6896113Z ✔ [99/106] Built LeanNet.HTTP1.Server:c.o (3.0s)
+2026-11-14T22:37:49.0124492Z ✔ [100/106] Built «lean-net-static-fixture»:exe (479ms)
+2026-11-14T22:37:49.2278842Z ✔ [101/106] Built «lean-net-http1-reactor-fixture»:exe (488ms)
+2026-11-14T22:37:49.4502468Z ✔ [102/106] Built «lean-net-http2-reactor-fixture»:exe (453ms)
+2026-11-14T22:37:49.5517275Z ✔ [103/106] Built Main (1.3s)
+2026-11-14T22:37:49.5517679Z ✔ [104/106] Built LeanNet:c.o (1.3s)
+2026-11-14T22:37:49.7546165Z ✔ [105/106] Built Main:c.o (165ms)
+2026-11-14T22:37:50.0665020Z ✔ [106/106] Built «lean-net-echo»:exe (365ms)
+2026-11-14T22:37:50.0868017Z Build completed successfully (106 jobs).
+2026-11-14T22:37:50.1891647Z ##[group]Run lake env lean --run test/HTTP1ParserV2Test.lean
+2026-11-14T22:37:50.1892194Z [36;1mlake env lean --run test/HTTP1ParserV2Test.lean[0m
+2026-11-14T22:37:50.1892562Z [36;1mlake env lean --run test/HTTP1EncodingTest.lean[0m
+2026-11-14T22:37:50.1892897Z [36;1mlake env lean --run test/HTTP1MachineTest.lean[0m
+2026-11-14T22:37:50.1893220Z [36;1mlake env lean --run test/HTTP1FileTest.lean[0m
+2026-11-14T22:37:50.1911204Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:37:50.1911589Z env:
+2026-11-14T22:37:50.1911755Z   MSYSTEM: MINGW64
+2026-11-14T22:37:50.1912002Z   PKG_CONFIG_PATH: D:/a/_temp/msys64/mingw64/lib/pkgconfig
+2026-11-14T22:37:50.1912295Z ##[endgroup]
+2026-11-14T22:37:52.9029835Z HTTP/1 parser cursor, version, framing, fold and EOF tests passed
+2026-11-14T22:37:55.6074403Z HTTP/1 pure encoding tests passed
+2026-11-14T22:37:58.8086249Z HTTP/1 pure machine fragmentation, decisions, barriers, EOF, response and upgrade tests passed
+2026-11-14T22:38:01.2777116Z HTTP/1 file metadata and output-ticket tests passed
+2026-11-14T22:38:01.4101238Z ##[group]Run lake env lean --run test/HTTP2FrameTest.lean
+2026-11-14T22:38:01.4101769Z [36;1mlake env lean --run test/HTTP2FrameTest.lean[0m
+2026-11-14T22:38:01.4102130Z [36;1mlake env lean --run test/HTTP2FrameV2Test.lean[0m
+2026-11-14T22:38:01.4102478Z [36;1mlake env lean --run test/HPACKTest.lean[0m
+2026-11-14T22:38:01.4102809Z [36;1mlake env lean --run test/HTTP2RequestTest.lean[0m
+2026-11-14T22:38:01.4103145Z [36;1mlake env lean --run test/HTTP2StreamTest.lean[0m
+2026-11-14T22:38:01.4103489Z [36;1mlake env lean --run test/HTTP2ConnectionTest.lean[0m
+2026-11-14T22:38:01.4103871Z [36;1mlake env lean --run test/HTTP2ConnectionV2Test.lean[0m
+2026-11-14T22:38:01.4104248Z [36;1mlake env lean --run test/PriorityTest.lean[0m
+2026-11-14T22:38:01.4104586Z [36;1mlake env lean --run test/HTTP2MachineTest.lean[0m
+2026-11-14T22:38:01.4104916Z [36;1mlake env lean --run test/HTTP2FileTest.lean[0m
+2026-11-14T22:38:01.4123292Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:38:01.4123688Z env:
+2026-11-14T22:38:01.4123850Z   MSYSTEM: MINGW64
+2026-11-14T22:38:01.4124104Z   PKG_CONFIG_PATH: D:/a/_temp/msys64/mingw64/lib/pkgconfig
+2026-11-14T22:38:01.4124407Z ##[endgroup]
+2026-11-14T22:38:03.6861995Z HTTP/2 frame tests passed
+2026-11-14T22:38:06.2133678Z HTTP/2 bulk frame slice, extension and ownership tests passed
+2026-11-14T22:38:08.8952394Z HPACK RFC vectors and roundtrips passed
+2026-11-14T22:38:11.1347550Z HTTP/2 request tests passed
+2026-11-14T22:38:13.4279020Z HTTP/2 stream and flow tests passed
+2026-11-14T22:38:17.8775561Z HTTP/2 connection tests passed
+2026-11-14T22:38:21.9707853Z HTTP/2 connection V2 tests passed
+2026-11-14T22:38:24.1671027Z HTTP/2 priority tests passed
+2026-11-14T22:38:26.8778595Z HTTP/2 sans-IO action machine tests passed
+2026-11-14T22:38:29.8139420Z HTTP/2 file metadata, framing, flow and priority tests passed
+2026-11-14T22:38:29.9440931Z ##[group]Run lake env lean --run test/StaticSelectionTest.lean
+2026-11-14T22:38:29.9441746Z [36;1mlake env lean --run test/StaticSelectionTest.lean[0m
+2026-11-14T22:38:29.9464188Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:38:29.9464581Z env:
+2026-11-14T22:38:29.9464780Z   MSYSTEM: MINGW64
+2026-11-14T22:38:29.9465039Z   PKG_CONFIG_PATH: D:/a/_temp/msys64/mingw64/lib/pkgconfig
+2026-11-14T22:38:29.9465508Z ##[endgroup]
+2026-11-14T22:38:32.5143812Z Static selection, validators, ranges, dates and URL safety passed
+2026-11-14T22:38:32.6437128Z ##[group]Run lake env python test/test_static_catalog.py -v
+2026-11-14T22:38:32.6437620Z [36;1mlake env python test/test_static_catalog.py -v[0m
+2026-11-14T22:38:32.6454005Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:38:32.6454407Z env:
+2026-11-14T22:38:32.6454579Z   MSYSTEM: MINGW64
+2026-11-14T22:38:32.6454836Z   PKG_CONFIG_PATH: D:/a/_temp/msys64/mingw64/lib/pkgconfig
+2026-11-14T22:38:32.6455412Z ##[endgroup]
+2026-11-14T22:38:36.9602533Z test_packed_codecs_hashes_limits_and_lifetimes (__main__.StaticCatalogNative.test_packed_codecs_hashes_limits_and_lifetimes) ... FAIL
+2026-11-14T22:38:36.9603580Z 
+2026-11-14T22:38:36.9603779Z ======================================================================
+2026-11-14T22:38:36.9605186Z FAIL: test_packed_codecs_hashes_limits_and_lifetimes (__main__.StaticCatalogNative.test_packed_codecs_hashes_limits_and_lifetimes)
+2026-11-14T22:38:36.9606237Z ----------------------------------------------------------------------
+2026-11-14T22:38:36.9606585Z Traceback (most recent call last):
+2026-11-14T22:38:36.9607265Z   File "D:\a\lean-net\lean-net\test\test_static_catalog.py", line 58, in test_packed_codecs_hashes_limits_and_lifetimes
+2026-11-14T22:38:36.9608010Z     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+2026-11-14T22:38:36.9608806Z AssertionError: 3 != 0 : unsupported disposition handles: before=57 create=57 prepare=67 dispose=64 enumerate=64 owned_created=4 owned_closed=4 owned_open=0 scan=57/64
+2026-11-14T22:38:36.9609512Z new process handle=00000000000000dc type=Event name=
+2026-11-14T22:38:36.9609870Z new process handle=00000000000000e4 type=EtwRegistration name=
+2026-11-14T22:38:36.9610261Z new process handle=00000000000000e8 type=EtwRegistration name=
+2026-11-14T22:38:36.9610645Z new process handle=00000000000000ec type=EtwRegistration name=
+2026-11-14T22:38:36.9610983Z new process handle=00000000000000f0 type=Event name=
+2026-11-14T22:38:36.9611306Z new process handle=00000000000000f4 type=Thread name=
+2026-11-14T22:38:36.9611643Z new process handle=00000000000000f8 type=ALPC Port name=
+2026-11-14T22:38:36.9611947Z security descriptor handles=58/65
+2026-11-14T22:38:36.9612207Z owned CreateFile stage0 handles=57/58
+2026-11-14T22:38:36.9612471Z owned CreateFile stage1 handles=65/66
+2026-11-14T22:38:36.9612734Z owned CreateFile stage2 handles=66/67
+2026-11-14T22:38:36.9612979Z owned CreateFile stage3 handles=67/68
+2026-11-14T22:38:36.9613254Z line381: failed_after_enumerate <= failed_before
+2026-11-14T22:38:36.9613459Z 
+2026-11-14T22:38:36.9613463Z 
+2026-11-14T22:38:36.9613596Z ----------------------------------------------------------------------
+2026-11-14T22:38:36.9613917Z Ran 1 test in 1.447s
+2026-11-14T22:38:36.9614042Z 
+2026-11-14T22:38:36.9614123Z FAILED (failures=1)
+2026-11-14T22:38:37.0548267Z ##[error]Process completed with exit code 1.
+2026-11-14T22:38:37.0800286Z Post job cleanup.
+2026-11-14T22:38:37.2955263Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-11-14T22:38:37.3395735Z git version 2.56.0.windows.4
+2026-11-14T22:38:37.3473638Z Temporarily overriding HOME='D:\a\_temp\0642fbc0-b521-413c-ab8f-2d227bc5dff4' before making global git config changes
+2026-11-14T22:38:37.3474877Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-14T22:38:37.3485619Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\lean-net\lean-net
+2026-11-14T22:38:37.3908021Z Removing SSH command configuration
+2026-11-14T22:38:37.3918771Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-11-14T22:38:37.4312481Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-11-14T22:38:38.0068661Z Removing HTTP extra header
+2026-11-14T22:38:38.0078733Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-14T22:38:38.0467430Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-11-14T22:38:38.5956809Z Removing includeIf entries pointing to credentials config files
+2026-11-14T22:38:38.5968070Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-14T22:38:38.6311785Z includeif.gitdir:D:/a/lean-net/lean-net/.git.path
+2026-11-14T22:38:38.6313175Z includeif.gitdir:D:/a/lean-net/lean-net/.git/worktrees/*.path
+2026-11-14T22:38:38.6313873Z includeif.gitdir:/github/workspace/.git.path
+2026-11-14T22:38:38.6314252Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-11-14T22:38:38.6355010Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/lean-net/lean-net/.git.path
+2026-11-14T22:38:38.6706771Z D:\a\_temp\git-credentials-1acaaa96-c28c-4567-9466-dc2eda870c56.config
+2026-11-14T22:38:38.6757517Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/lean-net/lean-net/.git.path D\:\\a\\_temp\\git\-credentials\-1acaaa96\-c28c\-4567\-9466\-dc2eda870c56\.config
+2026-11-14T22:38:38.7212651Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:D:/a/lean-net/lean-net/.git/worktrees/*.path
+2026-11-14T22:38:38.7563435Z D:\a\_temp\git-credentials-1acaaa96-c28c-4567-9466-dc2eda870c56.config
+2026-11-14T22:38:38.7616423Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:D:/a/lean-net/lean-net/.git/worktrees/*.path D\:\\a\\_temp\\git\-credentials\-1acaaa96\-c28c\-4567\-9466\-dc2eda870c56\.config
+2026-11-14T22:38:38.8052112Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-11-14T22:38:38.8411472Z /github/runner_temp/git-credentials-1acaaa96-c28c-4567-9466-dc2eda870c56.config
+2026-11-14T22:38:38.8461241Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-1acaaa96\-c28c\-4567\-9466\-dc2eda870c56\.config
+2026-11-14T22:38:38.8866028Z [command]"C:\Program Files\Git\bin\git.exe" config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-11-14T22:38:38.9215547Z /github/runner_temp/git-credentials-1acaaa96-c28c-4567-9466-dc2eda870c56.config
+2026-11-14T22:38:38.9262316Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-1acaaa96\-c28c\-4567\-9466\-dc2eda870c56\.config
+2026-11-14T22:38:38.9671344Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-11-14T22:38:39.5159966Z Removing credentials config 'D:\a\_temp\git-credentials-1acaaa96-c28c-4567-9466-dc2eda870c56.config'
+2026-11-14T22:38:39.5352194Z Cleaning up orphan processes
