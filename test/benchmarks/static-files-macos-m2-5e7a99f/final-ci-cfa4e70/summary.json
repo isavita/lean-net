@@ -1,0 +1,92 @@
+{
+  "timestamp": "2026-11-14T22:53:29.192584+00:00",
+  "runs": [
+    {
+      "run": 43649971412,
+      "workflow": "Lean Action CI",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "run": 43649971412,
+          "job": 132616023649,
+          "name": "build",
+          "status": "completed",
+          "conclusion": "success",
+          "failed_steps": [],
+          "active_steps": []
+        }
+      ]
+    },
+    {
+      "run": 43649971315,
+      "workflow": "Native reactor",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "run": 43649971315,
+          "job": 132616023696,
+          "name": "native (macos-latest)",
+          "status": "completed",
+          "conclusion": "success",
+          "failed_steps": [],
+          "active_steps": []
+        },
+        {
+          "run": 43649971315,
+          "job": 132616023904,
+          "name": "native (windows-latest)",
+          "status": "completed",
+          "conclusion": "success",
+          "failed_steps": [],
+          "active_steps": []
+        },
+        {
+          "run": 43649971315,
+          "job": 132616023918,
+          "name": "native (ubuntu-latest)",
+          "status": "completed",
+          "conclusion": "success",
+          "failed_steps": [],
+          "active_steps": []
+        }
+      ]
+    },
+    {
+      "run": 43649971313,
+      "workflow": "Native TLS reactor",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": [
+        {
+          "run": 43649971313,
+          "job": 132616023440,
+          "name": "tls (windows-latest, python)",
+          "status": "completed",
+          "conclusion": "success",
+          "failed_steps": [],
+          "active_steps": []
+        },
+        {
+          "run": 43649971313,
+          "job": 132616023591,
+          "name": "tls (ubuntu-latest, python3)",
+          "status": "completed",
+          "conclusion": "success",
+          "failed_steps": [],
+          "active_steps": []
+        },
+        {
+          "run": 43649971313,
+          "job": 132616023605,
+          "name": "tls (macos-latest, python3)",
+          "status": "completed",
+          "conclusion": "success",
+          "failed_steps": [],
+          "active_steps": []
+        }
+      ]
+    }
+  ]
+}

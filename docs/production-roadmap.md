@@ -44,7 +44,51 @@ acceptance passed at 8be5466 on Linux, macOS and Windows. Phase 3 TLS acceptance
 passed at e2dbbf0 on all three platforms, including matching-artifact full scans
 of both SNI fixture hosts. Phase 4 HTTP/2 acceptance passed at 2a01582 on all
 three platforms, including strict h2spec and the declared M2 throughput gate.
-Phases 5–6 and the remaining final gates stay open.
+Phase 5 static-file acceptance passed at cfa4e70 on all three platforms;
+Phase 6 and its remaining final gates, including the actual 24-hour soak, stay
+open.
+
+## Static-file acceptance evidence
+
+- Startup builds a bounded, anchored, no-follow catalog in one private,
+  immutable packed file. Identity, gzip and Brotli bytes and generated
+  directory pages are hashed before listening, then mapped read-only and
+  eagerly locked under a page-rounded budget. Each worker imports one file
+  registration; request handlers perform no filesystem lookup or compression.
+  The [static-file guide](static-files.md) documents APIs, portable paths,
+  conditional/encoding selection, single ranges and resource failure policies.
+- Plain file writes use Linux/macOS sendfile or Windows TransmitFile. TLS file
+  bytes run through the off-loop worker, including real Linux splice via a
+  preallocated pipe, then bounded OpenSSL copies. Native owner identities and
+  generations reject stale/foreign regions. Sources remain pinned through
+  write completion or cancellation; committed HTTP/2 DATA headers keep their
+  exact ordered payload, including after stream cancellation.
+- All **32 static wire cases** pass on each platform in the TLS matrix,
+  covering verified TLS, all four curl modes, binary/gzip/Brotli bytes,
+  validators, ranges, directories, snapshot mutation, priorities, flow control,
+  cancellation, 4 MiB slow readers and 1,000 cycles per transport. Fifteen pure
+  suites and native sanitizer runners cover the machine and file boundaries.
+  Existing HTTP/1, HTTP/2 and TLS regression suites remain green.
+- Windows native tests reproduce unsupported private-pack deletion and then
+  require **1,000 failed startup lifetimes at exactly 64 process handles**,
+  with **4,000 file handles created and closed**. The baseline follows only
+  the traced one-time SDK security initialization. Separate 1,000 publication
+  cycles, actual IOCP file writes and cancellation ownership also pass.
+- The unchanged six-round M2 benchmark completes **600,000 successful
+  requests**, zero errors/timeouts, and exact DATA totals. Eight-worker rounds
+  reach **290,476 / 302,097 / 284,045 RPS**; both short RSS assessments pass
+  (one worker +0.37547%, eight workers +0.22513%). The fresh rebuilt macOS
+  executables are byte-identical to the artifacts passing **48 HTTP/2 wire
+  cases** and **147 strict h2spec cases per transport**. These are short phase
+  gates, not a sustained-load result.
+- The [full Linux regression](https://github.com/isavita/lean-net/actions/runs/43649971412),
+  [Native matrix](https://github.com/isavita/lean-net/actions/runs/43649971315)
+  and [TLS matrix](https://github.com/isavita/lean-net/actions/runs/43649971313)
+  pass for source `cfa4e700f47ea1d52028add8ff7bdf16a1784549`. The
+  [acceptance artifacts](../test/benchmarks/static-files-macos-m2-5e7a99f/README.md)
+  retain complete status records, strict Windows resource counts, executable
+  and source hashes, raw tests and benchmark output, and earlier failed
+  candidates. All 21 new FFI entrypoints have matching Lean declarations.
 
 ## HTTP/2 machine acceptance evidence
 
@@ -84,9 +128,10 @@ Phases 5–6 and the remaining final gates stay open.
   [full Linux regression](https://github.com/isavita/lean-net/actions/runs/43637937933)
   also passes. All verify source `2a015829682986d9f4bbf2c84188e9129bd293bb`.
   The [matching-artifact report](../test/benchmarks/http2-conformance-macos-m2-2a01582/summary.json)
-  retains source hashes, logs, JUnit results and CI job records. Runtime
-  acceptance still excludes phase-five static files and
-  phase-six production hardening, including the actual full-duration soak.
+  retains source hashes, logs, JUnit results and CI job records. These Phase 4
+  artifacts exclude static files; their acceptance is recorded above.
+  Phase 6 production hardening, including the actual full-duration soak,
+  remains unaccepted.
 
 ## TLS worker acceptance evidence
 

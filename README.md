@@ -5,19 +5,20 @@ the native epoll/kqueue/IOCP reactor. HTTP/1.0 and HTTP/1.1 use a pure connectio
 machine; a pure HTTP/2 action machine serves prior-knowledge HTTP/2 (h2c) and
 negotiated TLS connections. The separate
 `tls/` package uses dedicated native TLS workers connected to the reactor by
-bounded queues. TLS acceptance is tracked separately from the remaining HTTP/2
-and production gates.
+bounded queues. Immutable static catalogs serve the same files across all
+three HTTP versions and both transports.
 
 The expanded production brief is being implemented phase by phase.
 [The acceptance ledger](docs/production-roadmap.md) retains
-completed phase gates and the remaining static-file, hardening and actual
+completed phase gates and the remaining hardening and actual
 24-hour soak work. The new native-reactor echo and its ownership model are described
 in [docs/reactor.md](docs/reactor.md). The HTTP machine, advanced handlers and
 transport boundaries are documented in [docs/http1-machine.md](docs/http1-machine.md).
 See [docs/http2-machine.md](docs/http2-machine.md) for HTTP/2 configuration,
 priority scheduling, push and draining, and [docs/static-files.md](docs/static-files.md)
-for immutable static catalogs, file transports and resource limits. Phases 1–4 passed acceptance;
-static files and production hardening remain open in phases 5 and 6.
+for immutable static catalogs, file transports and resource limits. Phases 1–5
+passed acceptance; production hardening and the actual 24-hour soak remain open
+in Phase 6.
 
 ## Build and test
 

@@ -1,0 +1,9 @@
+{
+  "failure_handles_after": 64,
+  "failure_handles_before": 64,
+  "failure_owned_closed": 4000,
+  "failure_owned_created": 4000,
+  "security_init_handles_after": 64,
+  "security_init_handles_before": 57,
+  "unsupported_failure_cycles": 1000
+}
