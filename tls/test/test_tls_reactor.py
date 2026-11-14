@@ -410,7 +410,10 @@ class TLSReactorAcceptance(ServerCase, unittest.TestCase):
         client.raw.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
         sender = None
         errors = []
-        payload = bytes(range(256)) * 4096
+        # Every 4K block differs, so premature reuse of a borrowed plaintext
+        # cell cannot hide behind identical repeated wire data.
+        payload = b"".join(struct.pack(">I", block) + bytes([(block * 17) & 255]) * 4092
+                           for block in range(256))
         try:
             client.raw.settimeout(10)
             client.sendall(request(b"/upgrade", headers=b"Connection: Upgrade\r\nUpgrade: test-echo\r\n"))

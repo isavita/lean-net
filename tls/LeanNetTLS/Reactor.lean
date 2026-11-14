@@ -27,7 +27,8 @@ private def checkZero (operation : String) (raw : UInt64) : IO Unit := do
     frees the shared OpenSSL contexts and their resumption caches. -/
 def withBundle (config : Config) (use : Bundle → IO α) : IO α := do
   if config.queueCapacity == 0 || config.queueCapacity > 256 ||
-      config.handshakeTimeoutMs == 0 || config.shutdownTimeoutMs == 0 then
+      config.handshakeTimeoutMs == 0 || config.shutdownTimeoutMs == 0 ||
+      config.handshakeTimeoutMs > 9223372036854775807 || config.shutdownTimeoutMs > 9223372036854775807 then
     throw (IO.userError "TLS queue capacity and deadlines must be positive and bounded")
   let names := config.hosts.map (·.name)
   let certs := config.hosts.map (·.certificateChain)

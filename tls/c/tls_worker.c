@@ -1,6 +1,6 @@
 /* Optional OpenSSL transport. All SSL/BIO operations run on one dedicated
  * native thread. Only the bridge below may touch Lean and the reactor. */
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "tls_worker.h"
@@ -557,7 +557,7 @@ static int tw_bridge_delete(tw_bridge *bridge) {
 }
 lean_object *lean_tlsw_worker_new(uint64_t bundle_handle, b_lean_obj_arg reactor,
     uint32_t count, uint32_t capacity, uint64_t handshake_ms, uint64_t shutdown_ms) {
-  if (!bundle_handle || !count || count > TW_MAX_SESSIONS || !capacity || capacity > TW_MAX_QUEUE || !handshake_ms || !shutdown_ms)
+  if (!bundle_handle || !count || count > TW_MAX_SESSIONS || !capacity || capacity > TW_MAX_QUEUE || !handshake_ms || !shutdown_ms || handshake_ms > INT64_MAX || shutdown_ms > INT64_MAX)
     return tw_handle(-EINVAL, "invalid TLS worker limits");
   rn_reactor *native = NULL; int error = rn_bridge_reactor(reactor, &native);
   if (error) return tw_handle(error, "invalid TLS reactor");

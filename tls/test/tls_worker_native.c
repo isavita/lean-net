@@ -3,13 +3,21 @@
 #include <pthread.h>
 #include <stdio.h>
 static int fail_join;
+static int fail_cipher;
 static int test_join(pthread_t thread, void **result) {
   if (fail_join) { fail_join = 0; return EDEADLK; }
   return pthread_join(thread, result);
 }
+static int test_cipher_write(rn_reactor *reactor, uint64_t connection, uint64_t capability,
+    uint64_t buffer, uint32_t offset, uint32_t length, uint64_t operation) {
+  if (fail_cipher) { fail_cipher = 0; return -ENOMEM; }
+  return rn_transport_write(reactor, connection, capability, buffer, offset, length, operation);
+}
 #define pthread_join test_join
+#define rn_transport_write test_cipher_write
 #include "../c/tls_worker.c"
 #undef pthread_join
+#undef rn_transport_write
 void lean_initialize_runtime_module(void);
 
 static void check(int condition, const char *message) {
@@ -68,6 +76,10 @@ static void exercise(const char *certificate, const char *key, uint32_t capacity
   reactor->connections[rn_index(connection)].fd = peers[0]; reactor->connections[rn_index(connection)].state = 4;
   check(rn_interest(reactor, rn_index(connection), 1) == 0 && rn_transport_claim(reactor, connection, &capability) == 0, "claim socketpair transport");
   lean_object *record = reactor_record(reactor), *wire = wire_record(record, connection, capability);
+  for (unsigned overflow = 0; overflow < 2; ++overflow) {
+    lean_object *bad = lean_tlsw_worker_new(bundle, record, 1, capacity, overflow ? 1000 : UINT64_MAX, overflow ? UINT64_MAX : 1000);
+    check(lean_io_result_is_ok(bad) && (int64_t)lean_unbox_uint64(lean_ctor_get(lean_io_result_get_value(bad), 0)) == -EINVAL, "overflowing TLS deadlines rejected before thread creation"); lean_dec(bad);
+  }
   uint64_t worker = handle(lean_tlsw_worker_new(bundle, record, 1, capacity, 5000, 1000));
   rn_reactor *checked_reactor = NULL; uint64_t checked_connection = 0, checked_capability = 0;
   int wire_check = rn_bridge_wire(wire, &checked_reactor, &checked_connection, &checked_capability);
@@ -138,9 +150,23 @@ static void exercise(const char *certificate, const char *key, uint32_t capacity
     struct timespec pause = {0, 100000}; (void)nanosleep(&pause, NULL);
   }
   check(sent == sizeof(payload) && received == sizeof(payload) && written == sizeof(payload), "four-cell queues complete binary echo and wire fences");
-  if (retained) lean_dec(retained); if (plain) { lean_dec(plain); check(result(lean_tlsw_release_plain(worker, session)) == 0, "release final plaintext loan"); }
+  if (retained) lean_dec(retained);
+  if (plain) { lean_dec(plain); check(result(lean_tlsw_release_plain(worker, session)) == 0, "release final plaintext loan"); }
   check(atomic_load(&bridge->engine->owner_violations) == 0 && atomic_load(&bridge->engine->ssl_calls) > 0, "exclusive off-loop SSL ownership");
-  check(result(lean_tlsw_abort(worker, session)) == 0, "abort pending native receive");
+  uint64_t fault_lease = 0; lean_object *fault_buffer = NULL;
+  check(rn_acquire_buffer(reactor, 1, &fault_lease) == 0 && rn_buffer_copy(reactor, fault_lease, (const uint8_t *)"x", 1) == 0 && rn_bridge_make_buffer(record, fault_lease, &fault_buffer) == 0, "prepare ciphertext submit fault");
+  fail_cipher = 1; check(result(lean_tlsw_write(worker, session, fault_buffer, 0, 1, 456)) == 0, "queue submit-fault plaintext"); lean_dec(fault_buffer);
+  check(rn_buffer_release(reactor, fault_lease) == 0, "release submit-fault source");
+  int saw_error = 0; end = rn_now_ms() + 1000;
+  while (!saw_error && rn_now_ms() < end) {
+    int64_t count = result(lean_tlsw_pump(worker)); check(count >= 0, "pump submit fault");
+    for (int64_t n = 0; n < count; ++n) if (bridge->events[n].kind == TLSW_ERROR) {
+      check(bridge->events[n].result == -ENOMEM && bridge->events[n].flags == RN_SETUP_ERROR, "infrastructure fault retains fatal classification");
+      check(result(lean_tlsw_abort(worker, session)) == 0 && rn_connection_live(reactor, connection) == 0, "observed submit fault still aborts physical connection"); saw_error = 1;
+    }
+    struct timespec pause = {0, 100000}; (void)nanosleep(&pause, NULL);
+  }
+  check(saw_error && result(lean_tlsw_abort(worker, session)) == 0, "submit fault and repeated abort are bounded");
   for (uint32_t n = 0; n < input_count; ++n) check(rn_buffer_release(reactor, inputs[n].lease) == 0, "release canceled retained input");
   SSL_free(client); SSL_CTX_free(client_context); check(close(peers[1]) == 0, "close client descriptor");
   /* An injected failed join must retain the worker, lanes and callback owner. */
