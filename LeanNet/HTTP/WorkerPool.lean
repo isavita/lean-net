@@ -5,7 +5,7 @@ namespace LeanNet.HTTP
 private def acceptorEvent (event : Reactor.Event) : IO Unit := do
   match event with
   | .wake | .closed _ => pure ()
-  | .read _ buffer _ _ =>
+  | .read _ buffer _ _ | .wireRead _ buffer _ _ =>
     buffer.release
     throw (IO.userError "HTTP acceptor unexpectedly received connection data")
   | .error _ flags code =>
@@ -15,7 +15,7 @@ private def acceptorEvent (event : Reactor.Event) : IO Unit := do
       throw (← LeanNet.Errno.error "HTTP acceptor owned descriptor (library bug)" code)
     if (flags &&& 1) != 0 && (← Reactor.isRecoverableAcceptError code) then return
     throw (← LeanNet.Errno.error "HTTP acceptor" code)
-  | .accepted _ | .written .. | .eof _ | .timer .. =>
+  | .accepted _ | .written .. | .eof _ | .timer .. | .wireEOF _ | .wireTimer .. =>
     throw (IO.userError "HTTP acceptor unexpectedly owns a protocol connection")
 
 private partial def acceptorLoop (reactor : Reactor.Reactor) (group : Reactor.Group) : IO Unit := do

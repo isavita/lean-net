@@ -18,7 +18,7 @@ class ReactorPosixNative(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="lean-net-posix-test-") as temporary:
             binary = Path(temporary) / "reactor-posix"
             flags = ["-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
-                     "-isystem", str(prefix / "include")]
+                     "-isystem", str(prefix / "include"), "-pthread"]
             link_flags = ["-L", str(prefix / "lib/lean"),
                           "-Wl,-rpath," + str(prefix / "lib/lean"), "-lleanshared"]
             if os.environ.get("RN_POSIX_SANITIZERS", "1") != "0":

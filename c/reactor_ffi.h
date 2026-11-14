@@ -2,6 +2,7 @@
 #ifndef LEAN_NET_REACTOR_FFI_H
 #define LEAN_NET_REACTOR_FFI_H
 #include "reactor.h"
+#include "reactor_lean.h"
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
@@ -85,7 +86,10 @@ lean_object *shim_reactor_event(uint64_t handle, uint32_t index) {
     lean_ctor_set_uint64(record, 16, event->buffer);
     lean_ctor_set_uint64(record, 24, (uint64_t)event->result);
     lean_ctor_set_uint32(record, 32, event->kind);
-    lean_ctor_set_uint32(record, 36, event->flags);
+    uint32_t flags = event->flags;
+    if (handle && (event->kind == RN_READ || event->kind == RN_EOF || event->kind == RN_TIMER) &&
+        rn_transport_state(rn_handle(handle), event->connection) > 0) flags |= RN_CIPHERTEXT;
+    lean_ctor_set_uint32(record, 36, flags);
     lean_ctor_set_uint32(record, 40, event->offset);
     lean_ctor_set_uint32(record, 44, event->length);
     return lean_io_result_mk_ok(record);
@@ -145,5 +149,46 @@ lean_object *shim_reactor_wake(uint64_t handle) {
     return rn_io_number(handle == 0 ? -EINVAL : rn_wake(rn_handle(handle)));
 }
 lean_object *shim_reactor_now(void) { return rn_io_number((int64_t)rn_now_ms()); }
+
+lean_object *shim_reactor_transport_claim(uint64_t h, uint64_t t) {
+    uint64_t cap = 0; int e = h ? rn_transport_claim(rn_handle(h),t,&cap) : -EINVAL;
+    return rn_io_number(e ? e : (int64_t)cap);
+}
+lean_object *shim_reactor_transport_mode(uint64_t h, uint64_t t, uint64_t c) {
+    return rn_io_number(h ? rn_transport_mode(rn_handle(h),t,c) : -EINVAL);
+}
+lean_object *shim_reactor_transport_ready(uint64_t h, uint64_t t, uint64_t c) {
+    return rn_io_number(h ? rn_transport_ready(rn_handle(h),t,c) : -EINVAL);
+}
+lean_object *shim_reactor_transport_write(uint64_t h,uint64_t t,uint64_t c,uint64_t b,uint32_t o,uint32_t n,uint64_t op) {
+    return rn_io_number(h ? rn_transport_write(rn_handle(h),t,c,b,o,n,op) : -EINVAL);
+}
+lean_object *shim_reactor_transport_read_enabled(uint64_t h,uint64_t t,uint64_t c,uint8_t enabled) {
+    return rn_io_number(h && enabled <= 1 ? rn_transport_read_enabled(rn_handle(h),t,c,enabled) : -EINVAL);
+}
+lean_object *shim_reactor_transport_arm_timer(uint64_t h,uint64_t t,uint64_t c,uint32_t k,uint64_t d) {
+    return rn_io_number(h ? rn_transport_arm_timer(rn_handle(h),t,c,k,d) : -EINVAL);
+}
+lean_object *shim_reactor_transport_cancel_timer(uint64_t h,uint64_t t,uint64_t c,uint32_t k) {
+    return rn_io_number(h ? rn_transport_cancel_timer(rn_handle(h),t,c,k) : -EINVAL);
+}
+lean_object *shim_reactor_transport_drain(uint64_t h,uint64_t t,uint64_t c) {
+    return rn_io_number(h ? rn_transport_drain(rn_handle(h),t,c) : -EINVAL);
+}
+lean_object *shim_reactor_transport_abort(uint64_t h,uint64_t t,uint64_t c) {
+    return rn_io_number(h ? rn_transport_abort(rn_handle(h),t,c) : -EINVAL);
+}
+lean_object *shim_reactor_waker_acquire(uint64_t h) {
+    rn_waker *w = NULL; int e = h ? rn_waker_acquire(rn_handle(h),&w) : -EINVAL;
+    if (!e && (uintptr_t)w > INT64_MAX) { int released = rn_waker_release(w); return rn_io_number(released ? released : -EOVERFLOW); }
+    return rn_io_number(e ? e : (int64_t)(uintptr_t)w);
+}
+lean_object *shim_reactor_waker_wake(uint64_t h) {
+    return rn_io_number(h ? rn_waker_wake((rn_waker *)(uintptr_t)h) : -EINVAL);
+}
+lean_object *shim_reactor_waker_release(uint64_t h) {
+    return rn_io_number(h ? rn_waker_release((rn_waker *)(uintptr_t)h) : -EINVAL);
+}
+
 #include "reactor_group_ffi.h"
 #endif

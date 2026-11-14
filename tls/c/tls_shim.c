@@ -5,17 +5,25 @@
 #define _DARWIN_C_SOURCE 1
 #endif
 #define _POSIX_C_SOURCE 200809L
+#if defined(_WIN32) && !defined(WIN32_LEAN_AND_MEAN)
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <lean/lean.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include "../../c/windows_error.h"
+#include "../../c/socket_windows_bridge.h"
+#else
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #if defined(MSG_NOSIGNAL)
 #define TLS_SEND_FLAGS MSG_NOSIGNAL
@@ -85,7 +93,15 @@ static int bio_fd(BIO *bio) { return (int)((intptr_t)BIO_get_data(bio) - 1); }
 static int socket_read(BIO *bio, char *out, int len) {
     if (out == NULL || len <= 0) return 0;
     BIO_clear_retry_flags(bio);
+#if defined(_WIN32)
+    uintptr_t borrowed = 0;
+    int error = ln_windows_socket_borrow(bio_fd(bio), &borrowed, NULL);
+    if (error) { errno = -error; return -1; }
+    int n = recv((SOCKET)borrowed, out, len, 0);
+    if (n == SOCKET_ERROR) errno = ln_windows_errno((DWORD)WSAGetLastError());
+#else
     ssize_t n = recv(bio_fd(bio), out, (size_t)len, 0);
+#endif
     if (n < 0) {
         int e = errno;
         if (e == EAGAIN || e == EWOULDBLOCK) BIO_set_retry_read(bio);
@@ -96,7 +112,15 @@ static int socket_read(BIO *bio, char *out, int len) {
 static int socket_write(BIO *bio, const char *in, int len) {
     if (in == NULL || len <= 0) return 0;
     BIO_clear_retry_flags(bio);
+#if defined(_WIN32)
+    uintptr_t borrowed = 0;
+    int error = ln_windows_socket_borrow(bio_fd(bio), &borrowed, NULL);
+    if (error) { errno = -error; return -1; }
+    int n = send((SOCKET)borrowed, in, len, TLS_SEND_FLAGS);
+    if (n == SOCKET_ERROR) errno = ln_windows_errno((DWORD)WSAGetLastError());
+#else
     ssize_t n = send(bio_fd(bio), in, (size_t)len, TLS_SEND_FLAGS);
+#endif
     if (n < 0) {
         int e = errno;
         if (e == EAGAIN || e == EWOULDBLOCK) BIO_set_retry_write(bio);
@@ -135,8 +159,16 @@ static int no_password(char *buffer, int size, int writing, void *arg) {
 
 static int pending_peer_error(int fd) {
     int error = 0;
+#if defined(_WIN32)
+    uintptr_t borrowed = 0;
+    if (ln_windows_socket_borrow(fd, &borrowed, NULL)) return 0;
+    int length = sizeof(error);
+    if (getsockopt((SOCKET)borrowed, SOL_SOCKET, SO_ERROR, (char *)&error, &length) < 0 || length != sizeof(error)) return 0;
+    error = ln_windows_errno((DWORD)error);
+#else
     socklen_t length = sizeof(error);
     if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) < 0 || length != sizeof(error)) return 0;
+#endif
     if (error == ECONNRESET || error == ECONNABORTED || error == EPIPE ||
         error == ENOTCONN || error == ETIMEDOUT || error == ENETUNREACH ||
         error == EHOSTUNREACH || error == ENETDOWN || error == ECONNREFUSED)
@@ -146,7 +178,7 @@ static int pending_peer_error(int fd) {
 
 lean_object *lean_tls_context_new(b_lean_obj_arg cert, b_lean_obj_arg key) {
     ERR_clear_error();
-#if !defined(MSG_NOSIGNAL) && !defined(SO_NOSIGPIPE)
+#if !defined(_WIN32) && !defined(MSG_NOSIGNAL) && !defined(SO_NOSIGPIPE)
     (void)cert; (void)key;
     return handle_result(-ENOTSUP, lean_mk_string("platform lacks per-socket SIGPIPE suppression"));
 #else
@@ -217,9 +249,16 @@ lean_object *lean_tls_context_free(uint64_t handle) {
 lean_object *lean_tls_session_new(uint64_t handle, int64_t fd) {
     if (handle == 0 || fd < 0 || fd > INT_MAX)
         return step_result(-EINVAL, 1, lean_mk_string("invalid TLS context or socket"));
+#if defined(_WIN32)
+    uintptr_t borrowed = 0; int nonblocking = 0;
+    int error = ln_windows_socket_borrow(fd, &borrowed, &nonblocking);
+    if (error) return step_result(error, 1, lean_mk_string("checking socket flags failed"));
+    if (!nonblocking) return step_result(-EINVAL, 1, lean_mk_string("TLS socket must be nonblocking"));
+#else
     int flags = fcntl((int)fd, F_GETFL);
     if (flags < 0) return step_result(-errno, 1, lean_mk_string("checking socket flags failed"));
     if (!(flags & O_NONBLOCK)) return step_result(-EINVAL, 1, lean_mk_string("TLS socket must be nonblocking"));
+#endif
 #ifdef SO_NOSIGPIPE
     int one = 1;
     if (setsockopt((int)fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) < 0) {

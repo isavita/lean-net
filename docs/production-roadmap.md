@@ -41,8 +41,11 @@ coverage, not evidence that the new architecture or performance gates pass.
 
 Phase 1 reactor acceptance passed at d3ccc2e. Phase 2 HTTP/1 protocol-machine
 acceptance passed at 8be5466 on Linux, macOS and Windows. Phases 3–6 and all final
-gates remain open. TLS still uses poll and in-loop nonblocking OpenSSL; h2c preserves
-the previous pure HTTP/2 implementation pending its full phase-four migration.
+gates remain open. The TLS worker implementation is under acceptance: dedicated
+native threads, bounded byte lanes, SNI/resumption and native transport sharing
+are implemented. Full matrix/scanner acceptance must pass before Phase 3 is
+marked complete. h2c preserves the previous pure HTTP/2 implementation pending
+its full phase-four migration.
 
 ## HTTP/1 machine acceptance evidence
 

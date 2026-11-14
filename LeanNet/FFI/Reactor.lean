@@ -56,4 +56,22 @@ opaque cancelTimer (handle connection : UInt64) (kind : UInt32) : IO UInt64
 @[extern "shim_reactor_endpoint_acquire"] opaque endpointAcquire (port : UInt16) : IO UInt64
 @[extern "shim_reactor_endpoint_release"] opaque endpointRelease (handle : UInt64) : IO UInt64
 
+
+@[extern "shim_reactor_transport_claim"] opaque transportClaim (handle connection : UInt64) : IO UInt64
+@[extern "shim_reactor_transport_mode"] opaque transportMode (handle connection capability : UInt64) : IO UInt64
+@[extern "shim_reactor_transport_ready"] opaque transportReady (handle connection capability : UInt64) : IO UInt64
+@[extern "shim_reactor_transport_write"]
+opaque transportWrite (handle connection capability buffer : UInt64) (offset length : UInt32) (operation : UInt64) : IO UInt64
+@[extern "shim_reactor_transport_read_enabled"]
+opaque transportReadEnabled (handle connection capability : UInt64) (enabled : UInt8) : IO UInt64
+@[extern "shim_reactor_transport_arm_timer"]
+opaque transportArmTimer (handle connection capability : UInt64) (kind : UInt32) (deadline : UInt64) : IO UInt64
+@[extern "shim_reactor_transport_cancel_timer"]
+opaque transportCancelTimer (handle connection capability : UInt64) (kind : UInt32) : IO UInt64
+@[extern "shim_reactor_transport_drain"] opaque transportDrain (handle connection capability : UInt64) : IO UInt64
+@[extern "shim_reactor_transport_abort"] opaque transportAbort (handle connection capability : UInt64) : IO UInt64
+@[extern "shim_reactor_waker_acquire"] opaque wakerAcquire (handle : UInt64) : IO UInt64
+@[extern "shim_reactor_waker_wake"] opaque wakerWake (handle : UInt64) : IO UInt64
+@[extern "shim_reactor_waker_release"] opaque wakerRelease (handle : UInt64) : IO UInt64
+
 end LeanNet.FFI.Reactor

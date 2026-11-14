@@ -6,6 +6,10 @@ private def dispatch (event : Reactor.Event) : IO Unit := do
   match event with
   | .read socket buffer offset length =>
     Reactor.withBuffer buffer fun buffer => socket.write buffer offset length
+  | .wireRead _ buffer _ _ =>
+    buffer.release
+    throw (IO.userError "echo unexpectedly received claimed ciphertext")
+  | .wireEOF _ | .wireTimer .. => throw (IO.userError "echo unexpectedly received claimed transport event")
   | .eof socket => socket.closeAfterWrites
   | .timer socket _ => let _ ← socket.close (by decide); pure ()
   | .error _ flags code =>

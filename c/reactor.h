@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 typedef struct rn_reactor rn_reactor;
+typedef struct rn_waker rn_waker;
 typedef struct rn_config {
     uint32_t max_connections;
     uint32_t max_events;
@@ -19,7 +20,7 @@ enum rn_event_kind { RN_ACCEPTED=1, RN_READ=2, RN_WRITTEN=3, RN_EOF=4,
     RN_TIMER=5, RN_CLOSED=6, RN_ERROR=7, RN_WAKE=8 };
 #define RN_TIMER_KINDS 8u
 
-enum rn_event_flags { RN_ACCEPT_ERROR=1, RN_SETUP_ERROR=2, RN_CLOSE_ERROR=4 };
+enum rn_event_flags { RN_ACCEPT_ERROR=1, RN_SETUP_ERROR=2, RN_CLOSE_ERROR=4, RN_CIPHERTEXT=8 };
 /* WRITTEN is a historical completion: its connection identity can already be
  * closed, and successful writes precede CLOSED even within the same batch. */
 typedef struct rn_event {
@@ -63,6 +64,21 @@ int rn_set_read_enabled(rn_reactor *reactor, uint64_t connection, int enabled);
 /* Historical completions can outlive the connected token. Owner-thread query;
  * returns 1 for a matching connected generation, 0 for stale/closing/closed. */
 int rn_connection_live(rn_reactor *reactor, uint64_t connection);
+/* Claim once before any plaintext writes. Plain socket operations then fail
+ * with EACCES, including aliases obtained before the claim. Capabilities are
+ * scoped to this reactor and connected generation. Modes: 0 plain, 1 TLS
+ * handshaking, 2 TLS ready. All capability operations are owner-thread only. */
+int rn_transport_claim(rn_reactor *, uint64_t connection, uint64_t *capability);
+int rn_transport_state(rn_reactor *, uint64_t connection);
+int rn_transport_mode(rn_reactor *, uint64_t connection, uint64_t capability);
+int rn_transport_ready(rn_reactor *, uint64_t connection, uint64_t capability);
+int rn_transport_write(rn_reactor *, uint64_t connection, uint64_t capability,
+                       uint64_t buffer, uint32_t offset, uint32_t length, uint64_t operation);
+int rn_transport_read_enabled(rn_reactor *, uint64_t connection, uint64_t capability, int enabled);
+int rn_transport_arm_timer(rn_reactor *, uint64_t connection, uint64_t capability, uint32_t kind, uint64_t deadline);
+int rn_transport_cancel_timer(rn_reactor *, uint64_t connection, uint64_t capability, uint32_t kind);
+int rn_transport_drain(rn_reactor *, uint64_t connection, uint64_t capability);
+int rn_transport_abort(rn_reactor *, uint64_t connection, uint64_t capability);
 int rn_acquire_buffer(rn_reactor *reactor, uint32_t minimum, uint64_t *out_token);
 /* View is borrowed. The FFI increments its reference before returning to Lean.
  * Releasing a lease forbids further views. Buffer storage is never reused until
@@ -79,5 +95,12 @@ int rn_close_connection(rn_reactor *reactor, uint64_t connection);
 /* Wake is the only public runtime API callable by another thread. No protocol/
  * Lean objects are touched; internal accept channels own transferred sockets. */
 int rn_wake(rn_reactor *reactor);
+/* Acquire on the owner thread; retain/wake/release are thread-safe. Each caller
+ * retains its own reference. A retained waker outlives rn_free without retaining
+ * a reactor pointer; late wakes return ECANCELED. No syscall retries on EINTR. */
+int rn_waker_acquire(rn_reactor *, rn_waker **out);
+int rn_waker_retain(rn_waker *);
+int rn_waker_wake(rn_waker *);
+int rn_waker_release(rn_waker *);
 uint64_t rn_now_ms(void);
 #endif

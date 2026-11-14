@@ -41,6 +41,30 @@ static void targets_rejected(uint64_t acceptor, lean_object *array, uint32_t cap
           "reject invalid accept-target setup");
     exclusive_elements(array);
 }
+
+static void opaque_bridge_case(uint64_t handle) {
+    lean_object *reactor = lean_alloc_ctor(0,1,8);
+    lean_ctor_set(reactor,0,lean_st_mk_ref(lean_box(1)));
+    lean_ctor_set_uint64(reactor,sizeof(void *),handle);
+    rn_reactor *native = NULL;
+    check(rn_bridge_reactor(reactor,&native) == 0 && native == (rn_reactor *)(uintptr_t)handle,"opaque Reactor bridge extracts live owner");
+    uint64_t token = 0; check(rn_acquire_buffer(native,4096,&token) == 0,"acquire opaque bridge lease");
+    lean_object *buffer = NULL; check(rn_bridge_make_buffer(reactor,token,&buffer) == 0,"construct private Buffer only from owned native lease");
+    uint64_t extracted = 0;
+    check(rn_bridge_buffer(buffer,native,&extracted) == 0 && extracted == token && rn_bridge_buffer(buffer,NULL,&extracted) == -EINVAL,"opaque buffer checks reactor identity");
+    check(rn_buffer_release(native,token) == 0 && rn_bridge_buffer(buffer,native,&extracted) < 0,"released opaque lease rejected");
+    lean_dec(buffer);
+    rn_waker *w = NULL; check(rn_waker_acquire(native,&w) == 0,"acquire opaque waker");
+    lean_object *waker = lean_alloc_ctor(0,1,8);
+    lean_ctor_set(waker,0,lean_st_mk_ref(lean_box(1)));
+    lean_ctor_set_uint64(waker,sizeof(void *),(uint64_t)(uintptr_t)w);
+    rn_waker *borrowed = NULL; check(rn_bridge_waker(waker,&borrowed) == 0 && borrowed == w,"opaque waker borrowed without ref leak");
+    lean_object *updated = lean_st_ref_put(lean_ctor_get(waker,0),lean_box(0)); lean_dec(updated);
+    check(rn_bridge_waker(waker,&borrowed) < 0 && rn_waker_release(w) == 0,"closed opaque waker rejected"); lean_dec(waker);
+    updated = lean_st_ref_put(lean_ctor_get(reactor,0),lean_box(0)); lean_dec(updated);
+    check(rn_bridge_reactor(reactor,&native) < 0,"opaque bridge rejects dead Reactor");lean_dec(reactor);
+}
+
 int main(void) {
     lean_initialize_runtime_module();
     uint64_t reactors[3];
@@ -48,6 +72,7 @@ int main(void) {
         int64_t created = number(shim_reactor_new(4, 8, 4, 1, 0, 0, 1));
         check(created > 0, "create setup reactor"); reactors[i] = (uint64_t)created;
     }
+    opaque_bridge_case(reactors[0]);
     lean_object *workers = handles(reactors + 1, 2);
     uint64_t repeated[] = {reactors[1], reactors[1]};
     uint64_t invalid[] = {reactors[1], 0};

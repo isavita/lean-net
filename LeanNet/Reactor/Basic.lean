@@ -40,6 +40,20 @@ structure Buffer where
   private reactor : Reactor
   private token : UInt64
 
+/-- Claimed transport access. Native mode checks reject plaintext socket aliases;
+    the expected phase also rejects an old handshaking Wire after ready. -/
+structure Wire (state : SocketState) where
+  private mk ::
+  private socket : Socket state
+  private capability : UInt64
+  private phase : UInt8
+
+/-- Retained native notification endpoint; it never borrows a reactor pointer. -/
+structure Waker where
+  private mk ::
+  private handle : UInt64
+  private alive : IO.Ref Bool
+
 private def ensureAlive (reactor : Reactor) : IO Unit := do
   unless (← reactor.alive.get) do throw (IO.userError "reactor is closed")
 
@@ -150,6 +164,90 @@ inductive Submission where
   | queued
   | wouldBlock
 
+def Wire.id (wire : Wire state) : SocketId := ⟨wire.socket.reactor.handle, wire.socket.token⟩
+
+private def ensureWire (wire : Wire state) : IO Unit := do
+  ensureAlive wire.socket.reactor
+  let mode ← checked "transport mode" (← FFI.Reactor.transportMode wire.socket.reactor.handle wire.socket.token wire.capability)
+  if mode != wire.phase.toUInt64 then throw (IO.userError "transport phase alias is stale")
+
+/-- Claim before any plaintext write. A returned native read batch can still
+    contain old connected aliases; their operations now fail the native guard. -/
+def Socket.claim (socket : Socket .connected) : IO (Wire .tls_handshaking) := do
+  ensureAlive socket.reactor
+  let capability ← checked "transport claim" (← FFI.Reactor.transportClaim socket.reactor.handle socket.token)
+  if capability == 0 then throw (IO.userError "transport claim returned a null capability")
+  return ⟨⟨socket.reactor, socket.token⟩, capability, 1⟩
+
+/-- Complete only after the TLS engine's handshake and outgoing wire fence. -/
+def Wire.ready (wire : Wire .tls_handshaking) : IO (Wire .tls_ready) := do
+  ensureWire wire
+  checkedZero "transport ready" (← FFI.Reactor.transportReady wire.socket.reactor.handle wire.socket.token wire.capability)
+  return ⟨⟨wire.socket.reactor, wire.socket.token⟩, wire.capability, 2⟩
+
+def Wire.isLive (wire : Wire state) : IO Bool := do
+  unless ← wire.id.isLive wire.socket.reactor do return false
+  ensureWire wire
+  return true
+
+def Wire.tryWrite (wire : Wire state) (buffer : Buffer) (offset length : UInt32)
+    (operation : UInt64 := 0) : IO Submission := do
+  ensureWire wire
+  ensureAlive buffer.reactor
+  if wire.socket.reactor.handle != buffer.reactor.handle then throw (IO.userError "transport buffer belongs to another reactor")
+  let raw ← FFI.Reactor.transportWrite wire.socket.reactor.handle wire.socket.token wire.capability buffer.token offset length operation
+  let result := LeanNet.Errno.decode raw
+  if result < 0 && (← LeanNet.Errno.isWouldBlock result) then return .wouldBlock
+  checkedZero "transport write" raw
+  return .queued
+
+def Wire.write (wire : Wire state) (buffer : Buffer) (offset length : UInt32)
+    (operation : UInt64 := 0) : IO Unit := do
+  match ← wire.tryWrite buffer offset length operation with
+  | .queued => pure ()
+  | .wouldBlock => throw (IO.userError "transport cipher write exhausted reserved credits")
+
+def Wire.setReadEnabled (wire : Wire state) (enabled : Bool) : IO Unit := do
+  ensureWire wire
+  checkedZero "transport read interest" (← FFI.Reactor.transportReadEnabled wire.socket.reactor.handle wire.socket.token wire.capability (if enabled then 1 else 0))
+
+def Wire.armTimer (wire : Wire state) (kind : UInt32) (deadlineMs : UInt64) : IO Unit := do
+  ensureWire wire
+  checkedZero "transport arm timer" (← FFI.Reactor.transportArmTimer wire.socket.reactor.handle wire.socket.token wire.capability kind deadlineMs)
+
+def Wire.cancelTimer (wire : Wire state) (kind : UInt32) : IO Unit := do
+  ensureWire wire
+  checkedZero "transport cancel timer" (← FFI.Reactor.transportCancelTimer wire.socket.reactor.handle wire.socket.token wire.capability kind)
+
+def Wire.closeAfterWrites (wire : Wire state) : IO Unit := do
+  ensureWire wire
+  checkedZero "transport drain close" (← FFI.Reactor.transportDrain wire.socket.reactor.handle wire.socket.token wire.capability)
+
+def Wire.close (wire : Wire state) : IO Unit := do
+  ensureWire wire
+  checkedZero "transport abort" (← FFI.Reactor.transportAbort wire.socket.reactor.handle wire.socket.token wire.capability)
+
+/-- Acquire on the loop; native consumers retain their own reference. -/
+def Reactor.waker (reactor : Reactor) : IO Waker := do
+  ensureAlive reactor
+  let handle ← checked "waker acquire" (← FFI.Reactor.wakerAcquire reactor.handle)
+  if handle == 0 then throw (IO.userError "waker acquire returned a null handle")
+  return ⟨handle, ← IO.mkRef true⟩
+
+def Waker.wake (waker : Waker) : IO Unit := do
+  unless ← waker.alive.get do throw (IO.userError "waker is released")
+  checkedZero "waker notify" (← FFI.Reactor.wakerWake waker.handle)
+
+def Waker.release (waker : Waker) : IO Unit := do
+  unless ← waker.alive.get do throw (IO.userError "waker is released")
+  waker.alive.set false
+  checkedZero "waker release" (← FFI.Reactor.wakerRelease waker.handle)
+
+def Reactor.withWaker (reactor : Reactor) (use : Waker → IO α) : IO α := do
+  let waker ← reactor.waker
+  try use waker finally waker.release
+
+
 /-- Queue an owned slice. Backpressure preserves the caller's buffer lease. -/
 def Socket.tryWrite (socket : Socket .connected) (buffer : Buffer)
     (offset length : UInt32) (operation : UInt64 := 0) : IO Submission := do
@@ -227,6 +325,9 @@ inductive Event where
   | closed (socket : Socket .closed)
   | error (socket : SocketId) (flags : UInt32) (code : Int)
   | wake
+  | wireRead (socket : SocketId) (buffer : Buffer) (offset length : UInt32)
+  | wireEOF (socket : SocketId)
+  | wireTimer (socket : SocketId) (kind : UInt32)
 
 inductive PollResult where
   | interrupted
@@ -250,10 +351,17 @@ def Reactor.event (reactor : Reactor) (index : UInt32) : IO Event := do
   if result < 0 then throw (← LeanNet.Errno.error "reactor event" result)
   match event.kind.toNat with
   | 1 => return .accepted ⟨reactor, event.connection⟩
-  | 2 => return .read ⟨reactor, event.connection⟩ ⟨reactor, event.buffer⟩ event.offset event.length
+  | 2 =>
+    if (event.flags &&& 8) != 0 then
+      return .wireRead ⟨reactor.handle, event.connection⟩ ⟨reactor, event.buffer⟩ event.offset event.length
+    return .read ⟨reactor, event.connection⟩ ⟨reactor, event.buffer⟩ event.offset event.length
   | 3 => return .written ⟨reactor.handle, event.connection⟩ event.operation result.toNat
-  | 4 => return .eof ⟨reactor, event.connection⟩
-  | 5 => return .timer ⟨reactor, event.connection⟩ event.operation.toUInt32
+  | 4 =>
+    if (event.flags &&& 8) != 0 then return .wireEOF ⟨reactor.handle, event.connection⟩
+    return .eof ⟨reactor, event.connection⟩
+  | 5 =>
+    if (event.flags &&& 8) != 0 then return .wireTimer ⟨reactor.handle, event.connection⟩ event.operation.toUInt32
+    return .timer ⟨reactor, event.connection⟩ event.operation.toUInt32
   | 6 => return .closed ⟨reactor, event.connection⟩
   | 8 => return .wake
   | _ => throw (IO.userError "reactor returned an invalid completion kind")

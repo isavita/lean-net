@@ -79,7 +79,7 @@ private def typedAcquireChecks : IO Unit :=
     catch _ => pure true
     check invalid "typed invalid acquisition must remain an error"
 
-def main : IO Unit := do
+private def coreMain : IO Unit := do
   for native in [FFI.errnoEpipe, FFI.errnoEnotconn, FFI.errnoEtimedout,
       FFI.errnoEconnrefused, FFI.errnoEconnreset, FFI.errnoEconnaborted,
       FFI.errnoEnetreset, FFI.errnoEnetdown, FFI.errnoEnetunreach,
@@ -163,3 +163,81 @@ def main : IO Unit := do
     zero "free single-event reactor" (FFI.Reactor.free small)
   typedAcquireChecks
   IO.println "native reactor pool, timer and generation tests passed"
+
+
+private def mustReject (label : String) (action : IO α) : IO Unit := do
+  let failed ← try let _ ← action; pure false catch _ => pure true
+  check failed label
+
+private def wireMain (port : UInt16) : IO Unit := do
+  let held ← IO.mkRef (none : Option Reactor.Waker)
+  Reactor.withReactor {
+    maxConnections := 4, maxEvents := 8, maxWrites := 4,
+    buffers4k := 4, buffers16k := 0, buffers64k := 0, timerTickMs := 1 } fun reactor => do
+    let waker ← reactor.waker
+    held.set (some waker)
+    waker.wake
+    let _ ← reactor.listen "127.0.0.1" port
+    IO.println "READY"
+    let mut wire : Option (Reactor.Wire .tls_ready) := none
+    let mut received := 0
+    let mut closed := false
+    for _ in [:500] do
+      match ← reactor.poll 10 with
+      | .interrupted => pure ()
+      | .completions count =>
+        -- Decode before claim to exercise immutable same-batch connected aliases.
+        let mut batch := #[]
+        for i in [:count] do batch := batch.push (← reactor.event i.toUInt32)
+        for event in batch do
+          match event with
+          | .accepted socket =>
+            let handshake ← socket.claim
+            mustReject "duplicate transport claim accepted" socket.claim
+            mustReject "stale connected read control accepted" (socket.setReadEnabled false)
+            let ready ← handshake.ready
+            mustReject "old handshaking alias survived ready" (handshake.armTimer 3 0)
+            mustReject "duplicate ready accepted" handshake.ready
+            ready.armTimer 3 ((← Reactor.nowMs) + 3000)
+            ready.cancelTimer 3
+            check (← ready.isLive) "ready Wire not live"
+            wire := some ready
+          | .read socket buffer offset length =>
+            mustReject "same-batch raw write bypassed claim" (socket.write buffer offset length)
+            let some ready := wire | throw (IO.userError "read before accepted wire")
+            Reactor.withBuffer buffer fun buffer => ready.write buffer offset length 77
+            received := received + length.toNat
+          | .wireRead id buffer offset length =>
+            let some ready := wire | throw (IO.userError "ciphertext before ready Wire")
+            check (id == ready.id) "ciphertext identity changed"
+            Reactor.withBuffer buffer fun buffer => ready.write buffer offset length 77
+            received := received + length.toNat
+          | .eof socket =>
+            mustReject "same-batch plaintext drain bypassed claim" socket.closeAfterWrites
+            let some ready := wire | throw (IO.userError "EOF before accepted wire")
+            ready.closeAfterWrites
+          | .wireEOF id =>
+            let some ready := wire | throw (IO.userError "cipher EOF before ready wire")
+            check (id == ready.id) "cipher EOF identity changed"
+            ready.closeAfterWrites
+          | .closed _ => closed := true
+          | .timer .. | .wireTimer .. => throw (IO.userError "unexpected wire timer")
+          | .error .. => throw (IO.userError "unexpected wire error")
+          | .written .. | .wake => pure ()
+      if closed then break
+    check (closed && received == 5) "wire fixture failed to drain binary input"
+    if let some ready := wire then check (!(← ready.isLive)) "closed Wire still live"
+  let some waker ← held.get | throw (IO.userError "missing retained waker")
+  mustReject "late waker reached destroyed reactor" waker.wake
+  waker.release
+  mustReject "waker double release accepted" waker.release
+  IO.println "typed wire and retained waker tests passed"
+
+def main (args : List String) : IO Unit := do
+  match args with
+  | ["wire", port] =>
+    let some number := port.toNat? | throw (IO.userError "invalid port")
+    if number == 0 || number > 65535 then throw (IO.userError "invalid port")
+    wireMain (UInt16.ofNat number)
+  | [] => coreMain
+  | _ => throw (IO.userError "unexpected reactor fixture arguments")

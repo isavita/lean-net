@@ -12,6 +12,7 @@
 #endif
 #include "socket_shim.h"
 #include "windows_error.h"
+#include "socket_windows_bridge.h"
 #include <limits.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -83,6 +84,14 @@ static int ln_socket_lookup(int64_t token, SOCKET *socket, int *nonblocking) {
   }
   ReleaseSRWLockShared(&ln_sockets_lock);
   return valid ? 0 : EBADF;
+}
+int ln_windows_socket_borrow(int64_t token, uintptr_t *out, int *nonblocking) {
+  if (!out) return -EINVAL;
+  SOCKET socket = INVALID_SOCKET;
+  int error = ln_socket_lookup(token, &socket, nonblocking);
+  if (error) return -error;
+  *out = (uintptr_t)socket;
+  return 0;
 }
 static int64_t ln_socket_register(SOCKET socket, int nonblocking) {
   int64_t result = -EMFILE;

@@ -3,6 +3,7 @@ import LeanNet.Reactor.Basic
 import LeanNet.HTTP1.Handlers
 import LeanNet.HTTP2.Connection
 import LeanNet.HTTP.WorkerPool
+import LeanNet.HTTP.Transport
 
 namespace LeanNet.HTTP
 
@@ -30,7 +31,7 @@ private inductive Protocol where
 
 private structure InputChunk where
   view : ByteSlice
-  lease : Option Reactor.Buffer := none
+  release : IO Unit := pure ()
   arrived : UInt64 := 0
 
 private structure Output where
@@ -54,7 +55,7 @@ private structure OutputSlot where
   flight : Option Flight := none
 
 private structure Client where
-  socket : Reactor.Socket .connected
+  socket : Transport.Endpoint
   protocol : Protocol := .detect 0
   inputFront : List InputChunk := []
   inputBack : List InputChunk := []
@@ -87,6 +88,7 @@ private structure Driver where
   group : Reactor.Group
   config : ReactorServerConfig
   handlers : Handlers
+  transport : Transport.Worker
   clientLimit : Nat
   state : IO.Ref WorkerState
 
@@ -103,7 +105,7 @@ private def normalizedInput (client : Client) : Client :=
 
 private def releaseInput (client : Client) : IO Unit := do
   for chunk in client.inputFront ++ client.inputBack do
-    if let some lease := chunk.lease then lease.release
+    chunk.release
 
 private def Driver.consume (driver : Driver) (id : Reactor.SocketId) (count : Nat) : IO Unit := do
   let some current ← driver.client? id | return
@@ -115,7 +117,7 @@ private def Driver.consume (driver : Driver) (id : Reactor.SocketId) (count : Na
     if count > chunk.view.length then throw (IO.userError "HTTP input cursor exceeds retained slice")
     if count == chunk.view.length then
       driver.put id { client with inputFront := rest, inputBytes := client.inputBytes - count }
-      if let some lease := chunk.lease then lease.release
+      chunk.release
     else
       driver.put id { client with
         inputFront := ({ chunk with view := chunk.view.drop count } :: rest)
@@ -136,8 +138,7 @@ private def Driver.closeNow (driver : Driver) (id : Reactor.SocketId) : IO Unit 
   finally
     if let some pipe := client.pipe then
       try pipe.onClose catch _ => pure ()
-    let _ ← client.socket.close (by decide)
-    pure ()
+    client.socket.close
 
 private def Driver.forget (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
   let some client ← driver.client? id | return
@@ -524,28 +525,39 @@ private def Driver.pump (driver : Driver) (id : Reactor.SocketId) : IO Unit := d
       if client.closeWhenQueued && client.outputs.isEmpty then driver.beginDrain id
     if !advanced then return
 
-private def Driver.accepted (driver : Driver) (socket : Reactor.Socket .connected) : IO Unit := do
+private def Driver.accepted (driver : Driver) (socket : Transport.Endpoint)
+    (protocol : Transport.Protocol) : IO Unit := do
   let id := socket.id
+  unless ← id.isLive driver.reactor do return
   let state ← driver.state.get
   if state.clients.contains id then throw (IO.userError "duplicate native HTTP accept identity")
   let value ← deadline state.now driver.config.server.idleTimeoutMs
   socket.armTimer 0 value
-  driver.put id { socket, idleDeadline := some value }
+  let protocol := match protocol with
+    | .detect => Protocol.detect 0
+    | .http1 => .http1 ((Machine.State.new driver.config.machine).setDate state.date)
+    | .http2 => .http2 ((HTTP2.Connection.new.setTime state.now.toNat).setDate state.date)
+  driver.put id { socket, protocol, idleDeadline := some value }
+  if let .http2 _ := protocol then
+    driver.appendOutput id #[ByteSlice.full HTTP2.Connection.initialSettings]
 
-private def Driver.read (driver : Driver) (socket : Reactor.Socket .connected)
-    (buffer : Reactor.Buffer) (offset length : UInt32) : IO Unit := do
-  let id := socket.id
-  let some client ← driver.client? id | buffer.release; return
-  if client.closing || client.closeWhenQueued then buffer.release; return
-  let bytes ← try buffer.view catch error => buffer.release; throw error
+private def Driver.read (driver : Driver) (id : Reactor.SocketId)
+    (buffer : Reactor.Buffer) (offset length : UInt32) (release : IO Unit) : IO Unit := do
+  unless ← id.isLive driver.reactor do
+    release
+    driver.forget id
+    return
+  let some client ← driver.client? id | release; return
+  if client.closing || client.closeWhenQueued then release; return
+  let bytes ← try buffer.view catch error => release; throw error
   let some view := ByteSlice.ofRange? bytes offset.toNat length.toNat
-    | buffer.release; throw (IO.userError "native HTTP read range is invalid")
+    | release; throw (IO.userError "native HTTP read range is invalid")
   if view.length > driver.config.maxInputBytes - client.inputBytes then
-    buffer.release
+    release
     driver.closeNow id
     return
   let state ← driver.state.get
-  let chunk : InputChunk := { view, lease := some buffer, arrived := state.now }
+  let chunk : InputChunk := { view, release, arrived := state.now }
   driver.put id { client with
     inputBack := chunk :: client.inputBack
     inputBytes := client.inputBytes + view.length
@@ -553,7 +565,7 @@ private def Driver.read (driver : Driver) (socket : Reactor.Socket .connected)
   if let some client ← driver.client? id then
     if client.idleDeadline.isSome then
       let value ← deadline state.now driver.config.server.idleTimeoutMs
-      socket.armTimer 0 value
+      client.socket.armTimer 0 value
       driver.put id { client with idleDeadline := some value }
   driver.pump id
 
@@ -610,17 +622,16 @@ private def Driver.timer (driver : Driver) (id : Reactor.SocketId) (kind : UInt3
       | .detect _ => driver.closeNow id
       | .raw => pure ()
 
-private def Driver.event (driver : Driver) : Reactor.Event → IO Unit
-  | .accepted socket => driver.accepted socket
-  | .read socket buffer offset length => driver.read socket buffer offset length
+private def Driver.event (driver : Driver) : Transport.Event → IO Unit
+  | .ready socket protocol => driver.accepted socket protocol
+  | .read id buffer offset length release => driver.read id buffer offset length (release.getD buffer.release)
   | .written id operation count => driver.written id operation count
-  | .closed socket => driver.closed socket.id
-  | .eof socket => do
-    let id := socket.id
+  | .closed id => driver.closed id
+  | .eof id => do
     if let some client ← driver.client? id then
       driver.put id { client with peerEOF := true, reading := false, kick := true }
       driver.pump id
-  | .timer socket kind => driver.timer socket.id kind
+  | .timer id kind => driver.timer id kind
   | .wake => pure ()
   | .error id flags code => do
     if (flags &&& 6) != 0 then throw (← Errno.error "HTTP native setup/close" code)
@@ -666,8 +677,11 @@ private def Driver.hasWork (driver : Driver) : IO Bool := do
 private partial def Driver.loop (driver : Driver) : IO Unit := do
   if ← driver.group.stopping then return
   driver.refresh
+  for event in (← driver.transport.poll) do driver.event event
   driver.pumpAll
-  let timeout : Int32 := if ← driver.hasWork then 0 else 100
+  let ready ← driver.hasWork
+  let providerReady ← driver.transport.hasWork
+  let timeout : Int32 := if ready || providerReady then 0 else 100
   match ← driver.reactor.poll timeout with
   | .interrupted => pure ()
   | .completions count =>
@@ -675,9 +689,11 @@ private partial def Driver.loop (driver : Driver) : IO Unit := do
     -- The native batch can already contain historical write records. CLOSED
     -- first reclaims known owners; explicit liveness handles a deferred CLOSED.
     let mut events := #[]
-    for index in [:count] do events := events.push (← driver.reactor.event index.toUInt32)
+    for index in [:count] do
+      let native ← driver.reactor.event index.toUInt32
+      events := events ++ (← driver.transport.event native)
     for event in events do
-      if let .closed socket := event then driver.closed socket.id
+      if let .closed id := event then driver.closed id
     for event in events do
       match event with
       | .closed _ => pure ()
@@ -694,17 +710,23 @@ where
       let buffer ← reactor.acquire 4096
       Reactor.withBuffer buffer fun buffer => go n (slots.push { buffer })
 
-private def runWorker (factory : Nat → IO Handlers) (config : ReactorServerConfig)
+/-- Bracket transport resources and application callbacks together on their
+    owning worker. This also supports diagnostics without sharing handler state. -/
+abbrev WithWorkerResources := Nat → Nat → Reactor.Reactor →
+  (Transport.Worker → Handlers → IO Unit) → IO Unit
+
+private def runWorker (resources : WithWorkerResources) (config : ReactorServerConfig)
     (workerId clientLimit : Nat) (reactor : Reactor.Reactor) (group : Reactor.Group) : IO Unit := do
-  let pool := config.native.buffers4k.toNat + config.native.buffers16k.toNat + config.native.buffers64k.toNat
-  let count := min config.outputBuffers (min (clientLimit * 4) (min config.native.maxWrites.toNat (pool - 1)))
-  if count == 0 || count > 65535 then throw (IO.userError "HTTP requires reserved output and receive buffer credits")
-  if count < clientLimit then
-    throw (IO.userError "HTTP output buffer credits must cover every admitted client")
-  withOutputSlots reactor count fun slots => do
-    let handlers ← factory workerId
+  resources workerId clientLimit reactor fun transport handlers => do
+   let pool := config.native.buffers4k.toNat + config.native.buffers16k.toNat + config.native.buffers64k.toNat
+   let available := pool - transport.reservedBuffers
+   let count := min config.outputBuffers (min (clientLimit * 4) (min config.native.maxWrites.toNat (available - 1)))
+   if count == 0 || count > 65535 then throw (IO.userError "HTTP requires reserved output and receive buffer credits")
+   if count < clientLimit then
+     throw (IO.userError "HTTP output buffer credits must cover every admitted client")
+   withOutputSlots reactor count fun slots => do
     let state ← IO.mkRef { slots : WorkerState }
-    let driver : Driver := { reactor, group, config, handlers, clientLimit, state }
+    let driver : Driver := { reactor, group, config, handlers, transport, clientLimit, state }
     try driver.loop
     finally
       let state ← driver.state.get
@@ -712,14 +734,28 @@ private def runWorker (factory : Nat → IO Handlers) (config : ReactorServerCon
 
 /-- Construct independent callbacks and state inside each dedicated worker.
     The global client limit is partitioned, rather than multiplied by workers. -/
-def serveFactory (factory : Nat → IO Handlers) (config : ReactorServerConfig := {})
+def serveWorkerFactory (resources : WithWorkerResources) (config : ReactorServerConfig := {})
     (host : String := "127.0.0.1") (port : UInt16 := 8080) : IO Unit := do
   if config.server.maxClients == 0 || config.server.idleTimeoutMs == 0 ||
       config.server.requestTimeoutMs == 0 || config.server.writeTimeoutMs == 0 ||
       config.outputBuffers == 0 || config.maxInputBytes == 0 || config.maxOutputBytes < 4096 ||
       config.workPerClient == 0 then throw (IO.userError "HTTP limits and timeouts must be positive")
   withWorkerPool host port config.workers config.server.maxClients config.native
-    (runWorker factory config)
+    (runWorker resources config)
+
+/-- Attach a transport bracket while constructing callbacks on each owner. -/
+def serveFactoryWithTransport (provider : Transport.WithWorker)
+    (factory : Nat → IO Handlers) (config : ReactorServerConfig := {})
+    (host : String := "127.0.0.1") (port : UInt16 := 8080) : IO Unit :=
+  serveWorkerFactory (fun workerId maxClients reactor use =>
+    provider workerId maxClients reactor fun transport => do
+      let handlers ← factory workerId
+      use transport handlers) config host port
+
+/-- Cleartext HTTP uses the same controller as negotiated TLS transports. -/
+def serveFactory (factory : Nat → IO Handlers) (config : ReactorServerConfig := {})
+    (host : String := "127.0.0.1") (port : UInt16 := 8080) : IO Unit :=
+  serveFactoryWithTransport Transport.withPlainWorker factory config host port
 
 /-- Compatibility callbacks may close over mutable application state. Keep
     their original single-worker ownership; multicore callers use the factory. -/

@@ -47,12 +47,15 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   let header ← inputTextFile (pkg.dir / "c" / "socket_shim.h")
   let reactorHeader ← inputTextFile (pkg.dir / "c" / "reactor.h")
   let ffiHeader ← inputTextFile (pkg.dir / "c" / "reactor_ffi.h")
+  let bridgeHeader ← inputTextFile (pkg.dir / "c" / "reactor_lean.h")
+  let transportImpl ← inputTextFile (pkg.dir / "c" / "reactor_transport_impl.h")
   let groupHeader ← inputTextFile (pkg.dir / "c" / "reactor_group.h")
   let groupFFI ← inputTextFile (pkg.dir / "c" / "reactor_group_ffi.h")
   let mut src ← inputTextFile (pkg.dir / "c" / "socket_shim.c")
   src := src.zipWith (fun source _ => source) header
   src := src.zipWith (fun source _ => source) reactorHeader
   src := src.zipWith (fun source _ => source) ffiHeader
+  src := src.zipWith (fun source _ => source) bridgeHeader
   src := src.zipWith (fun source _ => source) groupHeader
   src := src.zipWith (fun source _ => source) groupFFI
   if System.Platform.isWindows then
@@ -60,9 +63,12 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
     src := src.zipWith (fun source _ => source) windows
     let errorHeader ← inputTextFile (pkg.dir / "c" / "windows_error.h")
     src := src.zipWith (fun source _ => source) errorHeader
+    let windowsBridge ← inputTextFile (pkg.dir / "c" / "socket_windows_bridge.h")
+    src := src.zipWith (fun source _ => source) windowsBridge
   let backend := if System.Platform.isWindows then "reactor_windows.c" else "reactor_posix.c"
   let native ← inputTextFile (pkg.dir / "c" / backend)
   let mut native := native.zipWith (fun source _ => source) reactorHeader
+  native := native.zipWith (fun source _ => source) transportImpl
   if System.Platform.isWindows then
     let errorHeader ← inputTextFile (pkg.dir / "c" / "windows_error.h")
     native := native.zipWith (fun source _ => source) errorHeader

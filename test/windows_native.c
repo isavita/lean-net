@@ -322,6 +322,46 @@ static void test_echo_and_cancellation(void) {
   check(closesocket(client) == 0, "close canceled client");
   check(rn_free(reactor) == 0, "destructor drains pending AcceptEx");
 }
+static void test_legacy_borrow_bridge(void) {
+  uintptr_t borrowed = UINTPTR_MAX; int nonblocking = 7;
+  const int64_t invalid[] = {0, -1, INT64_MAX, INT64_C(0x10000)};
+  for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i)
+    check(ln_windows_socket_borrow(invalid[i], &borrowed, &nonblocking) == -EBADF && borrowed == UINTPTR_MAX && nonblocking == 7,
+          "borrow rejects invalid IDs without exposing or changing outputs");
+  check(ln_windows_socket_borrow(1, NULL, NULL) == -EINVAL, "borrow requires an output pointer");
+  SOCKET first = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  check(first != INVALID_SOCKET, "create legacy borrow socket");
+  int64_t stale = ln_socket_register(first, 0);
+  check(stale > 0 && ln_windows_socket_borrow(stale, &borrowed, &nonblocking) == 0 && borrowed == (uintptr_t)first && nonblocking == 0,
+        "borrow returns exact native SOCKET and blocking state");
+  check(result_i64(shim_set_nonblocking(stale, 1)) == 0 && ln_windows_socket_borrow(stale, &borrowed, &nonblocking) == 0 && borrowed == (uintptr_t)first && nonblocking == 1,
+        "borrow reflects actual successful nonblocking transition");
+  check(result_i64(shim_close(stale)) == 0 && ln_windows_socket_borrow(stale, &borrowed, NULL) == -EBADF,
+        "borrow rejects closed generations");
+  SOCKET next = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  check(next != INVALID_SOCKET, "create replacement legacy borrow socket");
+  int64_t current = ln_socket_register(next, 0);
+  check(current > 0 && current != stale && ln_windows_socket_borrow(stale, &borrowed, NULL) == -EBADF && ln_windows_socket_borrow(current, &borrowed, NULL) == 0 && borrowed == (uintptr_t)next,
+        "stale borrow never addresses a replacement socket");
+  uint32_t retired = (uint32_t)current & 0xffffu;
+  check(result_i64(shim_close(current)) == 0, "close replacement borrow socket");
+  AcquireSRWLockExclusive(&ln_sockets_lock);ln_sockets[retired].generation = 0x7ffe;ReleaseSRWLockExclusive(&ln_sockets_lock);
+  SOCKET final = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  check(final != INVALID_SOCKET, "create final legacy generation socket");
+  int64_t last = ln_socket_register(final, 0);
+  check(last > 0 && last <= INT_MAX && ((uint32_t)last >> 16) == 0x7fff && ln_windows_socket_borrow(last, &borrowed, NULL) == 0 && borrowed == (uintptr_t)final,
+        "last legacy generation remains positive and borrowable");
+  check(result_i64(shim_close(last)) == 0 && ln_windows_socket_borrow(last, &borrowed, NULL) == -EBADF,
+        "retired legacy generation cannot be borrowed");
+  /* Synthetic table-only handle proves high bits survive without depending on
+   * the OS's current handle-number allocation. It is never used for OS I/O. */
+  uintptr_t wide = UINT64_C(0x1234567800000042);
+  int64_t wide_token = ln_socket_register((SOCKET)wide, 1);
+  check(wide_token > 0 && ((uint32_t)wide_token & 0xffffu) != retired && ln_windows_socket_borrow(wide_token, &borrowed, &nonblocking) == 0 && borrowed == wide && nonblocking == 1,
+        "borrow preserves pointer-width handles and skips retired slots");
+  AcquireSRWLockExclusive(&ln_sockets_lock);ln_sockets[(uint32_t)wide_token & 0xffffu].used = 0;ReleaseSRWLockExclusive(&ln_sockets_lock);
+}
+
 static void test_legacy_and_handles(void) {
   lean_object *host = lean_mk_string("127.0.0.1");
   int64_t listener = result_i64(shim_tcp_listen(host, 0));
@@ -355,6 +395,8 @@ static void test_legacy_and_handles(void) {
         "legacy stale token cannot close reused socket");
   check(result_i64(shim_close(listener)) == 0, "legacy listener close");
   check(closesocket(client) == 0, "legacy peer close");
+
+  test_legacy_borrow_bridge();
 
   DWORD before = 0, after = 0;
   check(GetProcessHandleCount(GetCurrentProcess(), &before),
@@ -544,6 +586,66 @@ static void test_historical_write_liveness(void) {
   atomic_store(&track_native_allocations, 0);
   check(atomic_load(&native_allocations) == 0 && closesocket(peer) == 0 && rn_free(r) == 0, "liveness has no hot native allocations");
 }
+
+static void test_claimed_transport(void) {
+  rn_config options = {4,8,4,4,0,0,1}; rn_reactor *r = NULL; uint64_t listener = 0;
+  check(rn_new(&options,&r) == 0 && rn_listen(r,"127.0.0.1",0,0,&listener) == 0,"create claimed IOCP reactor");
+  SOCKET peer = connect_client(listener_port(r,listener)); uint64_t connection = accept_client(r), cap = 0, buffer = 0;
+  check(send(peer,"TLS",3,0) == 3,"send preclaim IOCP payload");
+  uint64_t end = rn_now_ms()+3000;
+  while (!buffer && rn_now_ms()<end) {
+    int count = rn_step(r,10); check(count>=0,"poll preclaim IOCP batch");
+    for (int i=0;i<count;++i) if (rn_event_at(r,(uint32_t)i)->kind == RN_READ) buffer = rn_event_at(r,(uint32_t)i)->buffer;
+  }
+  check(buffer != 0,"preclaim IOCP read returned");
+  atomic_store(&native_allocations,0); atomic_store(&track_native_allocations,1);
+  check(rn_transport_state(r,connection) == 0 && rn_transport_claim(r,connection,&cap) == 0 && cap != 0,"claim IOCP connection");
+  uint64_t duplicate = 0; uint32_t credits = r->free_write_count;
+  check(rn_transport_claim(r,connection,&duplicate) == -EALREADY && rn_transport_claim(r,listener,&duplicate) == -EINVAL,"duplicate/listener IOCP claims rejected");
+  check(rn_queue_write(r,connection,buffer,0,3,1) == -EACCES && rn_set_read_enabled(r,connection,0) == -EACCES && rn_arm_timer(r,connection,0,0) == -EACCES && rn_cancel_timer(r,connection,0) == -EACCES && rn_close_after_writes(r,connection) == -EACCES && rn_close_connection(r,connection) == -EACCES,"all IOCP stale plaintext aliases rejected");
+  check(r->free_write_count == credits && rn_transport_write(r,connection,cap+1,buffer,0,3,1) == -EACCES,"invalid IOCP capability preserves credits");
+  check(rn_transport_mode(r,connection,cap) == 1 && rn_transport_read_enabled(r,connection,cap,0) == 0 && rn_transport_arm_timer(r,connection,cap,3,rn_now_ms()+1000) == 0 && rn_transport_cancel_timer(r,connection,cap,3) == 0,"handshaking IOCP capability controls reads/timers");
+  check(rn_transport_ready(r,connection,cap) == 0 && rn_transport_mode(r,connection,cap) == 2 && rn_transport_ready(r,connection,cap) == -EALREADY,"IOCP ready transition one way");
+  check(rn_transport_write(r,connection,cap,buffer,0,3,991) == 0 && rn_buffer_release(r,buffer) == 0 && rn_transport_drain(r,connection,cap) == 0,"IOCP cipher write retains lease through drain");
+  unsigned written=0, closed=0; end=rn_now_ms()+3000;
+  while (!closed && rn_now_ms()<end) {
+    int count=rn_step(r,10);check(count>=0,"poll IOCP claimed drain");
+    for(int i=0;i<count;++i){const rn_event *event=rn_event_at(r,(uint32_t)i);
+      if(event->kind==RN_WRITTEN){check(event->operation==991 && !closed,"IOCP cipher completion before close");++written;}
+      if(event->kind==RN_CLOSED && event->connection==connection){check(written==1,"IOCP claimed close follows write");++closed;}
+    }
+  }
+  char received[3]; check(closed==1 && recv(peer,received,3,MSG_WAITALL)==3 && memcmp(received,"TLS",3)==0,"only guarded IOCP cipher bytes sent");
+  check(rn_transport_abort(r,connection,cap)<0,"closed IOCP capability rejected");
+  atomic_store(&track_native_allocations,0);
+  check(atomic_load(&native_allocations)==0 && closesocket(peer)==0 && rn_free(r)==0,"IOCP claim has no hot allocation or leaked port");
+}
+typedef struct retained_wake_race {rn_waker *waker; atomic_uint calls,canceled,stop;} retained_wake_race;
+static DWORD WINAPI retained_wake_thread(LPVOID argument) {
+  retained_wake_race *race=argument;
+  while(!atomic_load(&race->stop)){
+    int result=rn_waker_wake(race->waker);check(result==0 || result==-ECANCELED,"IOCP wake racing free stays defined");
+    if(result==-ECANCELED)atomic_store(&race->canceled,1);
+    atomic_fetch_add(&race->calls,1);SwitchToThread();
+  }
+  check(rn_waker_release(race->waker)==0,"native thread releases IOCP waker");return 0;
+}
+static void test_retained_waker(void) {
+  rn_config options={1,2,1,1,0,0,1};rn_reactor *r=NULL;rn_waker *w=NULL;
+  check(rn_new(&options,&r)==0 && rn_waker_acquire(r,&w)==0 && rn_waker_retain(w)==0,"retain original IOCP waker");
+  check(rn_waker_wake(w)==0 && rn_step(r,0)>=1,"retained IOCP waker notifies live loop");
+  HANDLE port=w->port_owner->handle;retained_wake_race race={.waker=w};
+  HANDLE thread=CreateThread(NULL,0,retained_wake_thread,&race,0,NULL);check(thread!=NULL,"start retained IOCP wake race");
+  while(atomic_load(&race.calls)<50)SwitchToThread();
+  check(rn_free(r)==0,"free IOCP reactor with retained waker");
+  check(PostQueuedCompletionStatus(port,0,RN_WAKE_KEY,NULL),"original IOCP handle retained after reactor free");
+  while(!atomic_load(&race.canceled))SwitchToThread();
+  atomic_store(&race.stop,1);check(WaitForSingleObject(thread,3000)==WAIT_OBJECT_0 && CloseHandle(thread),"join retained IOCP waker thread");
+  DWORD before,after;check(GetProcessHandleCount(GetCurrentProcess(),&before),"count retained IOCP handle");
+  check(rn_waker_wake(w)==-ECANCELED && rn_waker_release(w)==0,"closed IOCP waker cancels late wake");
+  check(GetProcessHandleCount(GetCurrentProcess(),&after) && after+1==before,"last waker ref closes original IOCP exactly once");
+}
+
 static void test_generation_retirement(void) {
   rn_config options = {1, 1, 1, 1, 0, 0, 1}; rn_reactor *r = NULL;
   check(rn_new(&options, &r) == 0, "create generation boundary reactor");
@@ -939,6 +1041,8 @@ int main(int argc, char **argv) {
     test_transport_pause_vectors();
     test_historical_write_liveness();
     test_generation_retirement();
+    test_claimed_transport();
+    test_retained_waker();
   } else if (argc == 2 && strcmp(argv[1], "--dispatch") == 0) {
     test_dispatch_validation();
     test_dispatch_capacity_one();

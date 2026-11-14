@@ -3,8 +3,9 @@
 A Lean 4 TCP and HTTP library under development. TCP echo and cleartext HTTP use
 the native epoll/kqueue/IOCP reactor. HTTP/1.0 and HTTP/1.1 use a pure connection
 machine; the listener also preserves prior-knowledge HTTP/2 (h2c). The separate
-`tls/` package currently retains its previous OpenSSL transport until the
-dedicated TLS-worker migration.
+`tls/` package uses dedicated native TLS workers connected to the reactor by
+bounded queues. TLS acceptance is tracked separately from the remaining HTTP/2
+and production gates.
 
 The expanded production brief is being implemented phase by phase.
 [The acceptance ledger](docs/production-roadmap.md) retains
@@ -102,9 +103,9 @@ retry policy; C does not retry interrupted syscalls. `close` is called once,
 never retried, and `EBADF` indicates a library defect. Socket resources are
 managed with explicit brackets rather than finalizers.
 
-Native echo and cleartext HTTP use a signal group that wakes and joins every
-dedicated worker before freeing native state. The legacy TLS transport retains
-its single-threaded scoped SIGINT handler. Unix listeners use `SO_REUSEADDR`; Windows uses
+Native echo, HTTP and TLS use a signal group that wakes and joins every
+dedicated worker before freeing native state. TLS threads are also joined while
+their reactor resources remain alive. Unix listeners use `SO_REUSEADDR`; Windows uses
 `SO_EXCLUSIVEADDRUSE`. Accepted sockets use `TCP_NODELAY` and platform SIGPIPE
 suppression by default.
 

@@ -14,6 +14,8 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <sched.h>
 #if defined(__linux__)
 #include <sys/epoll.h>
 #else
@@ -140,7 +142,9 @@ static void drain_completion_regression(rn_reactor *r, const struct sockaddr_in 
                 uint64_t late;
                 check(rn_acquire_buffer(r, 3, &late) == 0 && rn_buffer_copy(r, late, (const uint8_t *)"bad", 3) == 0, "acquire late-write lease");
                 unsigned free_writes = r->free_write_count;
-                check(rn_queue_write(r, event.connection, late, 0, 3, 67890) == -EPIPE, "new writes rejected after drain-close");
+                int live = rn_connection_live(r, event.connection);
+                int late_result = rn_queue_write(r, event.connection, late, 0, 3, 67890);
+                check(late_result == (live ? -EPIPE : -EBADF), "new writes rejected during drain or after immediate close");
                 lean_object *view = NULL;
                 check(r->free_write_count == free_writes && rn_buffer_view(r, late, &view) == 0 && lean_sarray_size(view) == 3, "rejected drain write preserves lease and credits");
                 check(rn_buffer_release(r, late) == 0, "release preserved late-write lease");
@@ -387,11 +391,73 @@ static void generation_retirement(void) {
     check(native_wait_calls == calls + 8, "resource exhaustion performs one native wait per poll");
     hot_path = 0; check(rn_free(r) == 0, "free retired reactor");
 }
+
+static void claimed_transport_regression(void) {
+    hot_path = 0;
+    rn_config config = {4, 8, 4, 4, 0, 0, 1}; rn_reactor *r = NULL; uint64_t listener = 0;
+    check(rn_new(&config, &r) == 0 && rn_listen(r, "127.0.0.1", 0, 0, &listener) == 0, "create claimed transport reactor");
+    int peer; uint64_t connection = connected_peer(r, listener, &peer), capability = 0;
+    check(send(peer, "TLS", 3, 0) == 3, "send before transport claim");
+    uint64_t buffer = 0;
+    for (unsigned n = 0; n < 100 && !buffer; ++n) {
+        int count = rn_step(r, 10); check(count >= 0, "poll preclaim returned batch");
+        for (int i = 0; i < count; ++i) if (rn_event_at(r, (uint32_t)i)->kind == RN_READ) buffer = rn_event_at(r, (uint32_t)i)->buffer;
+    }
+    check(buffer != 0, "preclaim read is returned"); hot_path = 1;
+    check(rn_transport_state(r,connection) == 0 && rn_transport_claim(r,connection,&capability) == 0 && capability != 0, "claim connected generation");
+    uint64_t duplicate = 0; unsigned credits = r->free_write_count;
+    check(rn_transport_claim(r,connection,&duplicate) == -EALREADY && rn_transport_claim(r,listener,&duplicate) == -EINVAL, "duplicate and listener claims rejected");
+    check(rn_queue_write(r,connection,buffer,0,3,1) == -EACCES && rn_set_read_enabled(r,connection,0) == -EACCES && rn_arm_timer(r,connection,0,0) == -EACCES && rn_cancel_timer(r,connection,0) == -EACCES && rn_close_after_writes(r,connection) == -EACCES && rn_close_connection(r,connection) == -EACCES, "all stale plaintext alias operations rejected");
+    check(r->free_write_count == credits && rn_transport_write(r,connection,capability + 1,buffer,0,3,1) == -EACCES, "bad capability consumes no write credits");
+    check(rn_transport_mode(r,connection,capability) == 1 && rn_transport_read_enabled(r,connection,capability,0) == 0 && rn_transport_arm_timer(r,connection,capability,3,rn_now_ms()+1000) == 0 && rn_transport_cancel_timer(r,connection,capability,3) == 0, "handshaking capability controls wire and timers");
+    check(rn_transport_ready(r,connection,capability) == 0 && rn_transport_mode(r,connection,capability) == 2 && rn_transport_ready(r,connection,capability) == -EALREADY, "ready transition is one-way");
+    check(rn_transport_write(r,connection,capability,buffer,0,3,991) == 0 && rn_buffer_release(r,buffer) == 0 && rn_transport_drain(r,connection,capability) == 0, "claimed ciphertext drain retains returned lease");
+    int written = 0, closed = 0;
+    for (unsigned n = 0; n < 100 && !closed; ++n) {
+        int count = rn_step(r,10); check(count >= 0, "poll claimed drain");
+        for (int i = 0; i < count; ++i) { const rn_event *event = rn_event_at(r,(uint32_t)i);
+            if (event->kind == RN_WRITTEN) { check(event->operation == 991 && !closed, "claimed write precedes close"); ++written; }
+            if (event->kind == RN_CLOSED && event->connection == connection) { check(written == 1, "claimed closure follows full write"); ++closed; }
+        }
+    }
+    char received[3]; check(closed == 1 && recv(peer,received,3,MSG_WAITALL) == 3 && memcmp(received,"TLS",3) == 0, "only guarded ciphertext reaches peer");
+    check(rn_transport_abort(r,connection,capability) < 0, "closed capability rejected");
+    hot_path = 0; check(close(peer) == 0 && rn_free(r) == 0, "free claimed transport reactor");
+}
+typedef struct waker_race { rn_waker *waker; atomic_uint calls, canceled, stop; } waker_race;
+static void *wake_until_stopped(void *argument) {
+    waker_race *race = argument;
+    while (!atomic_load(&race->stop)) {
+        int result = rn_waker_wake(race->waker);
+        check(result == 0 || result == -ECANCELED, "retained wake has a defined outcome during free");
+        if (result == -ECANCELED) atomic_store(&race->canceled,1);
+        atomic_fetch_add(&race->calls,1); sched_yield();
+    }
+    check(rn_waker_release(race->waker) == 0, "thread releases waker reference"); return NULL;
+}
+static void retained_waker_regression(void) {
+    hot_path = 0;
+    rn_config config = {1, 2, 1, 1, 0, 0, 1}; rn_reactor *r = NULL; rn_waker *w = NULL;
+    check(rn_new(&config,&r) == 0 && rn_waker_acquire(r,&w) == 0 && rn_waker_retain(w) == 0, "retain loop-independent waker");
+    check(rn_waker_wake(w) == 0 && rn_step(r,0) == 1 && rn_event_at(r,0)->kind == RN_WAKE, "retained waker reaches live reactor");
+    int read_fd = w->read_fd, write_fd = w->write_fd;
+    waker_race race = { .waker = w }; pthread_t thread;
+    check(pthread_create(&thread,NULL,wake_until_stopped,&race) == 0, "start native wake race");
+    while (atomic_load(&race.calls) < 50) sched_yield();
+    check(rn_free(r) == 0 && fcntl(read_fd,F_GETFD) >= 0 && fcntl(write_fd,F_GETFD) >= 0, "reactor free retains both pipe endpoints");
+    while (!atomic_load(&race.canceled)) sched_yield();
+    atomic_store(&race.stop,1); check(pthread_join(thread,NULL) == 0, "join late wake thread");
+    check(rn_waker_wake(w) == -ECANCELED && rn_waker_release(w) == 0, "late wake canceled then release last reference");
+    check(fcntl(read_fd,F_GETFD) < 0 && errno == EBADF && fcntl(write_fd,F_GETFD) < 0 && errno == EBADF, "last waker reference closes pipe exactly once");
+}
+
 int main(void) {
     lean_initialize_runtime_module();
     pause_and_vectors_regression();
     historical_write_liveness();
     generation_retirement();
+    claimed_transport_regression();
+    retained_waker_regression();
     const rn_config config = {16, 7, 32, 2, 1, 1, 1};
     rn_reactor *r = NULL;
     check(rn_new(&config, &r) == 0, "create reactor");

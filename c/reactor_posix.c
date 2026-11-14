@@ -40,10 +40,18 @@
 #define RN_ACCEPT_BUDGET 64u
 #define RN_GENERATION_MAX ((uint32_t)INT32_MAX)
 
+struct rn_waker {
+    atomic_uint references;
+    atomic_int closed;
+    int read_fd, write_fd;
+};
+
 typedef struct rn_conn {
     int fd;
     int pending_accept_fd;
     uint32_t generation;
+    uint64_t transport_cap;
+    uint8_t transport_mode;
     uint32_t head_write, tail_write;
     uint32_t next_closed;
     int close_error;
@@ -86,6 +94,7 @@ _Static_assert(ATOMIC_INT_LOCK_FREE == 2, "accept channels require lock-free ind
 struct rn_reactor {
     rn_config config;
     int queue_fd, wake_read, wake_write;
+    rn_waker *wake_owner;
     rn_conn *connections;
     uint32_t *free_connections, free_connection_count;
     uint32_t *paused_connections, paused_count;
@@ -166,6 +175,32 @@ static int rn_wake_fd(int fd) {
     ssize_t n = write(fd, &value, 1);
     int result = n == 1 || (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) ? 0 : n < 0 ? -errno : -EIO;
     errno = saved_errno; return result;
+}
+int rn_waker_retain(rn_waker *w) {
+    if (!w) return -EINVAL;
+    unsigned refs = atomic_load(&w->references);
+    do { if (!refs || refs == UINT_MAX) return -EOVERFLOW; }
+    while (!atomic_compare_exchange_weak(&w->references, &refs, refs + 1));
+    return 0;
+}
+int rn_waker_acquire(rn_reactor *r, rn_waker **out) {
+    if (!r || !out || !r->wake_owner) return -EINVAL;
+    int error = rn_waker_retain(r->wake_owner);
+    if (!error) *out = r->wake_owner;
+    return error;
+}
+int rn_waker_wake(rn_waker *w) {
+    if (!w) return -EINVAL;
+    if (atomic_load(&w->closed)) return -ECANCELED;
+    /* A racing reactor free cannot close the read end while this retained
+     * object exists, so write never raises SIGPIPE or targets a reused fd. */
+    return rn_wake_fd(w->write_fd);
+}
+int rn_waker_release(rn_waker *w) {
+    if (!w) return -EINVAL;
+    if (atomic_fetch_sub(&w->references, 1) != 1) return 0;
+    int error = rn_close_fd(w->write_fd), read_error = rn_close_fd(w->read_fd);
+    free(w); return error ? error : read_error;
 }
 static int rn_emit(rn_reactor *r, uint32_t kind, uint64_t conn, uint64_t operation,
                    uint64_t buffer, uint32_t offset, uint32_t length, int64_t result, uint32_t flags) {
@@ -262,7 +297,7 @@ static void rn_timer_remove(rn_reactor *r, uint32_t index) {
     t->active = 0; t->next = t->previous = RN_NONE;
     --r->active_timers;
 }
-int rn_arm_timer(rn_reactor *r, uint64_t token, uint32_t kind, uint64_t deadline) {
+static int rn_arm_timer_impl(rn_reactor *r, uint64_t token, uint32_t kind, uint64_t deadline) {
     rn_conn *c; int error = rn_conn_get(r, token, &c); (void)c;
     if (error) return error;
     if (kind >= RN_TIMER_KINDS || deadline > INT64_MAX) return -EINVAL;
@@ -276,7 +311,7 @@ int rn_arm_timer(rn_reactor *r, uint64_t token, uint32_t kind, uint64_t deadline
     if (t->next != RN_NONE) r->timers[t->next].previous = index;
     r->wheel[bucket] = index; ++r->active_timers; return 0;
 }
-int rn_cancel_timer(rn_reactor *r, uint64_t token, uint32_t kind) {
+static int rn_cancel_timer_impl(rn_reactor *r, uint64_t token, uint32_t kind) {
     rn_conn *c; int error = rn_conn_get(r, token, &c); (void)c;
     if (error) return error;
     if (kind >= RN_TIMER_KINDS) return -EINVAL;
@@ -289,7 +324,7 @@ static void rn_write_release(rn_reactor *r, uint32_t index) {
     rn_buffer_free_candidate(r, rn_index(w->buffer));
     w->active = 0; r->free_writes[r->free_write_count++] = index;
 }
-int rn_close_connection(rn_reactor *r, uint64_t token) {
+static int rn_close_connection_impl(rn_reactor *r, uint64_t token) {
     rn_conn *c; int error = rn_conn_get(r, token, &c);
     if (error) return error;
     uint32_t index = rn_index(token);
@@ -378,10 +413,10 @@ int rn_listen(rn_reactor *r, const char *host, uint16_t port, int reuse_port, ui
     if (error) return error;
     error = rn_bind(r, token, host, port, reuse_port);
     if (!error) error = rn_start_listening(r, token, 4096);
-    if (error) { int closed = rn_close_connection(r, token); return closed ? closed : error; }
+    if (error) { int closed = rn_close_connection_impl(r, token); return closed ? closed : error; }
     *out = token; return 0;
 }
-int rn_queue_write(rn_reactor *r, uint64_t token, uint64_t buffer, uint32_t offset, uint32_t length, uint64_t operation) {
+static int rn_queue_write_impl(rn_reactor *r, uint64_t token, uint64_t buffer, uint32_t offset, uint32_t length, uint64_t operation) {
     rn_conn *c; rn_buffer *b;
     int error = rn_conn_get(r, token, &c); if (error) return error;
     error = rn_buffer_get(r, buffer, &b); if (error) return error;
@@ -408,15 +443,15 @@ int rn_queue_write(rn_reactor *r, uint64_t token, uint64_t buffer, uint32_t offs
     return 0;
 }
 
-int rn_close_after_writes(rn_reactor *r, uint64_t token) {
+static int rn_close_after_writes_impl(rn_reactor *r, uint64_t token) {
     rn_conn *c; int error = rn_conn_get(r, token, &c);
     if (error) return error;
     if (c->state != 4) return -EINVAL;
-    if (c->head_write == RN_NONE) return rn_close_connection(r, token);
+    if (c->head_write == RN_NONE) return rn_close_connection_impl(r, token);
     c->drain_close = 1;
     return rn_interest(r, rn_index(token), 2);
 }
-int rn_set_read_enabled(rn_reactor *r, uint64_t token, int enabled) {
+static int rn_set_read_enabled_impl(rn_reactor *r, uint64_t token, int enabled) {
     if (r == NULL || (enabled != 0 && enabled != 1)) return -EINVAL;
     rn_conn *c; int error = rn_conn_get(r, token, &c);
     if (error) return error;
@@ -538,7 +573,7 @@ static int rn_adopt_accepts(rn_reactor *r) {
         atomic_store_explicit(&q->tail, rn_accept_next(q, tail), memory_order_seq_cst);
         error = rn_interest(r, rn_index(token), 1);
         if (error) {
-            int closed = rn_close_connection(r, token);
+            int closed = rn_close_connection_impl(r, token);
             (void)rn_emit(r, RN_ERROR, token, 0, 0, 0, 0, closed ? closed : error,
                           closed ? RN_CLOSE_ERROR : RN_SETUP_ERROR);
         } else {
@@ -604,7 +639,7 @@ static int rn_accept_ready(rn_reactor *r, uint32_t index) {
         if (allocated) { int closed = rn_close_fd(fd); return closed ? closed : allocated; }
         rn_conn *c = &r->connections[rn_index(token)]; c->fd = fd; c->state = 4;
         error = rn_interest(r, rn_index(token), 1);
-        if (error) { int closed = rn_close_connection(r, token); return closed ? closed : error; }
+        if (error) { int closed = rn_close_connection_impl(r, token); return closed ? closed : error; }
         int emitted = rn_emit(r, RN_ACCEPTED, token, listener_token, 0, 0, 0, 0, 0);
         if (emitted) return emitted;
     }
@@ -632,7 +667,7 @@ static int rn_read_ready(rn_reactor *r, uint32_t index) {
             if (e == EAGAIN || e == EWOULDBLOCK) return 0;
             error = rn_emit(r, RN_ERROR, token, 0, 0, 0, 0, -e, 0);
             if (error) return error;
-            if (e != EINTR) return rn_close_connection(r, token);
+            if (e != EINTR) return rn_close_connection_impl(r, token);
             return 0;
         }
         lean_sarray_set_size(b->bytes, (size_t)n);
@@ -676,14 +711,14 @@ static int rn_write_ready(rn_reactor *r, uint32_t index) {
             rn_write *w = &r->writes[c->head_write];
             int error = rn_emit(r, RN_ERROR, token, w->operation, 0, 0, 0, -e, 0);
             if (error) return error;
-            if (e != EINTR) return rn_close_connection(r, token);
+            if (e != EINTR) return rn_close_connection_impl(r, token);
             return 0;
         }
         if ((total && n == 0) || (size_t)n > total) {
             rn_write *w = &r->writes[c->head_write];
             int error = rn_emit(r, RN_ERROR, token, w->operation, 0, 0, 0, -EIO, 0);
             if (error) return error;
-            return rn_close_connection(r, token);
+            return rn_close_connection_impl(r, token);
         }
         size_t remaining = (size_t)n;
         for (uint32_t completed = 0; completed < count && c->head_write != RN_NONE; ++completed) {
@@ -700,7 +735,7 @@ static int rn_write_ready(rn_reactor *r, uint32_t index) {
         }
     }
     if (c->head_write == RN_NONE) {
-        if (c->drain_close) return rn_close_connection(r, token);
+        if (c->drain_close) return rn_close_connection_impl(r, token);
         return rn_interest(r, index, (uint8_t)(c->interest & 1u));
     }
     return 0;
@@ -878,7 +913,7 @@ int rn_step(rn_reactor *r, int timeout_ms) {
             if (getsockopt(c->fd, SOL_SOCKET, SO_ERROR, &e, &length) < 0) e = errno;
             if (e) {
                 (void)rn_emit(r, RN_ERROR, token, 0, 0, 0, 0, -e, 0);
-                error = rn_close_connection(r, token); if (error) return rn_step_failed(r, error);
+                error = rn_close_connection_impl(r, token); if (error) return rn_step_failed(r, error);
                 continue;
             }
         }
@@ -949,6 +984,7 @@ int rn_set_accept_targets(rn_reactor *acceptor, rn_reactor *const *workers,
 int rn_free(rn_reactor *r) {
     if (r == NULL) return -EINVAL;
     int first_error = 0;
+    if (r->wake_owner) atomic_store(&r->wake_owner->closed, 1);
 #if defined(__APPLE__)
     if (r->accept_source) {
         rn_accept_queue *q = r->accept_source;
@@ -974,8 +1010,9 @@ int rn_free(rn_reactor *r) {
             }
         }
     }
-    int fds[3] = {r->wake_read, r->wake_write, r->queue_fd};
+    int fds[3] = {r->wake_owner ? -1 : r->wake_read, r->wake_owner ? -1 : r->wake_write, r->queue_fd};
     for (uint32_t i = 0; i < 3; ++i) if (fds[i] >= 0) { int error = rn_close_fd(fds[i]); if (error && !first_error) first_error = error; }
+    if (r->wake_owner) { int error = rn_waker_release(r->wake_owner); if (error && !first_error) first_error = error; }
     if (r->buffers != NULL) for (uint32_t i = 0; i < r->buffer_count; ++i) if (r->buffers[i].bytes) lean_dec(r->buffers[i].bytes);
     free(r->connections); free(r->free_connections); free(r->paused_connections); free(r->buffers); free(r->free_buffers);
     free(r->writes); free(r->free_writes); free(r->timers); free(r->events); free(r->native_events); free(r);
@@ -1018,6 +1055,10 @@ int rn_new(const rn_config *config, rn_reactor **out) {
     int pipe_fds[2];
     if (pipe(pipe_fds) < 0) { int error = -errno; (void)rn_free(r); return error; }
     r->wake_read = pipe_fds[0]; r->wake_write = pipe_fds[1];
+    r->wake_owner = calloc(1, sizeof(*r->wake_owner));
+    if (!r->wake_owner) { (void)rn_free(r); return -ENOMEM; }
+    r->wake_owner->read_fd = r->wake_read; r->wake_owner->write_fd = r->wake_write;
+    atomic_init(&r->wake_owner->references, 1); atomic_init(&r->wake_owner->closed, 0);
     int error = rn_nonblocking(r->wake_read);
     if (!error) error = rn_nonblocking(r->wake_write);
     if (error) { (void)rn_free(r); return error; }
@@ -1040,4 +1081,35 @@ int rn_new(const rn_config *config, rn_reactor **out) {
     if (error) { (void)rn_free(r); return error; }
     *out = r; return 0;
 }
+static int rn_transport_access(rn_reactor *r, uint64_t token, uint64_t capability, int plain) {
+    if (!r) return -EINVAL;
+    rn_conn *c; int error = rn_conn_get(r, token, &c); if (error) return error;
+    if (plain) return c->transport_mode ? -EACCES : 0;
+    return c->state == 4 && c->transport_mode && capability && c->transport_cap == capability ? 0 : -EACCES;
+}
+int rn_transport_state(rn_reactor *r, uint64_t token) {
+    if (!r) return -EINVAL;
+    rn_conn *c; int error = rn_conn_get(r, token, &c); if (error) return error;
+    return c->transport_mode;
+}
+int rn_transport_claim(rn_reactor *r, uint64_t token, uint64_t *capability) {
+    if (!r || !capability) return -EINVAL;
+    rn_conn *c; int error = rn_conn_get(r, token, &c); if (error) return error;
+    if (c->state != 4) return -EINVAL;
+    if (c->transport_mode) return -EALREADY;
+    if (c->head_write != RN_NONE || c->drain_close) return -EBUSY;
+    c->transport_cap = token; c->transport_mode = 1; *capability = token; return 0;
+}
+int rn_transport_ready(rn_reactor *r, uint64_t token, uint64_t capability) {
+    int error = rn_transport_access(r, token, capability, 0); if (error) return error;
+    rn_conn *c = &r->connections[rn_index(token)];
+    if (c->transport_mode != 1) return -EALREADY;
+    c->transport_mode = 2; return 0;
+}
+int rn_transport_mode(rn_reactor *r, uint64_t token, uint64_t capability) {
+    int error = rn_transport_access(r, token, capability, 0);
+    return error ? error : rn_transport_state(r, token);
+}
+#include "reactor_transport_impl.h"
+
 #endif

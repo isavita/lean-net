@@ -37,6 +37,11 @@ typedef struct rn_port_owner {
   HANDLE handle;
   atomic_uint references;
 } rn_port_owner;
+struct rn_waker {
+  rn_port_owner *port_owner;
+  atomic_uint references;
+  atomic_int closed;
+};
 typedef struct rn_accept_channel {
   SOCKET *sockets;
   rn_port_owner *producer_port, *consumer_port;
@@ -69,6 +74,8 @@ typedef struct rn_operation {
 typedef struct rn_connection {
   SOCKET socket;
   uint32_t generation, state, pending, write_head, write_tail;
+  uint64_t transport_cap;
+  uint8_t transport_mode;
   uint32_t dispatch_pending, dispatch_listener;
   LPFN_ACCEPTEX accept_ex;
   uint32_t paused_position;
@@ -102,6 +109,7 @@ struct rn_reactor {
   rn_config config;
   HANDLE port;
   rn_port_owner *port_owner;
+  rn_waker *wake_owner;
   rn_connection *connections;
   rn_buffer *buffers;
   rn_write *writes;
@@ -122,6 +130,7 @@ struct rn_reactor {
 };
 
 static int rn_error(DWORD error) { return ln_windows_errno(error); }
+static int rn_close_connection_impl(rn_reactor *, uint64_t);
 
 static uint32_t rn_channel_count(const rn_accept_channel *channel,
                                  uint32_t head, uint32_t tail) {
@@ -151,6 +160,30 @@ static int rn_port_release(rn_port_owner *owner) {
   int error = CloseHandle(owner->handle) ? 0 : -rn_error(GetLastError());
   free(owner);
   return error;
+}
+int rn_waker_retain(rn_waker *w) {
+  if (!w) return -EINVAL;
+  unsigned refs = atomic_load(&w->references);
+  do { if (!refs || refs == UINT_MAX) return -EOVERFLOW; }
+  while (!atomic_compare_exchange_weak(&w->references, &refs, refs + 1));
+  return 0;
+}
+int rn_waker_acquire(rn_reactor *r, rn_waker **out) {
+  if (!r || !out || !r->wake_owner) return -EINVAL;
+  int error = rn_waker_retain(r->wake_owner);
+  if (!error) *out = r->wake_owner;
+  return error;
+}
+int rn_waker_wake(rn_waker *w) {
+  if (!w) return -EINVAL;
+  if (atomic_load(&w->closed)) return -ECANCELED;
+  return PostQueuedCompletionStatus(w->port_owner->handle, 0, RN_WAKE_KEY, NULL)
+      ? 0 : -rn_error(GetLastError());
+}
+int rn_waker_release(rn_waker *w) {
+  if (!w) return -EINVAL;
+  if (atomic_fetch_sub(&w->references, 1) != 1) return 0;
+  int error = rn_port_release(w->port_owner); free(w); return error;
 }
 static int rn_channel_destroy(rn_accept_channel *channel) {
   int error = rn_channel_discard(channel);
@@ -931,6 +964,11 @@ int rn_new(const rn_config *config, rn_reactor **out) {
   }
   r->port_owner->handle = r->port;
   atomic_init(&r->port_owner->references, 1);
+  r->wake_owner = calloc(1, sizeof(*r->wake_owner));
+  if (!r->wake_owner) { int cleanup = rn_free(r); return cleanup ? cleanup : -ENOMEM; }
+  r->wake_owner->port_owner = r->port_owner;
+  atomic_fetch_add(&r->port_owner->references, 1);
+  atomic_init(&r->wake_owner->references, 1); atomic_init(&r->wake_owner->closed, 0);
   r->connections = calloc(config->max_connections, sizeof(*r->connections));
   r->buffers = calloc(r->buffer_count, sizeof(*r->buffers));
   r->writes = calloc(config->max_writes, sizeof(*r->writes));
@@ -1076,7 +1114,7 @@ int rn_listen(rn_reactor *r, const char *host, uint16_t port, int reuse_port,
   if (!e)
     e = rn_start_listening(r, *out, 4096);
   if (e) {
-    int cleanup = rn_close_connection(r, *out);
+    int cleanup = rn_close_connection_impl(r, *out);
     if (cleanup)
       return cleanup;
   }
@@ -1150,7 +1188,7 @@ int rn_step(rn_reactor *r, int timeout_ms) {
 const rn_event *rn_event_at(const rn_reactor *r, uint32_t index) {
   return r && index < r->event_count ? &r->events[index] : NULL;
 }
-int rn_queue_write(rn_reactor *r, uint64_t token, uint64_t buffer,
+static int rn_queue_write_impl(rn_reactor *r, uint64_t token, uint64_t buffer,
                    uint32_t offset, uint32_t length, uint64_t operation) {
   if (!r)
     return -EINVAL;
@@ -1227,7 +1265,7 @@ int rn_buffer_copy(rn_reactor *r, uint64_t token, const uint8_t *data,
   lean_sarray_set_size(b->bytes, length);
   return 0;
 }
-int rn_arm_timer(rn_reactor *r, uint64_t token, uint32_t kind,
+static int rn_arm_timer_impl(rn_reactor *r, uint64_t token, uint32_t kind,
                  uint64_t deadline) {
   if (!r || kind >= RN_TIMER_KINDS || deadline > INT64_MAX)
     return -EINVAL;
@@ -1250,13 +1288,13 @@ int rn_arm_timer(rn_reactor *r, uint64_t token, uint32_t kind,
   t->armed = 1;
   return 0;
 }
-int rn_cancel_timer(rn_reactor *r, uint64_t token, uint32_t kind) {
+static int rn_cancel_timer_impl(rn_reactor *r, uint64_t token, uint32_t kind) {
   if (!r || kind >= RN_TIMER_KINDS || !rn_connection_get(r, token))
     return -EINVAL;
   rn_timer_remove(r, rn_index(token) * RN_TIMER_KINDS + kind);
   return 0;
 }
-int rn_close_connection(rn_reactor *r, uint64_t token) {
+static int rn_close_connection_impl(rn_reactor *r, uint64_t token) {
   if (!r)
     return -EINVAL;
   rn_connection *c = rn_connection_get(r, token);
@@ -1265,7 +1303,7 @@ int rn_close_connection(rn_reactor *r, uint64_t token) {
   rn_close_native(r, rn_index(token));
   return 0;
 }
-int rn_close_after_writes(rn_reactor *r, uint64_t token) {
+static int rn_close_after_writes_impl(rn_reactor *r, uint64_t token) {
   if (!r)
     return -EINVAL;
   rn_connection *c = rn_connection_get(r, token);
@@ -1283,7 +1321,7 @@ int rn_close_after_writes(rn_reactor *r, uint64_t token) {
     rn_close_native(r, rn_index(token));
   return 0;
 }
-int rn_set_read_enabled(rn_reactor *r, uint64_t token, int enabled) {
+static int rn_set_read_enabled_impl(rn_reactor *r, uint64_t token, int enabled) {
   if (!r || (enabled != 0 && enabled != 1)) return -EINVAL;
   rn_connection *c = rn_connection_get(r, token);
   if (!c || c->state != RN_CONNECTED) return -EINVAL;
@@ -1310,6 +1348,7 @@ int rn_free(rn_reactor *r) {
   if (!r)
     return -EINVAL;
   r->destroying = 1;
+  if (r->wake_owner) atomic_store(&r->wake_owner->closed, 1);
   int error = 0;
   if (r->incoming_accepts) {
     atomic_store(&r->incoming_accepts->consumer_closed, 1);
@@ -1362,6 +1401,10 @@ int rn_free(rn_reactor *r) {
       error = -released;
   } else if (r->port && !CloseHandle(r->port) && !error)
     error = rn_error(GetLastError());
+  if (r->wake_owner) {
+    int released = rn_waker_release(r->wake_owner);
+    if (released && !error) error = -released;
+  }
   if (r->wsa_started && WSACleanup() == SOCKET_ERROR && !error)
     error = rn_error(WSAGetLastError());
   free(r->queued);
@@ -1379,4 +1422,35 @@ int rn_free(rn_reactor *r) {
   free(r);
   return -error;
 }
+static int rn_transport_access(rn_reactor *r, uint64_t token, uint64_t capability, int plain) {
+    if (!r) return -EINVAL;
+    rn_connection *c = rn_connection_get(r, token); if (!c) return -EINVAL;
+    if (plain) return c->transport_mode ? -EACCES : 0;
+    return c->state == RN_CONNECTED && c->transport_mode && capability && c->transport_cap == capability ? 0 : -EACCES;
+}
+int rn_transport_state(rn_reactor *r, uint64_t token) {
+    if (!r) return -EINVAL;
+    rn_connection *c = rn_connection_get(r, token); if (!c) return -EINVAL;
+    return c->transport_mode;
+}
+int rn_transport_claim(rn_reactor *r, uint64_t token, uint64_t *capability) {
+    if (!r || !capability) return -EINVAL;
+    rn_connection *c = rn_connection_get(r, token); if (!c) return -EINVAL;
+    if (c->state != RN_CONNECTED) return -EINVAL;
+    if (c->transport_mode) return -EALREADY;
+    if (c->write_head != RN_NONE || c->draining) return -EBUSY;
+    c->transport_cap = token; c->transport_mode = 1; *capability = token; return 0;
+}
+int rn_transport_ready(rn_reactor *r, uint64_t token, uint64_t capability) {
+    int error = rn_transport_access(r, token, capability, 0); if (error) return error;
+    rn_connection *c = rn_connection_get(r, token); if (!c) return -EINVAL;
+    if (c->transport_mode != 1) return -EALREADY;
+    c->transport_mode = 2; return 0;
+}
+int rn_transport_mode(rn_reactor *r, uint64_t token, uint64_t capability) {
+    int error = rn_transport_access(r, token, capability, 0);
+    return error ? error : rn_transport_state(r, token);
+}
+#include "reactor_transport_impl.h"
+
 #endif

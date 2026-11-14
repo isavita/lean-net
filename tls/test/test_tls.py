@@ -44,12 +44,6 @@ def find_openssl():
 OPENSSL = find_openssl()
 
 
-def supports_so_nosigpipe():
-    result = subprocess.run(["cc", "-dM", "-E", "-include", "sys/socket.h", "-x", "c", "-"],
-                            input="", capture_output=True, text=True, check=True)
-    return any(line.startswith("#define SO_NOSIGPIPE ") for line in result.stdout.splitlines())
-
-
 def supports_hostname_verification():
     result = subprocess.run([OPENSSL, "s_client", "-help"], capture_output=True, text=True)
     return "-verify_hostname" in result.stdout + result.stderr
@@ -476,8 +470,10 @@ class TLSAcceptance(unittest.TestCase):
                     process.wait(timeout=3)
 
     def exercise_tls_setup_fault(self, mode, fatal):
-        if not supports_so_nosigpipe():
-            self.skipTest("SO_NOSIGPIPE is not available on this platform")
+        # Native TLS consumes the reactor's accepted socket. Inject the first
+        # accepted TCP_NODELAY setup rather than counting SO_NOSIGPIPE calls
+        # from the old listener/session adapter. Both macOS and Linux exercise
+        # the same native peer-versus-unrelated-setup-error classification.
         source = ROOT / "test/accept_fault.c"
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryFile(mode="w+") as log:
             library = Path(temp) / ("fault.dylib" if sys.platform == "darwin" else "fault.so")
@@ -517,7 +513,7 @@ class TLSAcceptance(unittest.TestCase):
                     self.assertIsNone(process.poll())
                 log.seek(0)
                 output = log.read()
-                self.assertIn("TEST_TLS_OPTION_FAULT", output)
+                self.assertIn("TEST_OPTION_FAULT", output)
                 self.assertIn("TEST_PENDING_PEER_ERROR", output)
             finally:
                 if process.poll() is None:
@@ -529,10 +525,10 @@ class TLSAcceptance(unittest.TestCase):
                         process.wait(timeout=3)
 
     def test_tls_einval_with_peer_reset_is_isolated(self):
-        self.exercise_tls_setup_fault("tls_option_einval_peer", False)
+        self.exercise_tls_setup_fault("option_einval_peer", False)
 
     def test_tls_unrelated_setup_error_with_peer_reset_is_fatal(self):
-        self.exercise_tls_setup_fault("tls_option_proto_peer", True)
+        self.exercise_tls_setup_fault("option_proto_peer", True)
 
     def test_invalid_certificate_and_key_fail_startup(self):
         invalid = Path(self.temp.name) / "invalid.pem"

@@ -7,7 +7,8 @@ package «lean-net-tls» where
     if version.exitCode != 0 then throw <| IO.userError "OpenSSL 1.1.1 or newer is required"
     let output ← IO.Process.output { cmd := "pkg-config", args := #["--libs", "openssl"] }
     if output.exitCode != 0 then throw <| IO.userError "pkg-config --libs openssl failed"
-    return (output.stdout.trimAscii.toString.splitOn " ").filter (· != "") |>.toArray
+    let flags := (output.stdout.trimAscii.toString.splitOn " ").filter (· != "") |>.toArray
+    return if System.Platform.isWindows then flags else flags ++ #["-pthread"]
 
 require «lean-net» from "../"
 
@@ -15,14 +16,28 @@ require «lean-net» from "../"
 lean_lib LeanNetTLS
 
 extern_lib tls_shim (pkg : NPackage __name__) := do
-  let src ← inputTextFile (pkg.dir / "c" / "tls_shim.c")
+  let mut src ← inputTextFile (pkg.dir / "c" / "tls_shim.c")
+  for path in #[pkg.dir / ".." / "c" / "socket_windows_bridge.h",
+      pkg.dir / ".." / "c" / "windows_error.h"] do
+    let header ← inputTextFile path
+    src := src.zipWith (fun source _ => source) header
   let includeDir ← getLeanIncludeDir
   let output ← IO.Process.output { cmd := "pkg-config", args := #["--cflags", "openssl"] }
   if output.exitCode != 0 then error "pkg-config --cflags openssl failed"
   let flags := (output.stdout.trimAscii.toString.splitOn " ").filter (· != "") |>.toArray
+  let compiler := if System.Platform.isWindows then "gcc" else "cc"
   let obj ← buildO (pkg.buildDir / "c" / "tls_shim.o") src
-    (#["-isystem", includeDir.toString] ++ flags) #["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"]
-  buildStaticLib (pkg.staticLibDir / nameToStaticLib "tls_shim") #[obj]
+    (#["-isystem", includeDir.toString] ++ flags) #["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"] compiler
+  let mut worker ← inputTextFile (pkg.dir / "c" / "tls_worker.c")
+  for path in #[pkg.dir / "c" / "tls_worker.h", pkg.dir / ".." / "c" / "reactor.h",
+      pkg.dir / ".." / "c" / "reactor_lean.h"] do
+    let header ← inputTextFile path
+    worker := worker.zipWith (fun source _ => source) header
+  let threadFlags := if System.Platform.isWindows then #[] else #["-pthread"]
+  let workerObj ← buildO (pkg.buildDir / "c" / "tls_worker.o") worker
+    (#["-isystem", includeDir.toString] ++ flags)
+    (#["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"] ++ threadFlags) compiler
+  buildStaticLib (pkg.staticLibDir / nameToStaticLib "tls_shim") #[obj, workerObj]
 
 lean_exe «lean-net-tls» where
   root := `Main
@@ -32,3 +47,6 @@ lean_exe «lean-net-tls-fixture» where
 
 lean_exe «lean-net-tls-interruptible-test» where
   root := `test.TLSInterruptibleTest
+
+lean_exe «lean-net-tls-reactor-fixture» where
+  root := `test.TLSReactorFixture
