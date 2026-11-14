@@ -11,6 +11,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev libbrotli-dev pkg-config curl
       - uses: leanprover/lean-action@v1
       - name: Build and test TCP, HTTP/1.1 and h2c
         run: |
@@ -23,6 +25,7 @@ jobs:
           lake env lean --run test/HTTP1ParserV2Test.lean
           lake env lean --run test/HTTP1EncodingTest.lean
           lake env lean --run test/HTTP1MachineTest.lean
+          lake env lean --run test/HTTP1FileTest.lean
           lake env lean --run test/HTTP2PrefaceTest.lean
           lake env lean --run test/HTTP2FrameTest.lean
           lake env lean --run test/HTTP2FrameV2Test.lean
@@ -33,6 +36,8 @@ jobs:
           lake env lean --run test/HTTP2StreamTest.lean
           lake env lean --run test/HTTP2ConnectionTest.lean
           lake env lean --run test/HTTP2ConnectionV2Test.lean
+          lake env lean --run test/HTTP2FileTest.lean
+          lake env lean --run test/StaticSelectionTest.lean
           python3 test/test_echo.py -v
           python3 test/test_http1_server.py -v
           .lake/build/bin/lean-net-event-ffi-test
@@ -42,8 +47,6 @@ jobs:
           python3 test/test_transport_scheduler.py -v
           python3 test/test_http1_faults.py -v
           python3 test/test_http2_e2e.py -v
-      - name: Install OpenSSL development files
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
       - name: Build and test TLS package
         run: |
           lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test

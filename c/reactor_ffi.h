@@ -98,6 +98,37 @@ lean_object *shim_reactor_write(uint64_t handle, uint64_t connection, uint64_t b
                                uint32_t offset, uint32_t length, uint64_t operation) {
     return rn_io_number(handle == 0 ? -EINVAL : rn_queue_write(rn_handle(handle), connection, buffer, offset, length, operation));
 }
+lean_object *shim_reactor_file_table(uint64_t handle, uint32_t capacity) {
+    return rn_io_number(handle ? rn_file_table_init(rn_handle(handle), capacity) : -EINVAL);
+}
+lean_object *shim_reactor_file_owner(uint64_t handle) {
+    uint64_t owner = handle ? rn_file_owner(rn_handle(handle)) : 0;
+    return rn_io_number(owner ? (int64_t)owner : -EINVAL);
+}
+lean_object *shim_file_source_retain(uint64_t source) {
+    return rn_io_number(source ? rn_file_source_retain((rn_file_source *)(uintptr_t)source) : -EINVAL);
+}
+lean_object *shim_file_source_release(uint64_t source) {
+    return rn_io_number(source ? rn_file_source_release((rn_file_source *)(uintptr_t)source) : -EINVAL);
+}
+lean_object *shim_file_source_size(uint64_t source) {
+    return rn_io_number(source ? (int64_t)rn_file_source_size((rn_file_source *)(uintptr_t)source) : -EINVAL);
+}
+lean_object *shim_file_prepare_residency(uint64_t budget) {
+    return rn_io_number(rn_file_prepare_residency_budget(budget));
+}
+lean_object *shim_reactor_file_import(uint64_t handle, uint64_t source) {
+    uint64_t token = 0;
+    int error = handle && source ? rn_file_import(rn_handle(handle), (rn_file_source *)(uintptr_t)source, &token) : -EINVAL;
+    return rn_io_number(error ? error : (int64_t)token);
+}
+lean_object *shim_reactor_file_release(uint64_t handle, uint64_t token) {
+    return rn_io_number(handle ? rn_file_release(rn_handle(handle), token) : -EINVAL);
+}
+lean_object *shim_reactor_file_write(uint64_t handle, uint64_t connection, uint64_t owner,
+                                    uint64_t token, uint64_t offset, uint32_t length, uint64_t operation) {
+    return rn_io_number(handle ? rn_queue_file(rn_handle(handle), connection, owner, token, offset, length, operation) : -EINVAL);
+}
 lean_object *shim_reactor_read_enabled(uint64_t handle, uint64_t connection, uint8_t enabled) {
     return rn_io_number(handle == 0 || enabled > 1 ? -EINVAL :
         rn_set_read_enabled(rn_handle(handle), connection, enabled));

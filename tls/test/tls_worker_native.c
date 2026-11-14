@@ -5,6 +5,21 @@
 #include <stdio.h>
 static int fail_join;
 static int fail_cipher;
+static atomic_int fail_file_view;
+#if defined(__linux__)
+static atomic_uint splice_successful;
+static ssize_t test_file_splice(int input, off_t *input_offset, int output, off_t *output_offset,
+                                size_t count, unsigned flags) {
+  ssize_t n = splice(input, input_offset, output, output_offset, count, flags);
+  if (n > 0) atomic_fetch_add(&splice_successful, 1);
+  return n;
+}
+#endif
+static int test_file_view(const rn_file_source *source, uint64_t offset, uint32_t length, const uint8_t **out) {
+  int error = atomic_exchange(&fail_file_view, 0);
+  if (error) return -error;
+  return rn_file_source_view(source, offset, length, out);
+}
 static void (*ssl_error_hook)(SSL *, int);
 static int test_ssl_get_error(SSL *ssl, int result) {
   int error = SSL_get_error(ssl, result);
@@ -23,10 +38,18 @@ static int test_cipher_write(rn_reactor *reactor, uint64_t connection, uint64_t 
 #define pthread_join test_join
 #define rn_transport_write test_cipher_write
 #define SSL_get_error test_ssl_get_error
+#define rn_file_source_view test_file_view
+#if defined(__linux__)
+#define splice test_file_splice
+#endif
 #include "../c/tls_worker.c"
 #undef pthread_join
 #undef rn_transport_write
 #undef SSL_get_error
+#undef rn_file_source_view
+#if defined(__linux__)
+#undef splice
+#endif
 void lean_initialize_runtime_module(void);
 
 static void check(int condition, const char *message) {
@@ -114,6 +137,7 @@ static void drive_notification_wrap(const char *certificate, const char *key) {
   int wake[2]; check(pipe(wake) == 0 && rn_nonblocking(wake[0]) == 0 && rn_nonblocking(wake[1]) == 0, "forced-wrap worker wake pipe");
   engine.wake_read = wake[0]; engine.wake_write = wake[1];
   atomic_init(&session.state, TW_OPEN); atomic_init(&session.notifications, 0);
+  atomic_init(&session.file_error, 0);
   atomic_init(&session.cancel, 0); atomic_init(&session.peer_eof, 0);
   atomic_init(&session.shutdown, 0); atomic_init(&session.ready, 0); atomic_init(&session.ready_ack, 0);
   atomic_init(&session.eof, 0); atomic_init(&session.close_deadline, 0);
@@ -188,11 +212,26 @@ static void drive_notification_wrap(const char *certificate, const char *key) {
 }
 typedef struct pending { uint64_t lease; uint32_t offset, length; } pending;
 static void exercise(const char *certificate, const char *key, uint32_t capacity) {
+  unsigned char payload[131072], incoming[8192];
+  for (size_t i = 0; i < sizeof(payload); ++i) payload[i] = (unsigned char)(i * 73);
+  char file_path[] = "/tmp/lean-net-native-tls-file-XXXXXX";
+  int writer = mkstemp(file_path); check(writer >= 0, "create native TLS file snapshot");
+  check(write(writer, payload, sizeof(payload)) == (ssize_t)sizeof(payload) && close(writer) == 0, "write and close immutable snapshot");
+  int reader = open(file_path, O_RDONLY | O_CLOEXEC);
+  int abort_reader = reader >= 0 ? fcntl(reader, F_DUPFD_CLOEXEC, 0) : -1;
+  check(reader >= 0 && abort_reader >= 0 && unlink(file_path) == 0, "retain anonymous read-only snapshots");
+  rn_file_source *file_source = NULL, *abort_source = NULL;
+  check(rn_file_source_publish((uintptr_t)reader, sizeof(payload), sizeof(payload) + 65536, &file_source) == 0, "pin immutable native TLS file");
+  check(rn_file_source_publish((uintptr_t)abort_reader, sizeof(payload), sizeof(payload) + 65536, &abort_source) == 0, "pin independently owned cancellation snapshot");
   lean_object *cert = lean_mk_string(certificate), *secret = lean_mk_string(key), *empty = lean_mk_empty_array();
   uint64_t bundle = handle(lean_tlsw_bundle_new(cert, secret, empty, empty, empty, 1));
   lean_dec(cert); lean_dec(secret); lean_dec(empty);
   rn_config config = {1, 32, 8, 4, 0, 0, 1}; rn_reactor *reactor = NULL;
   check(rn_new(&config, &reactor) == 0, "create four-cell reactor");
+  uint64_t file_token = 0, abort_token = 0;
+  check(rn_file_table_init(reactor, 2) == 0 && rn_file_import(reactor, file_source, &file_token) == 0 &&
+      rn_file_import(reactor, abort_source, &abort_token) == 0 && rn_file_source_release(abort_source) == 0,
+      "import native TLS files before polling");
   int peers[2]; check(socketpair(AF_UNIX, SOCK_STREAM, 0, peers) == 0 && rn_nonblocking(peers[0]) == 0 && rn_nonblocking(peers[1]) == 0, "create nonblocking native transport");
   uint64_t connection = 0, capability = 0;
   check(rn_socket_new(reactor, &connection) == 0, "create connection token");
@@ -213,7 +252,6 @@ static void exercise(const char *certificate, const char *key, uint32_t capacity
   SSL *client = SSL_new(client_context); check(client && SSL_set_fd(client, peers[1]) == 1, "bind client BIO");
   const unsigned char alpn[] = {8, 'h','t','t','p','/','1','.','1'};
   check(SSL_set_alpn_protos(client, alpn, sizeof(alpn)) == 0, "client ALPN");
-  unsigned char payload[131072], incoming[8192]; for (size_t i = 0; i < sizeof(payload); ++i) payload[i] = (unsigned char)(i * 73);
   size_t sent = 0, received = 0, written = 0; int client_ready = 0, server_ready = 0;
   pending inputs[32] = {{0}}; uint32_t input_count = 0;
   lean_object *plain = NULL, *retained = NULL; uint32_t plain_length = 0; unsigned hold_rounds = 0;
@@ -276,15 +314,61 @@ static void exercise(const char *certificate, const char *key, uint32_t capacity
   if (retained) lean_dec(retained);
   if (plain) { lean_dec(plain); check(result(lean_tlsw_release_plain(worker, session)) == 0, "release final plaintext loan"); }
   check(atomic_load(&bridge->engine->owner_violations) == 0 && atomic_load(&bridge->engine->ssl_calls) > 0, "exclusive off-loop SSL ownership");
-  uint64_t fault_lease = 0; lean_object *fault_buffer = NULL;
-  check(rn_acquire_buffer(reactor, 1, &fault_lease) == 0 && rn_buffer_copy(reactor, fault_lease, (const uint8_t *)"x", 1) == 0 && rn_bridge_make_buffer(record, fault_lease, &fault_buffer) == 0, "prepare ciphertext submit fault");
-  fail_cipher = 1; check(result(lean_tlsw_write(worker, session, fault_buffer, 0, 1, 456)) == 0, "queue submit-fault plaintext"); lean_dec(fault_buffer);
-  check(rn_buffer_release(reactor, fault_lease) == 0, "release submit-fault source");
+  check(result(lean_tlsw_write_file(worker, session, rn_file_owner(reactor) + 1,
+      file_token, 0, sizeof(payload), 900)) == -EINVAL, "TLS file rejects foreign reactor identity");
+  check(result(lean_tlsw_write_file(worker, session, rn_file_owner(reactor),
+      file_token, sizeof(payload) - 1, 2, 900)) == -EINVAL, "TLS file rejects an oversized region");
+  atomic_store(&fail_file_view, EINTR);
+  check(result(lean_tlsw_write_file(worker, session, rn_file_owner(reactor),
+      file_token, 0, sizeof(payload), 900)) == 0, "queue multi-cell TLS file region");
+  check(rn_file_release(reactor, file_token) == 0 && rn_file_source_release(file_source) == 0,
+      "queued TLS source pin outlives both catalog and import owners");
+  size_t file_received = 0; int file_written = 0, interrupted_file = 0; end = rn_now_ms() + 10000;
+  while ((file_received < sizeof(payload) || !file_written) && rn_now_ms() < end) {
+    int native = rn_step(reactor, 0); check(native >= 0, "native TLS file transport step");
+    for (int n = 0; n < native; ++n) {
+      const rn_event *event = rn_event_at(reactor, (uint32_t)n);
+      if (event->kind == RN_WRITTEN)
+        check(result(lean_tlsw_on_written(worker, event->operation, (uint64_t)event->result)) == 0, "file ciphertext wire acknowledgement");
+      else check(event->kind == RN_WAKE, "file transfer has no unexpected native event");
+    }
+    int64_t events = result(lean_tlsw_pump(worker)); check(events >= 0, "TLS file completion pump");
+    for (int64_t n = 0; n < events; ++n) {
+      rn_event *event = &bridge->events[n];
+      if (event->kind == TLSW_ERROR && event->result == -EINTR) {
+        check(!interrupted_file && event->operation == 900 && atomic_load(&bridge->engine->sessions[0].state) == TW_ACTIVE,
+            "file interruption preserves active TLS operation");
+        interrupted_file = 1;
+        check(result(lean_tlsw_resume_file(worker, session)) == 0, "owner explicitly resumes interrupted file input");
+      } else {
+        check(event->kind == TLSW_WRITTEN && event->operation == 900 && event->length == sizeof(payload) && !file_written,
+            "one logical file completion follows every ciphertext acknowledgement");
+        file_written = 1;
+      }
+    }
+    size_t count = 0; ERR_clear_error(); int rc = SSL_read_ex(client, incoming, sizeof(incoming), &count);
+    if (rc == 1) {
+      check(count <= sizeof(payload) - file_received && memcmp(incoming, payload + file_received, count) == 0,
+          "TLS file source remains exact across chunks and interruption");
+      file_received += count;
+    } else { int e = SSL_get_error(client, rc); check(e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE, "TLS file read progress"); }
+    struct timespec pause = {0, 100000}; (void)nanosleep(&pause, NULL);
+  }
+  check(interrupted_file && file_written && file_received == sizeof(payload), "TLS file source/fence/interruption lifecycle completes");
+#if defined(__linux__)
+  check(atomic_load(&splice_successful) > 0, "Linux TLS file path executes successful real file-to-pipe splice");
+#endif
+  if (capacity == 1) atomic_store(&fail_file_view, EIO);
+  else fail_cipher = 1;
+  check(result(lean_tlsw_write_file(worker, session, rn_file_owner(reactor), abort_token, 0, sizeof(payload), 456)) == 0 &&
+      rn_file_release(reactor, abort_token) == 0, "queued file retains its sole source pin across ciphertext submission failure");
   int saw_error = 0; end = rn_now_ms() + 1000;
   while (!saw_error && rn_now_ms() < end) {
     int64_t count = result(lean_tlsw_pump(worker)); check(count >= 0, "pump submit fault");
     for (int64_t n = 0; n < count; ++n) if (bridge->events[n].kind == TLSW_ERROR) {
-      check(bridge->events[n].result == -ENOMEM && bridge->events[n].flags == RN_SETUP_ERROR, "infrastructure fault retains fatal classification");
+      check(bridge->events[n].result == (capacity == 1 ? -EIO : -ENOMEM) &&
+          bridge->events[n].flags == (capacity == 1 ? 0 : RN_SETUP_ERROR),
+          "file read errors isolate the connection while infrastructure faults remain fatal");
       check(result(lean_tlsw_abort(worker, session)) == 0 && rn_connection_live(reactor, connection) == 0, "observed submit fault still aborts physical connection"); saw_error = 1;
     }
     struct timespec pause = {0, 100000}; (void)nanosleep(&pause, NULL);
@@ -296,11 +380,16 @@ static void exercise(const char *certificate, const char *key, uint32_t capacity
   fail_join = 1; check(result(lean_tlsw_worker_free(worker)) == -EIO, "join failure preserves live storage");
   check(bridge->engine != NULL && bridge->reactor_record == record, "failed join retains ownership graph");
   check(result(lean_tlsw_worker_free(worker)) == 0, "join retry frees all SSL/BIO objects");
+  check(fcntl(abort_reader, F_GETFD) < 0 && errno == EBADF, "aborted file pin releases its private source handle after join");
   check(result(lean_tlsw_bundle_free(bundle)) == 0, "free sealed context bundle");
   lean_dec(record); check(rn_free(reactor) == 0, "free reactor after TLS join");
 }
 int main(int argc, char **argv) {
   check(argc == 3, "certificate/key arguments"); lean_initialize_runtime_module();
+  atomic_init(&fail_file_view, 0);
+#if defined(__linux__)
+  atomic_init(&splice_successful, 0);
+#endif
   queue_wrap(); drive_notification_wrap(argv[1], argv[2]);
   exercise(argv[1], argv[2], 1); exercise(argv[1], argv[2], 3);
   puts("TLS worker queue, wire fences and lifecycle tests passed"); return 0;

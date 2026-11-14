@@ -136,7 +136,7 @@ static void drain_completion_regression(rn_reactor *r, const struct sockaddr_in 
     int client = socket(AF_INET, SOCK_STREAM, 0);
     check(client >= 0 && connect(client, (const struct sockaddr *)address, sizeof(*address)) == 0, "connect drain completion peer");
     check(send(client, "end", 3, 0) == 3 && shutdown(client, SHUT_WR) == 0, "send drain completion payload");
-    uint64_t connection = 0; int written = 0, closed = 0, same_batch = 0;
+    uint64_t connection = 0, final_lease = 0; int written = 0, closed = 0, same_batch = 0;
     for (unsigned tick = 0; tick < 100 && !closed; ++tick) {
         int count = rn_step(r, 10); int batch_written = 0;
         check(count >= 0, "poll drain completion");
@@ -145,9 +145,16 @@ static void drain_completion_regression(rn_reactor *r, const struct sockaddr_in 
             if (event.kind == RN_ACCEPTED) connection = event.connection;
             else if (event.kind == RN_READ) {
                 check(event.length == 3, "drain completion read length");
-                check(rn_queue_write(r, event.connection, event.buffer, 0, 3, 12345) == 0, "queue final write");
-                check(rn_buffer_release(r, event.buffer) == 0, "release final write lease");
+                check(final_lease == 0, "retain one final read lease");
+                final_lease = event.buffer;
             } else if (event.kind == RN_EOF) {
+                /* TCP may expose FIN after an earlier writable poll. Arm the
+                 * final write only once EOF is observed so this deterministically
+                 * exercises completion and closure within one native step. */
+                check(final_lease != 0, "final read precedes EOF");
+                check(rn_queue_write(r, event.connection, final_lease, 0, 3, 12345) == 0, "queue final write");
+                check(rn_buffer_release(r, final_lease) == 0, "release final write lease");
+                final_lease = 0;
                 check(rn_close_after_writes(r, event.connection) == 0, "drain final write");
                 uint64_t late;
                 check(rn_acquire_buffer(r, 3, &late) == 0 && rn_buffer_copy(r, late, (const uint8_t *)"bad", 3) == 0, "acquire late-write lease");

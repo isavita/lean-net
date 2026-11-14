@@ -3,7 +3,31 @@ open Lake DSL
 
 package «lean-net» where
   version := v!"0.1.0"
-  moreLinkArgs := if System.Platform.isWindows then #["-lws2_32"] else #[]
+  moreLinkArgs := run_io do
+    let output ← IO.Process.output { cmd := "pkg-config", args := #["--libs", "zlib", "libbrotlienc", "libbrotlicommon"] }
+    if output.exitCode != 0 then throw <| IO.userError "zlib and Brotli development libraries are required"
+    let flags := (output.stdout.trimAscii.toString.splitOn " ").filter (· != "") |>.toArray
+    if System.Platform.isWindows then
+      -- Select import libraries without adding a broad MinGW CRT search path.
+      let mut libraries := #["-lws2_32"]
+      for (packageName, libraryName) in #[
+          ("zlib", "libz.dll.a"), ("libbrotlienc", "libbrotlienc.dll.a"),
+          ("libbrotlicommon", "libbrotlicommon.dll.a")] do
+        let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", packageName] }
+        if location.exitCode != 0 then throw <| IO.userError s!"cannot locate {packageName} import library"
+        let path := System.FilePath.mk location.stdout.trimAscii.toString / libraryName
+        unless ← path.pathExists do throw <| IO.userError s!"missing codec import library: {path}"
+        libraries := libraries.push path.toString
+      return libraries ++ flags.filter (fun flag => !flag.startsWith "-L" &&
+        flag != "-lz" && flag != "-lbrotlienc" && flag != "-lbrotlicommon")
+    if System.Platform.isOSX then
+      let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", "zlib"] }
+      if location.exitCode != 0 then throw <| IO.userError "cannot locate zlib library"
+      let candidate := System.FilePath.mk location.stdout.trimAscii.toString / "libz.dylib"
+      unless ← candidate.pathExists do
+        throw <| IO.userError "Select an installed zlib with PKG_CONFIG_PATH; on macOS use Homebrew zlib's lib/pkgconfig directory"
+      return flags.map (fun flag => if flag == "-lz" then candidate.toString else flag) ++ #["-pthread"]
+    return flags ++ #["-pthread"]
 
 @[default_target]
 lean_lib LeanNet
@@ -46,12 +70,18 @@ lean_exe «lean-net-http1-reactor-fixture» where
 lean_exe «lean-net-http2-reactor-fixture» where
   root := `test.HTTP2ReactorFixture
 
+lean_exe «lean-net-static-fixture» where
+  root := `test.StaticReactorFixture
+
 extern_lib socket_shim (pkg : NPackage __name__) := do
   let header ← inputTextFile (pkg.dir / "c" / "socket_shim.h")
   let reactorHeader ← inputTextFile (pkg.dir / "c" / "reactor.h")
   let ffiHeader ← inputTextFile (pkg.dir / "c" / "reactor_ffi.h")
   let bridgeHeader ← inputTextFile (pkg.dir / "c" / "reactor_lean.h")
   let transportImpl ← inputTextFile (pkg.dir / "c" / "reactor_transport_impl.h")
+  let fileHeader ← inputTextFile (pkg.dir / "c" / "reactor_file.h")
+  let fileInternal ← inputTextFile (pkg.dir / "c" / "reactor_file_internal.h")
+  let fileImpl ← inputTextFile (pkg.dir / "c" / "reactor_file_impl.h")
   let groupHeader ← inputTextFile (pkg.dir / "c" / "reactor_group.h")
   let groupFFI ← inputTextFile (pkg.dir / "c" / "reactor_group_ffi.h")
   let mut src ← inputTextFile (pkg.dir / "c" / "socket_shim.c")
@@ -59,6 +89,7 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   src := src.zipWith (fun source _ => source) reactorHeader
   src := src.zipWith (fun source _ => source) ffiHeader
   src := src.zipWith (fun source _ => source) bridgeHeader
+  src := src.zipWith (fun source _ => source) fileHeader
   src := src.zipWith (fun source _ => source) groupHeader
   src := src.zipWith (fun source _ => source) groupFFI
   if System.Platform.isWindows then
@@ -72,6 +103,9 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   let native ← inputTextFile (pkg.dir / "c" / backend)
   let mut native := native.zipWith (fun source _ => source) reactorHeader
   native := native.zipWith (fun source _ => source) transportImpl
+  native := native.zipWith (fun source _ => source) fileHeader
+  native := native.zipWith (fun source _ => source) fileInternal
+  native := native.zipWith (fun source _ => source) fileImpl
   if System.Platform.isWindows then
     let errorHeader ← inputTextFile (pkg.dir / "c" / "windows_error.h")
     native := native.zipWith (fun source _ => source) errorHeader
@@ -89,4 +123,13 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   let group := (group.zipWith (fun source _ => source) groupHeader).zipWith (fun source _ => source) reactorHeader
   let groupObj ← buildO (pkg.buildDir / "c" / "reactor_group.o") group
     includes options compiler
-  buildStaticLib (pkg.staticLibDir / nameToStaticLib "socket_shim") #[obj, nativeObj, groupObj]
+  let catalog ← inputTextFile (pkg.dir / "c" / "static_catalog.c")
+  let catalogHeader ← inputTextFile (pkg.dir / "c" / "static_catalog.h")
+  let catalog := ((catalog.zipWith (fun source _ => source) catalogHeader).zipWith
+    (fun source _ => source) fileHeader).zipWith (fun source _ => source) reactorHeader
+  let codecFlags ← IO.Process.output { cmd := "pkg-config", args := #["--cflags", "zlib", "libbrotlienc", "libbrotlicommon"] }
+  if codecFlags.exitCode != 0 then error "cannot locate zlib and Brotli headers"
+  let codecIncludes := (codecFlags.stdout.trimAscii.toString.splitOn " ").filter (· != "") |>.toArray
+  let catalogObj ← buildO (pkg.buildDir / "c" / "static_catalog.o") catalog
+    (includes ++ codecIncludes) options compiler
+  buildStaticLib (pkg.staticLibDir / nameToStaticLib "socket_shim") #[obj, nativeObj, groupObj, catalogObj]

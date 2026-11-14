@@ -13,6 +13,8 @@ inductive Protocol where
 structure Endpoint where
   id : Reactor.SocketId
   tryWrite : Reactor.Buffer → UInt32 → UInt32 → UInt64 → IO Reactor.Submission
+  tryFile : FileRegion → UInt64 → IO Reactor.FileSubmission := fun _ _ =>
+    throw (IO.userError "transport does not support file output")
   setReadEnabled : Bool → IO Unit
   close : IO Unit
   closeAfterWrites : IO Unit
@@ -41,6 +43,7 @@ structure Worker where
 private def plainEndpoint (socket : Reactor.Socket .connected) : Endpoint := {
   id := socket.id
   tryWrite := fun buffer offset length operation => socket.tryWrite buffer offset length operation
+  tryFile := fun region operation => socket.tryFile region operation
   setReadEnabled := socket.setReadEnabled
   close := do let _ ← socket.close (by decide); pure ()
   closeAfterWrites := socket.closeAfterWrites

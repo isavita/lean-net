@@ -25,6 +25,13 @@ opaque listen (handle : UInt64) (host : @& String) (port : UInt16) (reusePort : 
 @[extern "shim_reactor_event"] opaque event (handle : UInt64) (index : UInt32) : IO NativeEvent
 @[extern "shim_reactor_write"]
 opaque write (handle connection buffer : UInt64) (offset length : UInt32) (operation : UInt64) : IO UInt64
+@[extern "shim_reactor_file_table"] opaque fileTable (handle : UInt64) (capacity : UInt32) : IO UInt64
+@[extern "shim_reactor_file_owner"] opaque fileOwner (handle : UInt64) : IO UInt64
+@[extern "shim_reactor_file_import"] opaque fileImport (handle source : UInt64) : IO UInt64
+@[extern "shim_reactor_file_release"] opaque fileRelease (handle token : UInt64) : IO UInt64
+@[extern "shim_reactor_file_write"]
+opaque fileWrite (handle connection owner file offset : UInt64)
+  (length : UInt32) (operation : UInt64) : IO UInt64
 @[extern "shim_reactor_read_enabled"]
 opaque readEnabled (handle connection : UInt64) (enabled : UInt8) : IO UInt64
 @[extern "shim_reactor_connection_live"]

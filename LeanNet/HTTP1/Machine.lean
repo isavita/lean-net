@@ -7,6 +7,7 @@ structure Config where
   limits : Limits := {}
   parserOptions : Parser.Options := {}
   maxInformational : Nat := 16
+  maxFileResponseBytes : Nat := 1024 * 1024 * 1024
 
 /-- Header decisions are explicit, including the legacy HTTP/1.0 EOF-body
     extension. An override can never replace an explicit Content-Length or TE. -/
@@ -19,6 +20,7 @@ inductive Action where
   | inspectHead (requestId : Nat) (head : RequestHead) (framing : BodyFraming)
   | request (requestId : Nat) (request : Request)
   | write (outputId : Nat) (parts : Array ByteArray) (waitForWrite : Bool)
+  | writeFile (outputId : Nat) (headParts : Array ByteArray) (region : FileRegion) (waitForWrite : Bool)
   | readEnabled (enabled : Bool)
   | drainClose
   | upgraded (head : RequestHead)
@@ -80,6 +82,15 @@ private def output (state : State) (parts : Array ByteArray) (after : AfterOutpu
   { state := { state with phase := .output, outputId := id, afterOutput := after },
     actions := [.readEnabled false, .write id parts waitForWrite] }
 
+private def outputReply (state : State) (wire : EncodedFileResponse) (after : AfterOutput)
+    (waitForWrite : Bool) : Step :=
+  match wire.fileRegion with
+  | none => output state wire.headParts after waitForWrite
+  | some region =>
+    let id := state.outputId + 1
+    { state := { state with phase := .output, outputId := id, afterOutput := after },
+      actions := [.readEnabled false, .writeFile id wire.headParts region waitForWrite] }
+
 private def fail (state : State) (status : Nat) : Step :=
   let response : Response := { status }
   match response.encodeFor (context state) { forceClose := true } with
@@ -136,7 +147,7 @@ def State.finish (state : State) : Step :=
     | .needMore _ => abort state "invalid parser EOF result"
   else { state }
 
-private def encodeReply (state : State) (reply : Reply) : Except String EncodedResponse := do
+private def encodeReply (state : State) (reply : Reply) : Except String EncodedFileResponse := do
   if reply.informational.size > state.config.maxInformational then throw "too many informational responses"
   let ctx := context state
   let mut parts := #[]
@@ -146,9 +157,15 @@ private def encodeReply (state : State) (reply : Reply) : Except String EncodedR
     parts := parts ++ encoded.parts
   let options := { reply.options with forceClose :=
     reply.options.forceClose || state.ended || state.legacyBody }
-  let encoded ← reply.response.encodeFor ctx options
+  let encoded ← match reply.fileRegion with
+    | some region =>
+      if region.length > state.config.maxFileResponseBytes then throw "file response exceeds configured limit"
+      reply.response.encodeFileFor region ctx options
+    | none => do
+      let encoded ← reply.response.encodeFor ctx options
+      pure { headParts := encoded.parts, framing := encoded.framing, next := encoded.next }
   match encoded.next with
-  | .nextRequest _ => return { encoded with parts := parts ++ encoded.parts }
+  | .nextRequest _ => return { encoded with headParts := parts ++ encoded.headParts }
   | _ => throw "application reply must contain a final response"
 
 /-- Decide before body bytes are consumed, even when they arrived with the head. -/
@@ -162,9 +179,9 @@ def State.decideHead (state : State) (requestId : Nat) (decision : HeadDecision)
       if reply.response.status < 200 then fail state 500
       else match encodeReply state { reply with options := { reply.options with forceClose := true } } with
         | .error _ => fail state 500
-        | .ok wire => output state wire.parts .close false
+        | .ok wire => outputReply state wire .close false
     | .upgrade reply =>
-      if hasBody state.framing || !reply.informational.isEmpty then fail state 400
+      if hasBody state.framing || !reply.informational.isEmpty || reply.fileRegion.isSome then fail state 400
       else match reply.response.encodeAcceptedUpgrade (context state) reply.options with
         | .error _ => fail state 400
         | .ok wire => output state wire.parts .upgrade true
@@ -193,8 +210,8 @@ def State.respond (state : State) (requestId : Nat) (reply : Reply) : Step :=
     | .error _ => fail state 500
     | .ok wire =>
       match wire.next with
-      | .nextRequest .keepAlive => output state wire.parts .nextRequest false
-      | .nextRequest .close => output state wire.parts .close false
+      | .nextRequest .keepAlive => outputReply state wire .nextRequest false
+      | .nextRequest .close => outputReply state wire .close false
       | _ => fail state 500
 
 /-- A final response is acknowledged after all its parts enter the ordered

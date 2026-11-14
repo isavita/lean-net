@@ -10,6 +10,7 @@ abbrev Router := Request → IO Response
 structure ServerConfig where
   maxClients : Nat := 32
   maxResponseBytes : Nat := 8 * 1024 * 1024
+  maxFileResponseBytes : Nat := 1024 * 1024 * 1024
   maxResponseHeaderBytes : Nat := 65536
   maxResponseHeaders : Nat := 100
   idleTimeoutMs : Nat := 30000

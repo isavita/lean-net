@@ -1,6 +1,8 @@
 import LeanNet.Socket.State
 import LeanNet.FFI.Errno
 import LeanNet.FFI.Reactor
+import LeanNet.FileRegion
+import LeanNet.FileSource
 
 namespace LeanNet.Reactor
 
@@ -164,6 +166,11 @@ inductive Submission where
   | queued
   | wouldBlock
 
+inductive FileSubmission where
+  | queued
+  | wouldBlock
+  | interrupted
+
 def Wire.id (wire : Wire state) : SocketId := ⟨wire.socket.reactor.handle, wire.socket.token⟩
 
 private def ensureWire (wire : Wire state) : IO Unit := do
@@ -259,6 +266,43 @@ def Socket.tryWrite (socket : Socket .connected) (buffer : Buffer)
   let result := LeanNet.Errno.decode raw
   if result < 0 && (← LeanNet.Errno.isWouldBlock result) then return .wouldBlock
   checkedZero "reactor queue write" raw
+  return .queued
+
+/-- Allocate the file registration table before this worker's first poll. -/
+def Reactor.setupFiles (reactor : Reactor) (capacity : UInt32) : IO Unit := do
+  ensureAlive reactor
+  checkedZero "reactor file table" (← FFI.Reactor.fileTable reactor.handle capacity)
+
+/-- The native table retains its source until registration release or reactor
+    destruction. Protocol machines receive only the borrowed range identity. -/
+def Reactor.importFile (reactor : Reactor) (source : File.Source) : IO FileRegion := do
+  ensureAlive reactor
+  source.ensureAlive
+  let owner ← checked "reactor file namespace" (← FFI.Reactor.fileOwner reactor.handle)
+  if owner == 0 then throw (IO.userError "reactor file namespace is invalid")
+  let token ← checked "reactor file import" (← FFI.Reactor.fileImport reactor.handle source.handle)
+  if token == 0 then throw (IO.userError "reactor file import returned no token")
+  return { owner, token, length := source.size }
+
+def Reactor.releaseFile (reactor : Reactor) (region : FileRegion) : IO Unit := do
+  ensureAlive reactor
+  let owner ← checked "reactor file namespace" (← FFI.Reactor.fileOwner reactor.handle)
+  if region.owner != owner then throw (IO.userError "file belongs to another reactor")
+  checkedZero "reactor file release" (← FFI.Reactor.fileRelease reactor.handle region.token)
+
+/-- Queue file bytes through the same native FIFO as pooled byte writes. The
+    native mode check also rejects old plaintext aliases to TLS sockets. -/
+def Socket.tryFile (socket : Socket .connected) (region : FileRegion)
+    (operation : UInt64 := 0) : IO FileSubmission := do
+  ensureAlive socket.reactor
+  if !region.valid || region.length > 4294967295 then
+    throw (IO.userError "invalid or foreign file range")
+  let raw ← FFI.Reactor.fileWrite socket.reactor.handle socket.token region.owner region.token
+    region.offset region.length.toUInt32 operation
+  let result := Errno.decode raw
+  if result < 0 && (← Errno.isInterrupted result) then return .interrupted
+  if result < 0 && (← Errno.isWouldBlock result) then return .wouldBlock
+  checkedZero "reactor queue file" raw
   return .queued
 
 /-- Convenience for protocols that reserve one native write credit per read. -/

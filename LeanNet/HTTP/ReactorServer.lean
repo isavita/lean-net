@@ -17,6 +17,7 @@ structure ReactorServerConfig where
   outputBuffers : Nat := 128
   maxInputBytes : Nat := 2 * 1024 * 1024 + 65536
   maxOutputBytes : Nat := 16 * 1024 * 1024
+  maxQueuedFileBytes : Nat := 4 * 1024 * 1024 * 1024
   workPerClient : Nat := 64
   http2 : HTTP2.Connection.Config := {}
   cleartextProtocol : Transport.Protocol := .detect
@@ -37,8 +38,21 @@ private structure InputChunk where
   release : IO Unit := pure ()
   arrived : UInt64 := 0
 
+private inductive OutputPart where
+  | bytes (view : ByteSlice)
+  | file (region : FileRegion)
+
+private def OutputPart.length : OutputPart → Nat
+  | .bytes view => view.length
+  | .file region => region.length
+
+private def OutputPart.drop (part : OutputPart) (count : Nat) : OutputPart :=
+  match part with
+  | .bytes view => .bytes (view.drop count)
+  | .file region => .file (region.drop count)
+
 private structure Output where
-  parts : List ByteSlice
+  parts : List OutputPart
   id : Option Nat := none
   barrier : Bool := false
   started : UInt64
@@ -65,6 +79,7 @@ private structure Client where
   inputBytes : Nat := 0
   outputs : List Output := []
   outputBytes : Nat := 0
+  queuedFileBytes : Nat := 0
   inFlight : Nat := 0
   pipe : Option RawPipe := none
   peerEOF : Bool := false
@@ -202,6 +217,8 @@ private def limitedReply (config : ReactorServerConfig) (reply : Reply) : Reply 
   let mut count := 0
   let mut bytes := 0
   let mut valid : Bool := reply.informational.size <= config.machine.maxInformational
+  if let some region := reply.fileRegion then
+    valid := valid && region.valid && region.length <= config.server.maxFileResponseBytes && reply.response.body.isEmpty
   for (response, options) in reply.informational.push (reply.response, reply.options) do
     valid := valid && response.body.size <= config.server.maxResponseBytes
     count := count + response.headers.size + options.trailers.size
@@ -214,20 +231,27 @@ private def limitedReply (config : ReactorServerConfig) (reply : Reply) : Reply 
   if valid then return reply
   return { response := { status := 500 }, options := { forceClose := true } }
 
-private def Driver.appendOutput (driver : Driver) (id : Reactor.SocketId)
-    (parts : Array ByteSlice) (outputId : Option Nat := none) (barrier : Bool := false) : IO Unit := do
+private def Driver.appendParts (driver : Driver) (id : Reactor.SocketId)
+    (parts : Array OutputPart) (outputId : Option Nat := none) (barrier : Bool := false) : IO Unit := do
   let some client ← driver.client? id | return
   if client.closing then return
   if parts.size > 4096 then driver.closeNow id; return
-  let parts := parts.filter (fun part => !part.isEmpty)
-  let bytes := parts.foldl (fun total part => total + part.length) 0
+  let parts := parts.filter (fun part => part.length != 0)
+  let bytes := parts.foldl (fun total part => total + match part with | .bytes view => view.length | .file _ => 0) 0
+  let files := parts.foldl (fun total part => total + match part with | .file region => region.length | .bytes _ => 0) 0
   if bytes > driver.config.maxOutputBytes - client.outputBytes then driver.closeNow id; return
+  if files > driver.config.maxQueuedFileBytes - client.queuedFileBytes then driver.closeNow id; return
   if parts.isEmpty then return
   let output : Output := { parts := parts.toList, id := outputId, barrier, started := ← driver.now }
-  driver.put id { client with outputs := client.outputs ++ [output], outputBytes := client.outputBytes + bytes }
+  driver.put id { client with outputs := client.outputs ++ [output], outputBytes := client.outputBytes + bytes,
+                              queuedFileBytes := client.queuedFileBytes + files }
   -- Appending newer output cannot move an existing absolute deadline. Start
   -- the timer only on the transition from no pending writes to pending writes.
   if client.writeDeadline.isNone then driver.syncWriteTimer id
+
+private def Driver.appendOutput (driver : Driver) (id : Reactor.SocketId)
+    (parts : Array ByteSlice) (outputId : Option Nat := none) (barrier : Bool := false) : IO Unit :=
+  driver.appendParts id (parts.map OutputPart.bytes) outputId barrier
 
 private def Driver.beginDrain (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
   let some client ← driver.client? id | return
@@ -248,6 +272,9 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
     match action with
     | .readEnabled enabled => driver.setReading id enabled
     | .write outputId parts barrier => driver.appendOutput id (parts.map ByteSlice.full) (some outputId) barrier
+    | .writeFile outputId heads region barrier =>
+      driver.appendParts id ((heads.map (fun bytes => OutputPart.bytes (ByteSlice.full bytes))).push (.file region))
+        (some outputId) barrier
     | .abort _ => driver.closeNow id
     | .drainClose => driver.beginDrain id
     | .inspectHead requestId head framing =>
@@ -282,8 +309,8 @@ private def availableSlot (slots : Array OutputSlot) : Option Nat := Id.run do
       if slot.flight.isNone then return some index
   return none
 
-/-- Copy only the next bounded wire range into one permanently reserved output
-    lease. Native vectors combine these logical operations without copying. -/
+/-- Submit one bounded wire range. Bytes use a permanently reserved lease;
+    files use the same operation ledger with a retained native file source. -/
 private def Driver.flushOne (driver : Driver) (id : Reactor.SocketId) : IO Bool := do
   let state ← driver.state.get
   let some client := state.clients[id]? | return false
@@ -293,15 +320,30 @@ private def Driver.flushOne (driver : Driver) (id : Reactor.SocketId) : IO Bool 
   let output :: rest := client.outputs | return false
   let part :: tail := output.parts | throw (IO.userError "empty HTTP output ticket")
   let some slot := state.slots[index]? | throw (IO.userError "HTTP output slot index is invalid")
-  let length := min 4096 part.length
-  if length == 0 || part.offset > 4294967295 then
+  let length := min (match part with | .bytes _ => 4096 | .file _ => 65536) part.length
+  if length == 0 then
     driver.closeNow id
     return false
   if slot.generation >= 281474976710655 then throw (IO.userError "HTTP write operation generation exhausted")
   let generation := slot.generation + 1
   let operation := generation * 65536 + UInt64.ofNat (index + 1)
-  slot.buffer.copySliceFrom part.bytes (UInt32.ofNat part.offset) (UInt32.ofNat length)
-  match ← client.socket.tryWrite slot.buffer 0 (UInt32.ofNat length) operation with
+  if let .bytes view := part then
+    if view.offset > 4294967295 then driver.closeNow id; return false
+  let submission? : Option Reactor.FileSubmission ← match part with
+    | .bytes view => do
+      slot.buffer.copySliceFrom view.bytes view.offset.toUInt32 length.toUInt32
+      let result ← client.socket.tryWrite slot.buffer 0 length.toUInt32 operation
+      pure (some (match result with | .queued => .queued | .wouldBlock => .wouldBlock))
+    | .file region =>
+      try some <$> client.socket.tryFile (region.take length) operation
+      catch _ =>
+        -- A source failure can follow a committed DATA header. Abort this
+        -- connection so its incomplete frame cannot corrupt later streams.
+        if ← id.isLive driver.reactor then driver.closeNow id else driver.forget id
+        pure none
+  let some submission := submission? | return false
+  match submission with
+  | .interrupted => return false
   | .wouldBlock =>
     driver.state.modify fun state => { state with writeBlocked := true }
     return false
@@ -320,7 +362,8 @@ private def Driver.flushOne (driver : Driver) (id : Reactor.SocketId) : IO Bool 
     { state with slots := state.slots.set! index { slot with generation, flight := some flight } }
   driver.put id { client with
     outputs := (if last then rest else ({ output with parts } :: rest))
-    outputBytes := client.outputBytes - length
+    outputBytes := client.outputBytes - (match part with | .bytes _ => length | .file _ => 0)
+    queuedFileBytes := client.queuedFileBytes - (match part with | .file _ => length | .bytes _ => 0)
     inFlight := client.inFlight + 1 }
   if last && !output.barrier then
     if let some outputId := output.id then
@@ -342,21 +385,28 @@ private def Driver.startRequest (driver : Driver) (id : Reactor.SocketId) (start
 
 -- Small control/header frames share a native 4 KiB lease. Keep larger owned
 -- payloads intact so this does not introduce a second full DATA-body copy.
-private def coalesceH2Output (parts : Array ByteArray) : Array ByteSlice := Id.run do
+private def coalesceH2Output (parts : Array WirePart) : Array OutputPart := Id.run do
   let mut result := #[]
   let mut pending := ByteArray.empty
-  for part in parts do
+  for segment in parts do
+    let part ← match segment with
+      | .file region =>
+        if !pending.isEmpty then result := result.push (.bytes (ByteSlice.full pending))
+        pending := ByteArray.empty
+        if region.length != 0 then result := result.push (.file region)
+        continue
+      | .bytes bytes => pure bytes
     if part.isEmpty then continue
     if part.size >= 4096 then
-      if !pending.isEmpty then result := result.push (ByteSlice.full pending)
+      if !pending.isEmpty then result := result.push (.bytes (ByteSlice.full pending))
       pending := ByteArray.empty
-      result := result.push (ByteSlice.full part)
+      result := result.push (.bytes (ByteSlice.full part))
     else if pending.size + part.size <= 4096 then
       pending := if pending.isEmpty then part else pending ++ part
     else
-      result := result.push (ByteSlice.full pending)
+      result := result.push (.bytes (ByteSlice.full pending))
       pending := part
-  if !pending.isEmpty then result := result.push (ByteSlice.full pending)
+  if !pending.isEmpty then result := result.push (.bytes (ByteSlice.full pending))
   return result
 
 private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
@@ -366,19 +416,31 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
   let mut actions := step.actions
   let mut output := #[]
   let mut bytes := 0
+  let mut fileBytes := 0
   let mut close := false
   while !actions.isEmpty do
     let action :: rest := actions | break
     actions := rest
     let some client ← driver.client? id | return
-    match action with
-    | .write parts =>
-      let count := parts.foldl (fun total part => total + part.size) 0
+    let parts? := match action with
+      | .write parts => some (parts.map WirePart.bytes)
+      | .writeParts parts => some parts
+      | _ => none
+    if let some parts := parts? then
+      let count := parts.foldl (fun total part => total + match part with | .bytes data => data.size | .file _ => 0) 0
+      let files := parts.foldl (fun total part => total + match part with | .file region => region.length | .bytes _ => 0) 0
       if count > driver.config.maxOutputBytes - client.outputBytes - bytes then
         driver.closeNow id
         return
+      if files > driver.config.maxQueuedFileBytes - client.queuedFileBytes - fileBytes then
+        driver.closeNow id
+        return
       bytes := bytes + count
+      fileBytes := fileBytes + files
       output := output ++ parts
+      continue
+    match action with
+    | .write _ | .writeParts _ => pure ()
     | .drainClose => close := true
     | .request event =>
       let .http2 machine := client.protocol | return
@@ -397,7 +459,7 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
   -- Preserve the generic queue's per-ticket part bound for custom large
   -- configurations without changing wire order or HTTP/1 output barriers.
   for start in [:parts.size:4096] do
-    driver.appendOutput id (parts.extract start (min parts.size (start + 4096)))
+    driver.appendParts id (parts.extract start (min parts.size (start + 4096)))
   if close then driver.beginDrain id
 
 private def Driver.failH2 (driver : Driver) (id : Reactor.SocketId)
@@ -817,6 +879,8 @@ def serveWorkerFactory (resources : WithWorkerResources) (config : ReactorServer
   if config.server.maxClients == 0 || config.server.idleTimeoutMs == 0 ||
       config.server.requestTimeoutMs == 0 || config.server.writeTimeoutMs == 0 ||
       config.outputBuffers == 0 || config.maxInputBytes == 0 || config.maxOutputBytes < 4096 ||
+      config.server.maxFileResponseBytes == 0 || config.server.maxFileResponseBytes > 9223372036854775807 ||
+      config.maxQueuedFileBytes < config.server.maxFileResponseBytes || config.maxQueuedFileBytes > 9223372036854775807 ||
       config.workPerClient == 0 || config.shutdownDrainMs == 0 ||
       config.shutdownDrainMs > 9223372036854775807 then throw (IO.userError "HTTP limits and timeouts must be positive")
   match config.http2.validate with

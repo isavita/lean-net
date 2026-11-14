@@ -11,12 +11,15 @@
 #endif
 #ifndef _WIN32
 #include "reactor.h"
+#include "reactor_file_internal.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <pthread.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -28,10 +31,17 @@
 #include <unistd.h>
 #if defined(__linux__)
 #include <sys/epoll.h>
+#include <sys/sendfile.h>
 #else
 #include <sys/event.h>
 #include <sys/time.h>
 #endif
+#if defined(__APPLE__) && defined(_POSIX_C_SOURCE)
+/* Darwin exposes sf_hdtr with its extensions but hides this prototype when
+ * POSIX feature selection is also enabled. This is the SDK's sendfile ABI. */
+extern int sendfile(int, int, off_t, off_t *, struct sf_hdtr *, int);
+#endif
+#include "reactor_file_impl.h"
 
 #define RN_NONE UINT32_MAX
 #define RN_WHEEL_SIZE 1024u
@@ -72,6 +82,8 @@ typedef struct rn_write {
     uint64_t connection, operation, buffer;
     uint32_t offset, length, sent, next;
     uint8_t active;
+    uint8_t file_kind;
+    uint64_t file, file_offset;
 } rn_write;
 typedef struct rn_timer {
     uint64_t connection, deadline_ms, deadline_tick;
@@ -96,6 +108,7 @@ struct rn_reactor {
     rn_config config;
     int queue_fd, wake_read, wake_write;
     rn_waker *wake_owner;
+    rn_file_table files;
     rn_conn *connections;
     uint32_t *free_connections, free_connection_count;
     uint32_t *paused_connections, paused_count;
@@ -320,9 +333,14 @@ static int rn_cancel_timer_impl(rn_reactor *r, uint64_t token, uint32_t kind) {
 }
 static void rn_write_release(rn_reactor *r, uint32_t index) {
     rn_write *w = &r->writes[index];
-    rn_buffer *b = &r->buffers[rn_index(w->buffer)];
-    if (b->writes) --b->writes;
-    rn_buffer_free_candidate(r, rn_index(w->buffer));
+    if (w->file_kind) {
+        rn_file_entry *entry = NULL;
+        if (!rn_files_get(&r->files, w->file, &entry) && entry->writes) --entry->writes;
+    } else {
+        rn_buffer *b = &r->buffers[rn_index(w->buffer)];
+        if (b->writes) --b->writes;
+        rn_buffer_free_candidate(r, rn_index(w->buffer));
+    }
     w->active = 0; r->free_writes[r->free_write_count++] = index;
 }
 static int rn_close_connection_impl(rn_reactor *r, uint64_t token) {
@@ -426,7 +444,8 @@ static int rn_queue_write_impl(rn_reactor *r, uint64_t token, uint64_t buffer, u
     if (c->drain_close) return -EPIPE;
     if (r->free_write_count == 0) return -EAGAIN;
     uint32_t index = r->free_writes[--r->free_write_count];
-    r->writes[index] = (rn_write){token, operation, buffer, offset, length, 0, RN_NONE, 1};
+    r->writes[index] = (rn_write){.connection=token, .operation=operation,
+        .buffer=buffer, .offset=offset, .length=length, .next=RN_NONE, .active=1};
     ++b->writes;
     if (c->tail_write == RN_NONE) c->head_write = index;
     else r->writes[c->tail_write].next = index;
@@ -442,6 +461,39 @@ static int rn_queue_write_impl(rn_reactor *r, uint64_t token, uint64_t buffer, u
         rn_write_release(r, index); return error;
     }
     return 0;
+}
+
+static int rn_queue_file_impl(rn_reactor *r, uint64_t token, uint64_t owner,
+                             uint64_t file, uint64_t offset, uint32_t length,
+                             uint64_t operation) {
+    if (!owner || owner != r->files.owner) return -EACCES;
+    rn_conn *c; int error = rn_conn_get(r, token, &c); if (error) return error;
+    rn_file_entry *entry; error = rn_files_get(&r->files, file, &entry); if (error) return error;
+    const uint8_t *bytes;
+    error = rn_file_source_view(entry->source, offset, length, &bytes); if (error) return error;
+    if (c->state != 4) return -EINVAL;
+    if (c->drain_close) return -EPIPE;
+    if (!r->free_write_count) return -EAGAIN;
+    if (entry->writes == UINT32_MAX) return -EOVERFLOW;
+    uint32_t index = r->free_writes[--r->free_write_count];
+    r->writes[index] = (rn_write){.connection=token, .operation=operation,
+        .length=length, .next=RN_NONE, .active=1, .file_kind=1,
+        .file=file, .file_offset=offset};
+    ++entry->writes;
+    if (c->tail_write == RN_NONE) c->head_write = index;
+    else r->writes[c->tail_write].next = index;
+    c->tail_write = index;
+    error = rn_interest(r, rn_index(token), (uint8_t)(c->interest | 2u));
+    if (error) {
+        if (c->head_write == index) c->head_write = c->tail_write = RN_NONE;
+        else {
+            uint32_t prior = c->head_write;
+            while (r->writes[prior].next != index) prior = r->writes[prior].next;
+            r->writes[prior].next = RN_NONE; c->tail_write = prior;
+        }
+        rn_write_release(r, index);
+    }
+    return error;
 }
 
 static int rn_close_after_writes_impl(rn_reactor *r, uint64_t token) {
@@ -680,11 +732,93 @@ static int rn_read_ready(rn_reactor *r, uint32_t index) {
     }
     return 0;
 }
+static int rn_send_file_once(int socket_fd, int file_fd, uint64_t offset,
+                            uint32_t count, uint32_t *sent) {
+    *sent = 0;
+#if defined(__linux__)
+    /* sendfile lacks MSG_NOSIGNAL. Preserve the caller's signal mask and any
+     * previously pending SIGPIPE; consume only this call's newly raised one. */
+    sigset_t blocked, previous, pending;
+    sigemptyset(&blocked); sigaddset(&blocked, SIGPIPE);
+    int mask_error = pthread_sigmask(SIG_BLOCK, &blocked, &previous);
+    if (mask_error) return -mask_error;
+    if (sigpending(&pending) < 0) {
+        int error = errno; (void)pthread_sigmask(SIG_SETMASK, &previous, NULL); return -error;
+    }
+    int had_pending = sigismember(&pending, SIGPIPE);
+    off_t position = (off_t)offset;
+    ssize_t result = sendfile(socket_fd, file_fd, &position, count);
+    int error = result < 0 ? errno : 0;
+    if (error == EPIPE && !had_pending) {
+        struct timespec immediate = {0, 0};
+        /* Signal bookkeeping may be interrupted independently of file I/O. */
+        while (sigtimedwait(&blocked, NULL, &immediate) < 0 && errno == EINTR) {}
+    }
+    mask_error = pthread_sigmask(SIG_SETMASK, &previous, NULL);
+    if (result > 0) {
+        if ((uint64_t)result > count) return -EIO;
+        *sent = (uint32_t)result;
+    }
+    return error ? -error : mask_error ? -mask_error : 0;
+#else
+    off_t amount = (off_t)count;
+    int result = sendfile(file_fd, socket_fd, (off_t)offset, &amount, NULL, 0);
+    int error = result < 0 ? errno : 0;
+    if (amount < 0 || (uint64_t)amount > count) return -EIO;
+    *sent = (uint32_t)amount;
+    return error ? -error : 0;
+#endif
+}
+
+static int rn_complete_head_write(rn_reactor *r, rn_conn *c, uint64_t token) {
+    uint32_t index = c->head_write; rn_write *write = &r->writes[index];
+    int error = rn_emit(r, RN_WRITTEN, token, write->operation, 0, 0,
+                        write->length, write->length, 0);
+    if (error) return error;
+    c->head_write = write->next;
+    if (c->head_write == RN_NONE) c->tail_write = RN_NONE;
+    rn_write_release(r, index); return 0;
+}
+
 static int rn_write_ready(rn_reactor *r, uint32_t index) {
     rn_conn *c = &r->connections[index]; uint64_t token = rn_token(index, c->generation);
     uint32_t budget = RN_WRITE_BUDGET;
+    uint32_t file_budget = 65536u;
     for (uint32_t attempt = 0; attempt < RN_WRITE_BUDGET && budget && c->head_write != RN_NONE &&
          r->event_count < r->config.max_events; ++attempt) {
+        rn_write *head = &r->writes[c->head_write];
+        if (head->file_kind) {
+            if (head->sent == head->length) {
+                int error = rn_complete_head_write(r, c, token); if (error) return error;
+                --budget; continue;
+            }
+            if (!file_budget) break;
+            rn_file_entry *entry;
+            int error = rn_files_get(&r->files, head->file, &entry);
+            uint32_t count = head->length - head->sent;
+            if (count > file_budget) count = file_budget;
+            uint32_t sent = 0;
+            if (!error) error = rn_send_file_once(c->fd, (int)entry->handle,
+                head->file_offset + head->sent, count, &sent);
+            if (sent > count) { sent = 0; error = -EIO; }
+            head->sent += sent; file_budget -= sent;
+            if (error && error != -EAGAIN && error != -EWOULDBLOCK) {
+                int emitted = rn_emit(r, RN_ERROR, token, head->operation, 0, 0, 0, error, 0);
+                if (emitted) return emitted;
+                if (error != -EINTR) return rn_close_connection_impl(r, token);
+                return 0;
+            }
+            if (!error && !sent) {
+                int emitted = rn_emit(r, RN_ERROR, token, head->operation, 0, 0, 0, -EIO, 0);
+                return emitted ? emitted : rn_close_connection_impl(r, token);
+            }
+            if (head->sent == head->length) {
+                int emitted = rn_complete_head_write(r, c, token); if (emitted) return emitted;
+                --budget;
+            }
+            if (error) return 0;
+            continue;
+        }
         struct iovec vectors[16];
         uint32_t count = 0, wi = c->head_write;
         uint32_t limit = r->config.max_events - r->event_count;
@@ -692,7 +826,9 @@ static int rn_write_ready(rn_reactor *r, uint32_t index) {
         if (limit > 16u) limit = 16u;
         size_t total = 0;
         while (wi != RN_NONE && count < limit) {
-            rn_write *w = &r->writes[wi]; rn_buffer *b = &r->buffers[rn_index(w->buffer)];
+            rn_write *w = &r->writes[wi];
+            if (w->file_kind) break;
+            rn_buffer *b = &r->buffers[rn_index(w->buffer)];
             vectors[count].iov_base = lean_sarray_cptr(b->bytes) + w->offset + w->sent;
             vectors[count].iov_len = w->length - w->sent;
             total += vectors[count].iov_len;
@@ -1014,6 +1150,18 @@ int rn_free(rn_reactor *r) {
             }
         }
     }
+    if (r->writes) {
+        for (uint32_t i = 0; i < r->config.max_writes; ++i) {
+            rn_write *write = &r->writes[i];
+            if (write->active && write->file_kind) {
+                rn_file_entry *entry = NULL;
+                if (!rn_files_get(&r->files, write->file, &entry) && entry->writes) --entry->writes;
+                write->active = 0;
+            }
+        }
+    }
+    int files_closed = rn_files_destroy(&r->files);
+    if (files_closed && !first_error) first_error = files_closed;
     int fds[3] = {r->wake_owner ? -1 : r->wake_read, r->wake_owner ? -1 : r->wake_write, r->queue_fd};
     for (uint32_t i = 0; i < 3; ++i) if (fds[i] >= 0) { int error = rn_close_fd(fds[i]); if (error && !first_error) first_error = error; }
     if (r->wake_owner) { int error = rn_waker_release(r->wake_owner); if (error && !first_error) first_error = error; }
@@ -1090,6 +1238,32 @@ static int rn_transport_access(rn_reactor *r, uint64_t token, uint64_t capabilit
     rn_conn *c; int error = rn_conn_get(r, token, &c); if (error) return error;
     if (plain) return c->transport_mode ? -EACCES : 0;
     return c->state == 4 && c->transport_mode && capability && c->transport_cap == capability ? 0 : -EACCES;
+}
+int rn_file_table_init(rn_reactor *r, uint32_t capacity) {
+    if (!r) return -EINVAL;
+    if (r->has_polled) return -EBUSY;
+    return rn_files_init(&r->files, capacity);
+}
+uint64_t rn_file_owner(const rn_reactor *r) { return r ? r->files.owner : 0; }
+int rn_file_import(rn_reactor *r, rn_file_source *source, uint64_t *out) {
+    if (!r) return -EINVAL;
+    if (r->has_polled) return -EBUSY;
+    return rn_files_import(&r->files, source, out);
+}
+int rn_file_release(rn_reactor *r, uint64_t token) {
+    return r ? rn_files_release(&r->files, token) : -EINVAL;
+}
+int rn_file_pin(rn_reactor *r, uint64_t owner, uint64_t token,
+                uint64_t offset, uint32_t length, rn_file_source **out) {
+    if (!r) return -EINVAL;
+    if (!owner || owner != r->files.owner) return -EACCES;
+    return rn_files_pin(&r->files, token, offset, length, out);
+}
+int rn_queue_file(rn_reactor *r, uint64_t connection, uint64_t owner,
+                  uint64_t file, uint64_t offset, uint32_t length,
+                  uint64_t operation) {
+    int error = rn_transport_access(r, connection, 0, 1);
+    return error ? error : rn_queue_file_impl(r, connection, owner, file, offset, length, operation);
 }
 int rn_transport_state(rn_reactor *r, uint64_t token) {
     if (!r) return -EINVAL;

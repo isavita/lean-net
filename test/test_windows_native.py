@@ -74,6 +74,12 @@ class WindowsNative(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("tests passed", result.stdout)
 
+    def test_file_regions_fifo_residency_and_lifetime(self):
+        result = subprocess.run([str(self.binary), "--files"], capture_output=True,
+                                text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("tests passed", result.stdout)
+
     def check_console(self, option):
         with subprocess.Popen([str(self.binary), option], stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, text=True,

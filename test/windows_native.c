@@ -119,6 +119,136 @@ static uint64_t accept_client(rn_reactor *reactor) {
   check(0, "accept deadline");
   return 0;
 }
+static BOOL PASCAL fail_transmit_file(SOCKET socket, HANDLE file, DWORD bytes, DWORD per_send,
+                                     LPOVERLAPPED overlapped, LPTRANSMIT_FILE_BUFFERS buffers, DWORD flags) {
+  (void)socket; (void)file; (void)bytes; (void)per_send; (void)overlapped; (void)buffers; (void)flags;
+  WSASetLastError(WSAECONNRESET); return FALSE;
+}
+static void test_file_queue(void) {
+  const uint32_t file_size = 262144, region_offset = 17, region_length = 131089;
+  uint8_t *bytes = malloc(file_size), *received = malloc(region_length + 11);
+  check(bytes && received, "allocate file fixture payload");
+  for (uint32_t i = 0; i < file_size; ++i) bytes[i] = (uint8_t)(i * 73u + i / 256u);
+  WCHAR directory[MAX_PATH], path[MAX_PATH];
+  check(GetTempPathW(MAX_PATH, directory) && GetTempFileNameW(directory, L"lnf", 0, path), "private file fixture path");
+  HANDLE writer = CreateFileW(path, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_TEMPORARY, NULL);
+  DWORD count = 0;
+  check(writer != INVALID_HANDLE_VALUE && WriteFile(writer, bytes, file_size, &count, NULL) &&
+      count == file_size && CloseHandle(writer), "write and close snapshot writer");
+  HANDLE reader = CreateFileW(path, GENERIC_READ | DELETE, FILE_SHARE_READ | FILE_SHARE_DELETE,
+      NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+  check(reader != INVALID_HANDLE_VALUE, "retain read-only delete-on-close snapshot");
+  HANDLE rejected = NULL;
+  check(DuplicateHandle(GetCurrentProcess(), reader, GetCurrentProcess(), &rejected, 0, FALSE, DUPLICATE_SAME_ACCESS), "duplicate failed publication fixture");
+  rn_file_source *source = NULL;
+  check(rn_file_source_publish((uintptr_t)rejected, file_size, 1, &source) == -ENOMEM && !source,
+      "resident budget failure consumes its source handle");
+  DWORD flags = 0;
+  check(!GetHandleInformation(rejected, &flags) && GetLastError() == ERROR_INVALID_HANDLE, "failed publication closes exactly its handle");
+  check(rn_file_prepare_residency_budget(1048576) == 0 &&
+      rn_file_source_publish((uintptr_t)reader, file_size, 1048576, &source) == 0, "publish resident Windows file source");
+  const uint8_t *mapped = NULL;
+  check(rn_file_source_view(source, region_offset, region_length, &mapped) == 0 &&
+      memcmp(mapped, bytes + region_offset, region_length) == 0, "read-only resident file region");
+  rn_reactor *reactor = NULL, *foreign = NULL; rn_config options = config();
+  uint64_t file = 0, foreign_file = 0, listener = 0;
+  check(rn_new(&options, &reactor) == 0 && rn_new(&options, &foreign) == 0 &&
+      rn_file_table_init(reactor, 1) == 0 && rn_file_table_init(foreign, 1) == 0 &&
+      rn_file_import(reactor, source, &file) == 0 && rn_file_import(foreign, source, &foreign_file) == 0,
+      "worker-local file token tables");
+  check(file == foreign_file, "foreign token deliberately aliases local numeric generation");
+  check(rn_file_owner(reactor) != rn_file_owner(foreign), "matching file tokens have separate lifetime namespaces");
+  check(rn_listen(reactor, "127.0.0.1", 0, 0, &listener) == 0, "file fixture listener");
+  SOCKET client = connect_client(listener_port(reactor, listener)); uint64_t connection = accept_client(reactor);
+  check(rn_queue_file(reactor, connection, rn_file_owner(foreign), foreign_file, 0, 1, 99) == -EINVAL,
+      "file queue checks explicit owner despite matching numeric token");
+  check(rn_queue_file(reactor, connection, rn_file_owner(reactor), file, file_size, 1, 99) == -EINVAL,
+      "file queue rejects a region beyond immutable size");
+  uint64_t header = 0, footer = 0;
+  check(rn_acquire_buffer(reactor, 6, &header) == 0 && rn_acquire_buffer(reactor, 5, &footer) == 0 &&
+      rn_buffer_copy(reactor, header, (const uint8_t *)"BEFORE", 6) == 0 &&
+      rn_buffer_copy(reactor, footer, (const uint8_t *)"AFTER", 5) == 0, "file FIFO buffer neighbors");
+  atomic_store(&native_allocations, 0); atomic_store(&track_native_allocations, 1);
+  check(rn_queue_write(reactor, connection, header, 0, 6, 10) == 0 &&
+      rn_queue_file(reactor, connection, rn_file_owner(reactor), file, region_offset, region_length, 11) == 0 &&
+      rn_queue_file(reactor, connection, rn_file_owner(reactor), file, file_size, 0, 12) == 0 &&
+      rn_queue_write(reactor, connection, footer, 0, 5, 13) == 0 &&
+      rn_buffer_release(reactor, header) == 0 && rn_buffer_release(reactor, footer) == 0,
+      "queue headers, multi-call file region, empty file and footer in one FIFO");
+  check(rn_file_release(reactor, file) == -EBUSY, "queued operations pin imported file handles");
+  check(rn_close_after_writes(reactor, connection) == 0, "file FIFO drains before close");
+  u_long nonblocking = 1; check(ioctlsocket(client, FIONBIO, &nonblocking) == 0, "nonblocking file fixture receiver");
+  size_t used = 0; unsigned completed = 0; int closed = 0; uint64_t deadline = rn_now_ms() + 5000;
+  while ((!closed || used < region_length + 11) && rn_now_ms() < deadline) {
+    int events = rn_step(reactor, 1); check(events >= 0, "file IOCP progress");
+    for (int n = 0; n < events; ++n) {
+      const rn_event *event = rn_event_at(reactor, (uint32_t)n);
+      if (event->kind == RN_WRITTEN) {
+        const uint32_t lengths[] = {6, region_length, 0, 5};
+        check(completed < 4 && event->operation == 10 + completed && event->result == lengths[completed],
+            "file completion order and exact logical lengths"); ++completed;
+      } else if (event->kind == RN_CLOSED && event->connection == connection) closed = 1;
+      else check(event->kind == RN_WAKE, "file transfer has no error or unexpected completion");
+    }
+    int n = recv(client, (char *)received + used, (int)(region_length + 11 - used), 0);
+    if (n > 0) used += (size_t)n;
+    else if (n < 0) check(WSAGetLastError() == WSAEWOULDBLOCK, "file fixture receive progress");
+  }
+  atomic_store(&track_native_allocations, 0);
+  check(closed && completed == 4 && used == region_length + 11 &&
+      memcmp(received, "BEFORE", 6) == 0 && memcmp(received + 6, bytes + region_offset, region_length) == 0 &&
+      memcmp(received + 6 + region_length, "AFTER", 5) == 0, "TransmitFile preserves exact mixed FIFO bytes");
+  check(atomic_load(&native_allocations) == 0, "established file transfers allocate no native storage");
+  check(rn_file_release(reactor, file) == 0 && rn_file_release(reactor, file) == -EINVAL,
+      "completed file release retires its generation");
+  uint64_t stale_owner = rn_file_owner(reactor), stale_file = file;
+  check(closesocket(client) == 0 && rn_free(reactor) == 0 && rn_free(foreign) == 0,
+      "file mapping and imports outlive completed IOCP operations");
+  DWORD before = 0, after = 0; check(GetProcessHandleCount(GetCurrentProcess(), &before), "file cancellation handle baseline");
+  for (unsigned cycle = 0; cycle < 16; ++cycle) {
+    check(rn_new(&options, &reactor) == 0 && rn_file_table_init(reactor, 1) == 0 &&
+        rn_file_import(reactor, source, &file) == 0 && rn_listen(reactor, "127.0.0.1", 0, 0, &listener) == 0,
+        "file cancellation setup");
+    rn_file_source *unexpected = NULL;
+    check(file == stale_file && rn_file_owner(reactor) > stale_owner &&
+        rn_file_pin(reactor, stale_owner, stale_file, 0, 1, &unexpected) == -EINVAL,
+        "a stale file owner cannot alias an identically numbered token after reactor teardown");
+    client = connect_client(listener_port(reactor, listener)); connection = accept_client(reactor);
+    int send_size = 1024;
+    check(setsockopt(reactor->connections[rn_index(connection)].socket, SOL_SOCKET, SO_SNDBUF,
+        (const char *)&send_size, sizeof(send_size)) == 0, "force pending file transport");
+    check(rn_queue_file(reactor, connection, rn_file_owner(reactor), file, 0, file_size, 500) == 0 &&
+        rn_step(reactor, 0) >= 0, "submit cancellable TransmitFile");
+    rn_connection *active = &reactor->connections[rn_index(connection)];
+    int pending = active->write_head != RN_NONE && reactor->writes[active->write_head].op.pending;
+    check(rn_close_connection(reactor, connection) == 0, "cancel queued and submitted file operations");
+    if (pending) check(rn_file_release(reactor, file) == -EBUSY, "submitted file remains pinned until IOCP cancellation drains");
+    check(closesocket(client) == 0 && rn_free(reactor) == 0, "cancel/drain/free retains submitted file storage");
+  }
+  check(GetProcessHandleCount(GetCurrentProcess(), &after) && after <= before + 1,
+      "repeated TransmitFile cancellation retains no handles");
+  check(rn_new(&options, &reactor) == 0 && rn_file_table_init(reactor, 1) == 0 &&
+      rn_file_import(reactor, source, &file) == 0 && rn_listen(reactor, "127.0.0.1", 0, 0, &listener) == 0,
+      "immediate file submission failure setup");
+  client = connect_client(listener_port(reactor, listener)); connection = accept_client(reactor);
+  check(rn_queue_file(reactor, connection, rn_file_owner(reactor), file, 0, file_size, 600) == 0,
+      "queue immediate-failure file operation");
+  reactor->connections[rn_index(connection)].transmit_file = fail_transmit_file;
+  unsigned failed = 0;
+  for (unsigned attempt = 0; attempt < 10; ++attempt) {
+    int events = rn_step(reactor, 0); check(events >= 0, "immediate file failure completion");
+    for (int n = 0; n < events; ++n) {
+      const rn_event *event = rn_event_at(reactor, (uint32_t)n);
+      if (event->kind == RN_ERROR && event->operation == 600) {
+        check(event->result == -ECONNRESET, "immediate submission retains original file error"); ++failed;
+      }
+    }
+  }
+  check(failed == 1 && rn_file_release(reactor, file) == 0, "immediate TransmitFile failure retires exactly once");
+  check(closesocket(client) == 0 && rn_free(reactor) == 0, "immediate file failure cleanup");
+  check(rn_file_source_release(source) == 0, "release final immutable mapping and private backing file");
+  free(received); free(bytes);
+}
 static void test_pool_and_timer(void) {
   rn_reactor *reactor;
   rn_config options = config();
@@ -1106,6 +1236,8 @@ int main(int argc, char **argv) {
     test_claimed_transport();
     test_read_batch_pause_boundary();
     test_retained_waker();
+  } else if (argc == 2 && strcmp(argv[1], "--files") == 0) {
+    test_file_queue();
   } else if (argc == 2 && strcmp(argv[1], "--dispatch") == 0) {
     test_dispatch_validation();
     test_dispatch_capacity_one();

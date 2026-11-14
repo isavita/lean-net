@@ -16,6 +16,9 @@ namespace LeanNetTLS.FFI.Worker
   (buffer : @& LeanNet.Reactor.Buffer) (offset length : UInt32) : IO UInt64
 @[extern "lean_tlsw_write"] opaque write (handle session : UInt64)
   (buffer : @& LeanNet.Reactor.Buffer) (offset length : UInt32) (operation : UInt64) : IO UInt64
+@[extern "lean_tlsw_write_file"] opaque writeFile (handle session owner file offset : UInt64)
+  (length : UInt32) (operation : UInt64) : IO UInt64
+@[extern "lean_tlsw_resume_file"] opaque resumeFile (handle session : UInt64) : IO UInt64
 @[extern "lean_tlsw_release_plain"] opaque releasePlain (handle session : UInt64) : IO UInt64
 @[extern "lean_tlsw_peer_eof"] opaque peerEOF (handle session : UInt64) : IO UInt64
 @[extern "lean_tlsw_shutdown"] opaque shutdown (handle session : UInt64) : IO UInt64

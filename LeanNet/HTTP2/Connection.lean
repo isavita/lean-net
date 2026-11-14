@@ -1,3 +1,4 @@
+import LeanNet.FileRegion
 import LeanNet.HTTP2.Frame
 import LeanNet.HTTP2.Stream
 import LeanNet.HTTP2.HPACK
@@ -12,8 +13,28 @@ structure RequestEvent where
   streamId : UInt32
   request : HTTP1.Request
 
+private inductive ResponseBody where
+  | bytes (data : ByteArray)
+  | file (region : FileRegion)
+
+private def ResponseBody.length : ResponseBody → Nat
+  | .bytes data => data.size
+  | .file region => region.length
+
+private def ResponseBody.residentBytes : ResponseBody → Nat
+  | .bytes data => data.size
+  | .file _ => 0
+
+private def ResponseBody.fileBytes : ResponseBody → Nat
+  | .bytes _ => 0
+  | .file region => region.length
+
+private def ResponseBody.isFile : ResponseBody → Bool
+  | .file _ => true
+  | _ => false
+
 private structure PendingResponse where
-  body : ByteArray
+  body : ResponseBody
   offset : Nat := 0
   trailers : Array HPACK.Header := #[]
 
@@ -54,6 +75,8 @@ structure Config where
   maxBufferedRequestBytes : Nat := 8 * 1024 * 1024
   maxResponseBodyBytes : Nat := 8 * 1024 * 1024
   maxQueuedResponseBytes : Nat := 8 * 1024 * 1024
+  maxFileResponseBytes : Nat := 1024 * 1024 * 1024
+  maxQueuedFileBytes : Nat := 4 * 1024 * 1024 * 1024
   maxOutputBatchBytes : Nat := 1048576
   maxRequestBatch : Nat := 128
   maxFramesPerStep : Nat := 256
@@ -72,6 +95,8 @@ def Config.validate (config : Config) : Except String Unit := do
       config.maxContinuationFrames == 0 || config.maxRequestBodyBytes == 0 ||
       config.maxBufferedRequestBytes < config.maxRequestBodyBytes ||
       config.maxResponseBodyBytes == 0 || config.maxQueuedResponseBytes < config.maxResponseBodyBytes ||
+      config.maxFileResponseBytes == 0 || config.maxFileResponseBytes > 9223372036854775807 ||
+      config.maxQueuedFileBytes < config.maxFileResponseBytes || config.maxQueuedFileBytes > 9223372036854775807 ||
       config.maxOutputBatchBytes < 16393 || config.maxRequestBatch == 0 ||
       config.maxFramesPerStep == 0 || config.maxDataPerDrain == 0 ||
       config.maxDataPerDrain + 9 > config.maxOutputBatchBytes || config.maxResetHistory == 0 ||
@@ -611,7 +636,7 @@ private def handleFrame (connection : Connection) (frame : Frame) :
 private def pendingReady (connection : Connection) (entry : Exchange) : Bool :=
   match entry.pending with
   | none => false
-  | some pending => pending.offset == pending.body.size ||
+  | some pending => pending.offset == pending.body.length ||
       headerListSize pending.trailers > connection.peerHeaderListBytes ||
       (connection.flow.sendWindow > 0 && entry.stream.sendWindow > 0)
 
@@ -636,42 +661,67 @@ private def choosePending (connection : Connection) : Option Exchange := Id.run 
 
 /-- Emit bounded DATA using urgency, serial non-incremental bodies, and round-robin
     incremental bodies. Each 64 KiB serial burst yields to an incremental peer. -/
-def Connection.drain (connection : Connection) : Except ProtocolError (Connection × ByteArray) := do
+def Connection.drainParts (connection : Connection) : Except ProtocolError (Connection × Array WirePart) := do
   let mut connection := connection
-  let mut output := ByteArray.empty
+  let mut output := #[]
+  let mut outputSize := 0
   let mut budget := connection.config.maxDataPerDrain
   for _ in [:connection.config.maxFramesPerStep] do
     if connection.failure.isSome then break
     let some entry := choosePending connection | break
     let some pending := entry.pending | break
     if headerListSize pending.trailers > connection.peerHeaderListBytes then
-      if output.size + 13 > connection.config.maxOutputBatchBytes then break
+      if outputSize + 13 > connection.config.maxOutputBatchBytes then break
       connection ← markReset connection entry.stream.id
-      output := output.append (← rst entry.stream.id .internalError)
+      let bytes ← rst entry.stream.id .internalError
+      output := output.push (.bytes bytes)
+      outputSize := outputSize + bytes.size
       continue
-    if pending.offset == pending.body.size then
+    if pending.offset == pending.body.length then
       let (encoder, bytes) ← encodedHeaders connection.encoder pending.trailers entry.stream.id true connection.peerFrameSize
-      if output.size + bytes.size > connection.config.maxOutputBatchBytes then break
+      if outputSize + bytes.size > connection.config.maxOutputBatchBytes then break
       let _ ← entry.stream.apply .server (.headers .outbound true)
       connection := removeStream { connection with encoder } entry.stream.id
-      output := output.append bytes
+      output := output.push (.bytes bytes)
+      outputSize := outputSize + bytes.size
       continue
     if budget == 0 then break
     let available := min budget (min connection.peerFrameSize (min 16384
       (min connection.flow.sendWindow.toNat entry.stream.sendWindow.toNat)))
-    let size := min available (pending.body.size - pending.offset)
-    if size == 0 || output.size + size + 9 > connection.config.maxOutputBatchBytes then break
-    let finalBody := pending.offset + size == pending.body.size
+    let size := min available (pending.body.length - pending.offset)
+    if size == 0 || outputSize + size + 9 > connection.config.maxOutputBatchBytes then break
+    let finalBody := pending.offset + size == pending.body.length
     let final := finalBody && pending.trailers.isEmpty
     let some (flow, stream) := connection.flow.sendData entry.stream size final | break
     let (stream, _) ← stream.apply .server (.data .outbound final)
-    let data := pending.body.extract pending.offset (pending.offset + size)
-    output := output.append (← wire ⟨0, if final then 1 else 0, stream.id, data⟩)
+    match pending.body with
+    | .bytes body =>
+      let data := body.extract pending.offset (pending.offset + size)
+      output := output.push (.bytes (← wire ⟨0, if final then 1 else 0, stream.id, data⟩))
+    | .file region =>
+      let header := (ByteArray.mk #[UInt8.ofNat (size / 65536), UInt8.ofNat (size / 256), UInt8.ofNat size, 0, if final then 1 else 0]).append (u32 stream.id)
+      output := (output.push (.bytes header)).push (.file ((region.drop pending.offset).take size))
+    outputSize := outputSize + size + 9
     let burst := if entry.priority.incremental then 0 else min 65536 (connection.nonIncrementalBytes[entry.priority.urgency.toNat]! + size)
     connection := { connection with flow, incrementalCursors := if entry.priority.incremental then connection.incrementalCursors.set! entry.priority.urgency.toNat stream.id else connection.incrementalCursors, nonIncrementalBytes := connection.nonIncrementalBytes.set! entry.priority.urgency.toNat burst }
     if final then connection := removeStream connection stream.id
     else connection := putStream connection { entry with stream, pending := some { pending with offset := pending.offset + size } }
     budget := budget - size
+  return (connection, output)
+
+private def hasPendingFile (connection : Connection) : Bool :=
+  connection.streams.any (fun entry => entry.pending.any (fun pending => pending.body.isFile))
+
+/-- Byte-only compatibility sink. File-aware transports use `drainParts`; a
+    file cannot be silently materialized or omitted by the legacy adapter. -/
+def Connection.drain (connection : Connection) : Except ProtocolError (Connection × ByteArray) := do
+  if hasPendingFile connection then throw (connError .internalError "file output requires drainParts")
+  let (connection, parts) ← connection.drainParts
+  let mut output := ByteArray.empty
+  for part in parts do
+    match part with
+    | .bytes bytes => output := output.append bytes
+    | .file _ => throw (connError .internalError "file output reached byte-only sink")
   return (connection, output)
 
 private def sensitiveName (name : String) : Bool :=
@@ -726,39 +776,58 @@ def Connection.informational (connection : Connection) (id : UInt32) (response :
   let (stream, _) ← entry.stream.apply .server (.headers .outbound false)
   return (putStream { connection with encoder } { entry with stream }, bytes)
 
-/-- Queue a final response's HEADERS and body without scheduling DATA. -/
-def Connection.queueResponse (connection : Connection) (id : UInt32) (response : HTTP1.Response)
-    (trailers : Array HTTP1.Header := #[]) : Except ProtocolError (Connection × ByteArray) := do
+private def queueResponseBody (connection : Connection) (id : UInt32) (response : HTTP1.Response)
+    (body : ResponseBody) (trailers : Array HTTP1.Header) : Except ProtocolError (Connection × ByteArray) := do
   let some entry := findStream connection id | throw (streamError id .streamClosed "response stream is closed")
   if !entry.delivered || entry.pending.isSome then throw (streamError id .protocolError "response is not expected")
   let some head := entry.head | throw (streamError id .internalError "missing request head")
   if connection.failure.isSome then throw (streamError id .streamClosed "connection failed")
-  if response.body.size > connection.config.maxResponseBodyBytes then throw (streamError id .internalError "response exceeds limit")
-  let queued := connection.streams.foldl (fun n entry => n + match entry.pending with | some p => p.body.size | none => 0) 0
-  if queued + response.body.size > connection.config.maxQueuedResponseBytes then throw (streamError id .internalError "response queue exceeds limit")
+  match body with
+  | .bytes bytes =>
+    if bytes.size > connection.config.maxResponseBodyBytes then throw (streamError id .internalError "response exceeds limit")
+    let queued := connection.streams.foldl (fun n entry => n + match entry.pending with | some p => p.body.residentBytes | none => 0) 0
+    if queued + bytes.size > connection.config.maxQueuedResponseBytes then throw (streamError id .internalError "response queue exceeds limit")
+  | .file region =>
+    if !region.valid || !response.body.isEmpty then throw (streamError id .internalError "invalid or mixed file response")
+    if response.status < 200 || response.status == 204 || response.status == 205 || response.status == 304 then
+      throw (streamError id .internalError "this status cannot carry a file response")
+    if region.length > connection.config.maxFileResponseBytes then throw (streamError id .internalError "file response exceeds limit")
+    let queued := connection.streams.foldl (fun n entry => n + match entry.pending with | some p => p.body.fileBytes | none => 0) 0
+    if queued + region.length > connection.config.maxQueuedFileBytes then throw (streamError id .internalError "file response queue exceeds limit")
   match response.validate head.method with
   | .error message => throw (streamError id .internalError message)
   | .ok _ => pure ()
   let bodyForbidden := head.method == "HEAD" || response.status == 204 || response.status == 205 || response.status == 304
   if bodyForbidden && !trailers.isEmpty then throw (streamError id .internalError "trailers forbidden for this response")
   let trailing ← encodedTrailers connection id trailers
-  let noBody := bodyForbidden || response.body.isEmpty
+  let noBody := bodyForbidden || body.length == 0
   let endStream := noBody && trailing.isEmpty
   let mut fields ← responseFields connection id response
   if response.status != 204 && response.status != 304 then
-    fields := fields.push { name := "content-length".toUTF8, value := (toString response.body.size).toUTF8 }
+    fields := fields.push { name := "content-length".toUTF8, value := (toString body.length).toUTF8 }
   checkPeerHeaders connection id fields
   let (encoder, headers) ← encodedHeaders connection.encoder fields id endStream connection.peerFrameSize
   if headers.size > connection.config.maxOutputBatchBytes then throw (streamError id .internalError "response output limit exceeded")
   let (stream, _) ← entry.stream.apply .server (.headers .outbound endStream)
   let connection := { connection with encoder }
   if endStream then return (removeStream connection id, headers)
-  let body := if bodyForbidden then ByteArray.empty else response.body
   return (putStream connection { entry with stream, pending := some { body, trailers := trailing } }, headers)
+
+/-- Queue a final byte response without scheduling DATA. -/
+def Connection.queueResponse (connection : Connection) (id : UInt32) (response : HTTP1.Response)
+    (trailers : Array HTTP1.Header := #[]) : Except ProtocolError (Connection × ByteArray) :=
+  queueResponseBody connection id response (.bytes response.body) trailers
+
+/-- Queue file metadata without reading its source or charging resident-body
+    memory. Logical file debt has separate per-response/connection limits. -/
+def Connection.queueFileResponse (connection : Connection) (id : UInt32) (response : HTTP1.Response)
+    (region : FileRegion) (trailers : Array HTTP1.Header := #[]) : Except ProtocolError (Connection × ByteArray) :=
+  queueResponseBody connection id response (.file region) trailers
 
 /-- Compatibility helper: queue HEADERS, then schedule a bounded body batch. -/
 def Connection.respond (connection : Connection) (id : UInt32) (response : HTTP1.Response) :
     Except ProtocolError (Connection × ByteArray) := do
+  if hasPendingFile connection then throw (connError .internalError "file output requires drainParts")
   let (connection, headers) ← connection.queueResponse id response
   let (connection, data) ← connection.drain
   return (connection, headers.append data)
@@ -929,6 +998,7 @@ def Connection.finish (connection : Connection) : Connection.Step := Id.run do
 /-- Legacy owned-input adapter. The reactor path uses `feedSlice` directly. -/
 def Connection.feed (connection : Connection) (input : ByteArray) :
     Except ProtocolError (Connection × ByteArray × Array RequestEvent) := do
+  if hasPendingFile connection then throw (connError .internalError "file output requires feedSlice and drainParts")
   let mut connection := connection
   let mut consumed := 0
   let mut output := ByteArray.empty

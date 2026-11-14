@@ -4,6 +4,13 @@ import LeanNetTLS.ReactorServer
 
 namespace LeanNetTLS.Server
 
+def serveStaticWithOptions (certificate privateKey : String) (root : System.FilePath)
+    (catalogConfig : LeanNet.HTTP.Static.Catalog.Config := {})
+    (http : LeanNet.HTTP.ReactorServerConfig := {})
+    (host : String := "127.0.0.1") (port : UInt16 := 8443) : IO Unit :=
+  ReactorServer.serveStaticRoot root { certificateChain := certificate, privateKey }
+    catalogConfig http host port
+
 /-- Serve the shared router through the native reactor and dedicated TLS
     workers. Compatibility callbacks keep their single-worker ownership. -/
 def serveWithConfig (router : LeanNet.HTTP1.Router) (config : LeanNet.HTTP1.ServerConfig)

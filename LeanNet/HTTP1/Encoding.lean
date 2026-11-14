@@ -1,3 +1,4 @@
+import LeanNet.FileRegion
 import LeanNet.HTTP1.Protocol
 import LeanNet.HTTP1.Response
 
@@ -38,6 +39,7 @@ structure Reply where
   response : Response
   options : ResponseOptions := {}
   informational : Array (Response × ResponseOptions) := #[]
+  fileRegion : Option FileRegion := none
 
 private def fieldTokenByte (b : UInt8) : Bool :=
   let n := b.toNat
@@ -256,6 +258,37 @@ def Response.encodeFor (response : Response) (context : EncodeContext)
     return { parts := #[head, (hexLength response.body.size).append "\r\n".toUTF8,
       response.body, "\r\n".toUTF8, chunkEnd options.trailers], framing, next }
   return { parts := if response.body.isEmpty then #[head] else #[head, response.body], framing, next }
+
+/-- A file response carries only headers and immutable source metadata. The
+    region is absent for HEAD and empty files, while framing retains GET length. -/
+structure EncodedFileResponse where
+  headParts : Array ByteArray
+  fileRegion : Option FileRegion := none
+  framing : BodyFraming
+  next : ResponseNext
+
+/-- Encode a known-length file response without reading its source. ByteArray
+    encoding remains a separate compatibility API with all its existing modes. -/
+def Response.encodeFileFor (response : Response) (region : FileRegion) (context : EncodeContext)
+    (options : ResponseOptions := {}) : Except String EncodedFileResponse := do
+  if !region.valid then throw "invalid file region"
+  if !response.body.isEmpty then throw "response cannot contain both bytes and a file"
+  if response.status < 200 || response.status == 204 || response.status == 205 || response.status == 304 then
+    throw "this status cannot carry a file response"
+  if !options.trailers.isEmpty then throw "file responses do not support trailers"
+  match options.framing with
+  | none => pure ()
+  | some (.contentLength length) =>
+    if length != region.length then throw "Content-Length does not match the file region"
+  | _ => throw "file responses require known Content-Length framing"
+  response.validate context.requestMethod
+  let fields ← responseFields response context
+  let reason ← responseReason response options
+  let framing := BodyFraming.contentLength region.length
+  let next := ResponseNext.nextRequest (if options.forceClose then .close else
+    connAction context.version context.requestHeaders framing)
+  let head := responseHead response context fields reason framing next ByteArray.empty
+  return { headParts := #[head], fileRegion := if context.requestMethod == "HEAD" || region.length == 0 then none else some region, framing, next }
 
 private def splitProtocols (value : ByteArray) : List (List UInt8) := go value.toList [] []
 where

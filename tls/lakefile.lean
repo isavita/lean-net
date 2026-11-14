@@ -5,8 +5,8 @@ package «lean-net-tls» where
   moreLinkArgs := run_io do
     let version ← IO.Process.output { cmd := "pkg-config", args := #["--atleast-version=1.1.1", "openssl"] }
     if version.exitCode != 0 then throw <| IO.userError "OpenSSL 1.1.1 or newer is required"
-    let output ← IO.Process.output { cmd := "pkg-config", args := #["--libs", "openssl"] }
-    if output.exitCode != 0 then throw <| IO.userError "pkg-config --libs openssl failed"
+    let output ← IO.Process.output { cmd := "pkg-config", args := #["--libs", "openssl", "zlib", "libbrotlienc", "libbrotlicommon"] }
+    if output.exitCode != 0 then throw <| IO.userError "pkg-config could not locate TLS and file-codec libraries"
     let flags := (output.stdout.trimAscii.toString.splitOn " ").filter (· != "") |>.toArray
     if System.Platform.isWindows then
       -- A broad MSYS2 -L path also overrides Lean's matching MinGW CRT archives.
@@ -15,14 +15,30 @@ package «lean-net-tls» where
       if location.exitCode != 0 || location.stdout.trimAscii.toString.isEmpty then
         throw <| IO.userError "pkg-config could not locate the OpenSSL import libraries"
       let directory := System.FilePath.mk location.stdout.trimAscii.toString
-      let mut libraries : Array String := #[]
+      let mut libraries : Array String := #["-lws2_32"]
       for name in #["libssl.dll.a", "libcrypto.dll.a"] do
         let path := directory / name
         unless ← path.pathExists do
           throw <| IO.userError s!"missing OpenSSL DLL import library: {path}"
         libraries := libraries.push path.toString
+      for (packageName, libraryName) in #[
+          ("zlib", "libz.dll.a"), ("libbrotlienc", "libbrotlienc.dll.a"),
+          ("libbrotlicommon", "libbrotlicommon.dll.a")] do
+        let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", packageName] }
+        if location.exitCode != 0 then throw <| IO.userError s!"cannot locate {packageName} import library"
+        let path := System.FilePath.mk location.stdout.trimAscii.toString / libraryName
+        unless ← path.pathExists do throw <| IO.userError s!"missing codec import library: {path}"
+        libraries := libraries.push path.toString
       return libraries ++ flags.filter (fun flag =>
-        !flag.startsWith "-L" && flag != "-lssl" && flag != "-lcrypto")
+        !flag.startsWith "-L" && flag != "-lssl" && flag != "-lcrypto" &&
+        flag != "-lz" && flag != "-lbrotlienc" && flag != "-lbrotlicommon")
+    if System.Platform.isOSX then
+      let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", "zlib"] }
+      if location.exitCode != 0 then throw <| IO.userError "cannot locate zlib library"
+      let library := System.FilePath.mk location.stdout.trimAscii.toString / "libz.dylib"
+      unless ← library.pathExists do
+        throw <| IO.userError "Select macOS zlib's lib/pkgconfig directory in PKG_CONFIG_PATH"
+      return flags.map (fun flag => if flag == "-lz" then library.toString else flag) ++ #["-pthread"]
     return flags ++ #["-pthread"]
 
 require «lean-net» from "../"
@@ -45,7 +61,8 @@ extern_lib tls_shim (pkg : NPackage __name__) := do
     (#["-isystem", includeDir.toString] ++ flags) #["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"] compiler
   let mut worker ← inputTextFile (pkg.dir / "c" / "tls_worker.c")
   for path in #[pkg.dir / "c" / "tls_worker.h", pkg.dir / ".." / "c" / "reactor.h",
-      pkg.dir / ".." / "c" / "reactor_lean.h"] do
+      pkg.dir / ".." / "c" / "reactor_lean.h", pkg.dir / ".." / "c" / "reactor_file.h",
+      pkg.dir / ".." / "c" / "reactor_file_internal.h", pkg.dir / ".." / "c" / "reactor_file_impl.h"] do
     let header ← inputTextFile path
     worker := worker.zipWith (fun source _ => source) header
   let threadFlags := if System.Platform.isWindows then #[] else #["-pthread"]
@@ -65,3 +82,6 @@ lean_exe «lean-net-tls-interruptible-test» where
 
 lean_exe «lean-net-tls-reactor-fixture» where
   root := `test.TLSReactorFixture
+
+lean_exe «lean-net-tls-static-fixture» where
+  root := `test.TLSStaticFixture

@@ -7,6 +7,7 @@ namespace LeanNet.HTTP2.Machine
 /-- Protocol actions carry owned bytes and application requests, never sockets. -/
 inductive Action where
   | write (parts : Array ByteArray)
+  | writeParts (parts : Array WirePart)
   | request (event : RequestEvent)
   | drainClose
 
@@ -115,7 +116,9 @@ private def encodeReply (state : State) (id : UInt32) (reply : HTTP1.Reply)
       | .ok (next, wire, _) =>
         connection := next
         if !wire.isEmpty then output := output.push wire
-  let (next, wire) ← connection.queueResponse id reply.response reply.options.trailers
+  let (next, wire) ← match reply.fileRegion with
+    | none => connection.queueResponse id reply.response reply.options.trailers
+    | some region => connection.queueFileResponse id reply.response region reply.options.trailers
   connection := next
   if !wire.isEmpty then output := output.push wire
   if reply.options.forceClose then
@@ -148,8 +151,15 @@ def State.fail (state : State) (error : ProtocolError) : Step :=
 
 def State.drain (state : State) : Step :=
   if state.closing then { state }
-  else match state.connection.drain with
-    | .ok (connection, wire) => progress state connection #[wire]
+  else match state.connection.drainParts with
+    | .ok (connection, parts) =>
+      let result := progress state connection
+      if parts.isEmpty then result
+      else if parts.any (fun part => match part with | .file _ => true | _ => false) then
+        { result with actions := .writeParts parts :: result.actions }
+      else
+        let bytes := parts.foldl (fun out part => match part with | .bytes bytes => out.append bytes | _ => out) ByteArray.empty
+        { result with actions := writes #[bytes] ++ result.actions }
     | .error error => fatal state error
 
 def State.tick (state : State) (now timeoutMs : Nat) : Step :=

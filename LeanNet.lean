@@ -27,6 +27,7 @@ import LeanNet.HTTP2.Push
 import LeanNet.HTTP2.Machine
 import LeanNet.HTTP2.Connection
 import LeanNet.HTTP2.Server
+import LeanNet.HTTP.Static
 
 import LeanNet.Socket.State
 import LeanNet.Reactor.Basic

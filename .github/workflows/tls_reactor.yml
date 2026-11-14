@@ -34,14 +34,14 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config openssl curl
+          sudo apt-get install -y libssl-dev zlib1g-dev libbrotli-dev pkg-config openssl curl
           echo "LEAN_NET_TEST_OPENSSL=openssl" >> "$GITHUB_ENV"
           echo "LEAN_NET_TEST_CURL=curl" >> "$GITHUB_ENV"
       - name: Install macOS TLS tools
         if: runner.os == 'macOS'
         run: |
-          brew install openssl@3 pkgconf curl
-          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
+          brew install openssl@3 zlib brotli pkgconf curl
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
           echo "LEAN_NET_TEST_OPENSSL=$(brew --prefix openssl@3)/bin/openssl" >> "$GITHUB_ENV"
           echo "LEAN_NET_TEST_CURL=$(brew --prefix curl)/bin/curl" >> "$GITHUB_ENV"
       - name: Install Windows MINGW64 TLS tools
@@ -56,6 +56,8 @@ jobs:
             mingw-w64-x86_64-openssl
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-curl
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-brotli
       - name: Select Windows native toolchain and DLL paths
         if: runner.os == 'Windows'
         shell: pwsh
@@ -81,8 +83,8 @@ jobs:
           echo "PYTHONPATH=$RUNNER_TEMP/lean-net-http2-test-deps" >> "$GITHUB_ENV"
       - name: Build public TLS APIs and native fixtures
         run: |
-          lake build lean-net-http1 lean-net-http2-reactor-fixture
-          lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture
+          lake build lean-net-http1 lean-net-http2-reactor-fixture lean-net-static-fixture
+          lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture lean-net-tls-static-fixture
       - name: Context ownership and policy sanitizers
         if: runner.os != 'Windows'
         run: ${{ matrix.python }} tls/test/test_tls_context_native.py -v
@@ -97,3 +99,5 @@ jobs:
         run: lake env ${{ matrix.python }} test/test_http2_reactor.py -v
       - name: Public HTTP/2 CLI push acceptance
         run: lake env ${{ matrix.python }} test/test_http2_cli.py -v
+      - name: Static files, validators, compression and file lifetimes
+        run: lake env ${{ matrix.python }} test/test_static_files.py -v

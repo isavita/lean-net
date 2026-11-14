@@ -1,16 +1,18 @@
 import LeanNet
+import LeanNet.HTTP.CLI
 
 def main (args : List String) : IO UInt32 := do
-  let enablePush := args.contains "--enable-push"
-  let args := args.filter (· != "--enable-push")
-  let port ← match args with
-    | [] => pure 8080
-    | [arg] =>
-      match arg.toNat? with
-      | some n =>
-        if n > 0 && n ≤ 65535 then pure n
-        else throw (IO.userError "port must be between 1 and 65535")
-      | none => throw (IO.userError "port must be a decimal number")
-    | _ => throw (IO.userError "usage: lean-net-http1 [--enable-push] [port]")
-  LeanNet.HTTP2.serveWithOptions { http2 := { enablePush } } "127.0.0.1" (UInt16.ofNat port)
+  let options ← match LeanNet.HTTP.CLI.parse args with
+    | .ok value => pure value | .error message => throw (IO.userError message)
+  if options.positional.length > 1 then
+    throw (IO.userError "usage: lean-net-http1 [--enable-push] [--static DIRECTORY] [--static-memory MiB] [port]")
+  let port ← match LeanNet.HTTP.CLI.port options.positional.head? 8080 with
+    | .ok value => pure value | .error message => throw (IO.userError message)
+  let http : LeanNet.HTTP.ReactorServerConfig := { http2 := { enablePush := options.enablePush } }
+  if let some root := options.staticRoot then
+    let bytes := options.staticMemoryMiB * 1024 * 1024
+    LeanNet.HTTP.Static.serveRoot root
+      { builder := { maxFileBytes := bytes, maxPackBytes := bytes }, residentBytes := bytes }
+      http "127.0.0.1" port
+  else LeanNet.HTTP2.serveWithOptions http "127.0.0.1" port
   return 0

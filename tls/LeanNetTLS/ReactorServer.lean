@@ -1,7 +1,22 @@
 import LeanNet.HTTP.ReactorServer
 import LeanNetTLS.Reactor
+import LeanNet.HTTP.Static.Catalog
 
 namespace LeanNetTLS.ReactorServer
+
+/-- TLS encrypts file regions on its dedicated worker, using the catalog's
+    resident immutable source while preserving normal ciphertext fences. -/
+def serveStaticRoot (root : System.FilePath) (tls : Reactor.Config)
+    (catalogConfig : LeanNet.HTTP.Static.Catalog.Config := {})
+    (http : LeanNet.HTTP.ReactorServerConfig := {})
+    (host : String := "127.0.0.1") (port : UInt16 := 8443) : IO Unit :=
+  Reactor.withBundle tls fun bundle =>
+    LeanNet.HTTP.Static.Catalog.withCatalog root catalogConfig fun catalog =>
+      LeanNet.HTTP.ReactorServer.serveWorkerFactory
+        (fun _ maxClients reactor use => do
+          let bound ← catalog.bind reactor
+          Reactor.withWorker bundle tls reactor maxClients fun transport => do
+            use transport (← bound.handlers)) http host port
 
 /-- Build independent application handlers on each reactor owner, sharing only
     the sealed certificate bundle across the dedicated TLS workers. -/

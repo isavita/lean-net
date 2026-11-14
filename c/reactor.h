@@ -3,6 +3,7 @@
 #include <lean/lean.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "reactor_file.h"
 
 typedef struct rn_reactor rn_reactor;
 typedef struct rn_waker rn_waker;
@@ -57,6 +58,17 @@ int rn_step(rn_reactor *reactor, int timeout_ms);
 const rn_event *rn_event_at(const rn_reactor *reactor, uint32_t index);
 int rn_queue_write(rn_reactor *reactor, uint64_t connection, uint64_t buffer,
                    uint32_t offset, uint32_t length, uint64_t operation);
+/* File tables/imports are setup-time allocations. A source remains immutable
+ * for its complete lifetime. Regions carry explicit reactor ownership. */
+int rn_file_table_init(rn_reactor *, uint32_t capacity);
+uint64_t rn_file_owner(const rn_reactor *);
+int rn_file_import(rn_reactor *, rn_file_source *, uint64_t *out_token);
+int rn_file_release(rn_reactor *, uint64_t token);
+int rn_file_pin(rn_reactor *, uint64_t owner, uint64_t token,
+                 uint64_t offset, uint32_t length, rn_file_source **out);
+int rn_queue_file(rn_reactor *, uint64_t connection, uint64_t owner,
+                   uint64_t file, uint64_t offset, uint32_t length,
+                   uint64_t operation);
 /* Owner-thread application backpressure, separate from native pool pressure.
  * Pausing prevents future reads; an outstanding IOCP read and completions
  * already returned in the current batch can still deliver data. */

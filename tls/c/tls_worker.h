@@ -28,6 +28,9 @@ lean_object *lean_tlsw_feed(uint64_t handle, uint64_t session,
     b_lean_obj_arg buffer, uint32_t offset, uint32_t length);
 lean_object *lean_tlsw_write(uint64_t handle, uint64_t session,
     b_lean_obj_arg buffer, uint32_t offset, uint32_t length, uint64_t operation);
+lean_object *lean_tlsw_write_file(uint64_t handle, uint64_t session, uint64_t owner,
+    uint64_t file, uint64_t offset, uint32_t length, uint64_t operation);
+lean_object *lean_tlsw_resume_file(uint64_t handle, uint64_t session);
 lean_object *lean_tlsw_peer_eof(uint64_t handle, uint64_t session);
 lean_object *lean_tlsw_shutdown(uint64_t handle, uint64_t session);
 lean_object *lean_tlsw_abort(uint64_t handle, uint64_t session);

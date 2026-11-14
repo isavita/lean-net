@@ -17,6 +17,35 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
+      - name: Install Linux file codecs
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev libbrotli-dev pkg-config
+      - name: Install macOS file codecs
+        if: runner.os == 'macOS'
+        run: |
+          brew install zlib brotli pkgconf
+          echo "PKG_CONFIG_PATH=$(brew --prefix zlib)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+      - name: Install Windows native toolchain and file codecs
+        if: runner.os == 'Windows'
+        id: codecs
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-brotli
+            mingw-w64-x86_64-pkgconf
+      - name: Select Windows codec DLLs and compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.codecs.outputs.msys2-location }}
+        run: |
+          $mingw = (Join-Path $env:MSYS2_LOCATION 'mingw64').Replace('\', '/')
+          "$mingw/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "PKG_CONFIG_PATH=$mingw/lib/pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: leanprover/lean-action@v1
         with:
           auto-config: false
@@ -24,12 +53,13 @@ jobs:
           test: false
           lint: false
       - name: Build reactor and echo
-        run: lake build lean-net-echo lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture
+        run: lake build lean-net-echo lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture
       - name: Pure HTTP/1 protocol machines
         run: |
           lake env lean --run test/HTTP1ParserV2Test.lean
           lake env lean --run test/HTTP1EncodingTest.lean
           lake env lean --run test/HTTP1MachineTest.lean
+          lake env lean --run test/HTTP1FileTest.lean
       - name: Pure HTTP/2 protocol machines
         run: |
           lake env lean --run test/HTTP2FrameTest.lean
@@ -41,6 +71,15 @@ jobs:
           lake env lean --run test/HTTP2ConnectionV2Test.lean
           lake env lean --run test/PriorityTest.lean
           lake env lean --run test/HTTP2MachineTest.lean
+          lake env lean --run test/HTTP2FileTest.lean
+      - name: Pure static selection, paths and dates
+        run: lake env lean --run test/StaticSelectionTest.lean
+      - name: Packed static codecs and publication (Unix)
+        if: runner.os != 'Windows'
+        run: python3 test/test_static_catalog.py -v
+      - name: Packed static codecs and publication (Windows)
+        if: runner.os == 'Windows'
+        run: lake env python test/test_static_catalog.py -v
       - name: Phantom lifecycle checks
         run: lake env lean test/ReactorStateTest.lean
       - name: Native buffers, timers and generations
@@ -67,7 +106,9 @@ jobs:
         run: python3 test/test_reactor_group.py -v
       - name: Pooled I/O allocation and lifecycle sanitizers
         if: runner.os != 'Windows'
-        run: python3 test/test_reactor_posix.py -v
+        run: |
+          python3 test/test_reactor_posix.py -v
+          python3 test/test_reactor_file.py -v
       - name: macOS accept handoff distribution and ownership
         if: runner.os == 'macOS'
         run: python3 test/test_reactor_dispatch.py -v

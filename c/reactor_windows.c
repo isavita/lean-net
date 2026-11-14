@@ -10,6 +10,7 @@
 #endif
 #include "reactor.h"
 #include "windows_error.h"
+#include "reactor_file_internal.h"
 #include <errno.h>
 #include <limits.h>
 #include <mswsock.h>
@@ -62,7 +63,7 @@ enum rn_socket_state {
   RN_CONNECTED,
   RN_CLOSING
 };
-enum rn_operation_kind { RN_OP_ACCEPT, RN_OP_READ, RN_OP_WRITE };
+enum rn_operation_kind { RN_OP_ACCEPT, RN_OP_READ, RN_OP_WRITE, RN_OP_FILE };
 typedef struct rn_operation {
   OVERLAPPED overlapped; /* Must be first: completion pointer casts here. */
   uint32_t kind, connection, listener, buffer, write;
@@ -78,6 +79,7 @@ typedef struct rn_connection {
   uint8_t transport_mode;
   uint32_t dispatch_pending, dispatch_listener;
   LPFN_ACCEPTEX accept_ex;
+  LPFN_TRANSMITFILE transmit_file;
   uint32_t paused_position;
   int paused;
   int read_paused, read_disabled, accept_paused, eof, draining;
@@ -99,6 +101,9 @@ typedef struct rn_write {
   uint32_t vector_writes[RN_WRITE_VECTORS];
   WSABUF vectors[RN_WRITE_VECTORS];
   uint64_t operation;
+  uint32_t file;
+  uint64_t file_offset;
+  uint8_t is_file;
 } rn_write;
 typedef struct rn_timer {
   uint64_t deadline;
@@ -113,6 +118,8 @@ struct rn_reactor {
   rn_connection *connections;
   rn_buffer *buffers;
   rn_write *writes;
+  rn_file_table files;
+  LPFN_TRANSMITFILE transmit_file;
   rn_timer *timers;
   uint32_t *buckets;
   uint32_t *free_connections, *free_writes, *free_buffers, *paused_connections;
@@ -123,11 +130,12 @@ struct rn_reactor {
   uint32_t outstanding;
   uint64_t timer_tick;
   int destroying, queue_error, cleanup_error, wsa_started;
-  int started;
+  int started, polled;
   rn_accept_channel **accept_targets;
   uint32_t accept_target_count, accept_target_next;
   rn_accept_channel *incoming_accepts;
 };
+#include "reactor_file_impl.h"
 
 static int rn_error(DWORD error) { return ln_windows_errno(error); }
 static int rn_close_connection_impl(rn_reactor *, uint64_t);
@@ -381,6 +389,10 @@ static void rn_finalize_connection(rn_reactor *r, uint32_t index) {
 }
 static void rn_write_release(rn_reactor *r, uint32_t wi) {
   rn_write *w = &r->writes[wi];
+  if (w->is_file) {
+    rn_file_entry *entry = &r->files.entries[w->file];
+    if (entry->writes) --entry->writes;
+  }
   if (w->buffer != RN_NONE && r->buffers[w->buffer].io_refs != 0)
     --r->buffers[w->buffer].io_refs;
   if (w->buffer != RN_NONE)
@@ -521,10 +533,45 @@ static void rn_post_write(rn_reactor *r, uint32_t index) {
   uint32_t limit = r->queue_count >= r->config.max_events ? 0 : r->config.max_events - r->queue_count;
   if (limit > RN_WRITE_VECTORS) limit = RN_WRITE_VECTORS;
   if (!limit) return;
+  if (w->is_file) {
+    if (w->sent == w->length) {
+      rn_emit(r, RN_WRITTEN, rn_token(index, c->generation), w->operation, 0, w->length, 0, 0, w->length);
+      uint32_t done = c->write_head; c->write_head = w->next;
+      if (c->write_head == RN_NONE) c->write_tail = RN_NONE;
+      rn_write_release(r, done);
+      if (c->draining && c->write_head == RN_NONE) rn_close_native(r, index);
+      return;
+    }
+    uint32_t length = w->length - w->sent;
+    if (length > 65536u) length = 65536u;
+    memset(&op->overlapped, 0, sizeof(op->overlapped));
+    uint64_t offset = w->file_offset + w->sent;
+    op->overlapped.Offset = (DWORD)offset;
+    op->overlapped.OffsetHigh = (DWORD)(offset >> 32);
+    op->kind = RN_OP_FILE; op->connection = index; op->write = c->write_head;
+    op->pending = w->submitted = 1; w->vector_total = length;
+    ++c->pending; ++r->outstanding;
+    BOOL submitted = c->transmit_file(c->socket, (HANDLE)r->files.entries[w->file].handle,
+                                     length, 0, &op->overlapped, NULL, 0);
+    if (!submitted) {
+      int native_error = WSAGetLastError();
+      if (native_error != WSA_IO_PENDING && native_error != ERROR_IO_PENDING) {
+        op->pending = w->submitted = 0; --c->pending; --r->outstanding;
+        rn_emit(r, RN_ERROR, rn_token(index, c->generation), w->operation, 0,
+                -rn_error((DWORD)native_error), 0, 0, 0);
+        uint32_t failed = c->write_head; c->write_head = w->next;
+        if (c->write_head == RN_NONE) c->write_tail = RN_NONE;
+        rn_write_release(r, failed);
+        rn_close_native(r, index);
+      }
+    }
+    return;
+  }
   w->vector_count = w->vector_total = 0;
   uint32_t wi = c->write_head;
   while (wi != RN_NONE && w->vector_count < limit) {
     rn_write *part = &r->writes[wi];
+    if (part->is_file) break;
     uint32_t vector = w->vector_count++;
     w->vector_writes[vector] = wi;
     w->vectors[vector].buf = (CHAR *)lean_sarray_cptr(r->buffers[part->buffer].bytes) + part->offset + part->sent;
@@ -860,6 +907,26 @@ static void rn_completed(rn_reactor *r, rn_operation *op, DWORD bytes,
       c->read_paused = 1;
       rn_pause(r, index);
     }
+  } else if (op->kind == RN_OP_FILE) {
+    rn_write *w = &r->writes[op->write]; w->submitted = 0;
+    if (error || c->state == RN_CLOSING || !bytes || bytes > w->vector_total) {
+      int result = error ? error : c->state == RN_CLOSING ? ECANCELED : EIO;
+      rn_emit(r, RN_ERROR, token, w->operation, 0, -result, 0, 0, 0);
+      c->write_head = w->next;
+      if (c->write_head == RN_NONE) c->write_tail = RN_NONE;
+      rn_write_release(r, op->write);
+      if (c->state != RN_CLOSING) rn_close_native(r, index);
+    } else {
+      w->sent += bytes;
+      if (w->sent == w->length) {
+        rn_emit(r, RN_WRITTEN, token, w->operation, 0, w->length, 0, 0, w->length);
+        c->write_head = w->next;
+        if (c->write_head == RN_NONE) c->write_tail = RN_NONE;
+        rn_write_release(r, op->write);
+      }
+      if (c->draining && c->write_head == RN_NONE) rn_close_native(r, index);
+      else rn_pause(r, index);
+    }
   } else if (op->kind == RN_OP_WRITE) {
     rn_write *w = &r->writes[op->write];
     uint32_t batch[RN_WRITE_VECTORS], count = w->vector_count, total = w->vector_total;
@@ -1127,7 +1194,7 @@ int rn_listen(rn_reactor *r, const char *host, uint16_t port, int reuse_port,
 int rn_step(rn_reactor *r, int timeout_ms) {
   if (!r || timeout_ms < -1)
     return -EINVAL;
-  r->event_count = 0;
+  r->event_count = 0; r->polled = 1;
   r->started = 1;
   if (r->queue_error)
     return -r->queue_error;
@@ -1226,6 +1293,58 @@ static int rn_queue_write_impl(rn_reactor *r, uint64_t token, uint64_t buffer,
    * connection while Lean is still dispatching the previous immutable batch. */
   rn_pause(r, rn_index(token));
   return 0;
+}
+int rn_file_table_init(rn_reactor *r, uint32_t capacity) {
+  if (!r || r->polled) return -EINVAL;
+  int result = rn_files_init(&r->files, capacity); if (result) return result;
+  SOCKET probe = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+  if (probe == INVALID_SOCKET) return -rn_error(WSAGetLastError());
+  GUID extension = WSAID_TRANSMITFILE; DWORD bytes = 0; LPFN_TRANSMITFILE transmit = NULL;
+  int called = WSAIoctl(probe, SIO_GET_EXTENSION_FUNCTION_POINTER, &extension, sizeof(extension),
+                       &transmit, sizeof(transmit), &bytes, NULL, NULL);
+  int error = called == SOCKET_ERROR ? -rn_error(WSAGetLastError()) : 0;
+  if (!error && (!transmit || bytes != sizeof(transmit))) error = -EIO;
+  if (closesocket(probe) == SOCKET_ERROR) error = -rn_error(WSAGetLastError());
+  if (!error) r->transmit_file = transmit;
+  return error;
+}
+int rn_file_import(rn_reactor *r, rn_file_source *source, uint64_t *out) {
+  return !r || r->polled ? -EINVAL : rn_files_import(&r->files, source, out);
+}
+uint64_t rn_file_owner(const rn_reactor *r) { return r ? r->files.owner : 0; }
+int rn_file_release(rn_reactor *r, uint64_t token) {
+  return !r ? -EINVAL : rn_files_release(&r->files, token);
+}
+int rn_file_pin(rn_reactor *r, uint64_t owner, uint64_t token, uint64_t offset,
+                 uint32_t length, rn_file_source **out) {
+  return !r || !owner || owner != r->files.owner ? -EINVAL : rn_files_pin(&r->files, token, offset, length, out);
+}
+int rn_queue_file(rn_reactor *r, uint64_t token, uint64_t owner, uint64_t file,
+                   uint64_t offset, uint32_t length, uint64_t operation) {
+  if (!r || !owner || owner != r->files.owner || !r->transmit_file) return -EINVAL;
+  rn_connection *c = rn_connection_get(r, token); rn_file_entry *entry;
+  if (!c || c->state != RN_CONNECTED) return -EINVAL;
+  if (c->transport_mode) return -EACCES;
+  if (c->draining) return -EPIPE;
+  int error = rn_files_get(&r->files, file, &entry); const uint8_t *bytes;
+  if (error) return error;
+  error = rn_file_source_view(entry->source, offset, length, &bytes); if (error) return error;
+  if (!r->free_write_count) return -EAGAIN;
+  if (!c->transmit_file) {
+    GUID extension = WSAID_TRANSMITFILE; DWORD count = 0; LPFN_TRANSMITFILE transmit = NULL;
+    if (WSAIoctl(c->socket, SIO_GET_EXTENSION_FUNCTION_POINTER, &extension, sizeof(extension),
+                 &transmit, sizeof(transmit), &count, NULL, NULL) == SOCKET_ERROR)
+      return -rn_error(WSAGetLastError());
+    if (!transmit || count != sizeof(transmit)) return -EIO;
+    c->transmit_file = transmit;
+  }
+  uint32_t wi = r->free_writes[--r->free_write_count]; rn_write *w = &r->writes[wi];
+  memset(w, 0, sizeof(*w)); w->used = w->is_file = 1; w->buffer = RN_NONE;
+  w->next = RN_NONE; w->file = (uint32_t)file - 1; w->file_offset = offset;
+  w->length = length; w->operation = operation; ++entry->writes;
+  if (c->write_tail == RN_NONE) c->write_head = wi;
+  else r->writes[c->write_tail].next = wi;
+  c->write_tail = wi; rn_pause(r, rn_index(token)); return 0;
 }
 int rn_acquire_buffer(rn_reactor *r, uint32_t minimum, uint64_t *out) {
   if (!r || !out || !minimum || minimum > 65536)
@@ -1411,6 +1530,7 @@ int rn_free(rn_reactor *r) {
   }
   if (r->wsa_started && WSACleanup() == SOCKET_ERROR && !error)
     error = rn_error(WSAGetLastError());
+  { int released = rn_files_destroy(&r->files); if (released && !error) error = -released; }
   free(r->queued);
   free(r->accept_targets);
   free(r->paused_connections);

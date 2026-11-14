@@ -151,6 +151,17 @@ private def Driver.endpoint (driver : Driver) (id : LeanNet.Reactor.SocketId)
     if result == 0 then return .queued
     if result == 1 then return .wouldBlock
     throw (IO.userError "TLS plaintext write returned an invalid submission")
+  tryFile := fun region operation => do
+    let session ← driver.ensureSession id
+    if !region.valid || region.length > 4294967295 then throw (IO.userError "invalid TLS file range")
+    let raw ← FFI.Worker.writeFile driver.handle session.native region.owner region.token
+      region.offset region.length.toUInt32 operation
+    let code := Errno.decode raw
+    if code < 0 && (← Errno.isInterrupted code) then return .interrupted
+    let result ← check "TLS file submission" raw
+    if result == 0 then return .queued
+    if result == 1 then return .wouldBlock
+    throw (IO.userError "TLS file write returned an invalid submission")
   setReadEnabled := fun enabled => do
     let session ← driver.ensureSession id
     checkZero "TLS application read credit" (← FFI.Worker.readEnabled driver.handle session.native (if enabled then 1 else 0))
@@ -262,8 +273,13 @@ private def Driver.poll (driver : Driver) : IO (Array HTTP.Transport.Event) := d
         driver.forget id
         events := events.push (.closed id)
       | 7 =>
-        driver.abort id
-        events := events.push (.error id raw.flags (Errno.decode raw.result))
+        let code := Errno.decode raw.result
+        if ← Errno.isInterrupted code then
+          -- The native file operation preserves its offset and cipher fence.
+          -- Retrying is an explicit decision on the owning Lean loop.
+          checkZero "TLS interrupted file resume" (← FFI.Worker.resumeFile driver.handle raw.connection)
+        else driver.abort id
+        events := events.push (.error id raw.flags code)
       | _ => throw (IO.userError "TLS worker returned an invalid completion")
   for (id, _) in (← driver.state.get).sessions.toArray do
     driver.tryAttach id
