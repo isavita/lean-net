@@ -1042,7 +1042,7 @@ int rn_bind(rn_reactor *r, uint64_t token, const char *host, uint16_t port,
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_flags = AI_PASSIVE;
   char service[6];
-  _snprintf(service, sizeof(service), "%u", (unsigned)port);
+  snprintf(service, sizeof(service), "%u", (unsigned)port);
   ADDRINFOA *addresses = NULL;
   int error = getaddrinfo(host[0] ? host : NULL, service, &hints, &addresses);
   if (error)

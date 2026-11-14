@@ -608,6 +608,27 @@ class TLSReactorAcceptance(ServerCase, unittest.TestCase):
             for sock in peers: sock.close()
             slow.close()
 
+    def test_immediate_shutdown_after_verified_handshakes_sends_close_notify(self):
+        # Client wrap_socket can return before the server reactor has observed
+        # the TLS worker's wire-fenced READY. Do not send HTTP or add a delay:
+        # shutdown must finish those accepted handshakes before close_notify.
+        peers = []
+        try:
+            for _ in range(8):
+                peers.append(self.connect())
+            started = time.monotonic()
+            self.stop_server()
+            self.assertLess(time.monotonic() - started, 4,
+                            "immediate TLS shutdown exceeded the bounded stop interval")
+            for index, sock in enumerate(peers):
+                with self.subTest(client=index):
+                    # suppress_ragged_eofs=False makes missing close_notify an
+                    # SSLEOFError instead of silently accepting a TCP EOF.
+                    self.assertEqual(sock.recv(1), b"")
+        finally:
+            for sock in peers:
+                sock.close()
+
 
 class TLSReactorTiny(ServerCase, unittest.TestCase):
     mode = "tiny"

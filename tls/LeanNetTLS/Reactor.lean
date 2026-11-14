@@ -270,21 +270,25 @@ private def Driver.poll (driver : Driver) : IO (Array HTTP.Transport.Event) := d
     driver.feedPending id
   return events
 
-private def discardEvents (events : Array HTTP.Transport.Event) : IO Unit := do
+private def Driver.stopEvents (driver : Driver) (events : Array HTTP.Transport.Event) : IO Unit := do
   for event in events do
-    if let .read _ buffer _ _ release := event then (release.getD buffer.release)
+    match event with
+    | .read _ buffer _ _ release => release.getD buffer.release
+    | .ready endpoint _ =>
+      if let some session := (← driver.state.get).sessions[endpoint.id]? then
+        checkZero "TLS completed handshake during shutdown" (← FFI.Worker.shutdown driver.handle session.native)
+    | _ => pure ()
 
 /-- Preserve clean TLS close-notify on process shutdown, even for incomplete
     HTTP requests. Full HTTP/2 stream draining is handled by the HTTP controller. -/
 private def Driver.stop (driver : Driver) (duration : UInt64) : IO Unit := do
-  for (id, session) in (← driver.state.get).sessions.toArray do
+  for (_id, session) in (← driver.state.get).sessions.toArray do
     if session.ready.isSome then
       checkZero "TLS worker shutdown" (← FFI.Worker.shutdown driver.handle session.native)
-    else driver.abort id
   let stopDeadline := (← LeanNet.Reactor.nowMs) + duration + 100
   let mut draining := true
   while draining && (← LeanNet.Reactor.nowMs) < stopDeadline do
-    discardEvents (← driver.poll)
+    driver.stopEvents (← driver.poll)
     let sessions := (← driver.state.get).sessions.toArray
     draining := !sessions.isEmpty
     if draining then
@@ -295,7 +299,7 @@ private def Driver.stop (driver : Driver) (duration : UInt64) : IO Unit := do
           let event ← driver.reactor.event index.toUInt32
           match event with
           | .accepted socket => let _ ← socket.close (by decide); pure ()
-          | _ => discardEvents (← driver.nativeEvent event)
+          | _ => driver.stopEvents (← driver.nativeEvent event)
   for (id, _) in (← driver.state.get).sessions.toArray do driver.abort id
 
 /-- All OpenSSL calls and their objects belong to the native TLS thread. This
