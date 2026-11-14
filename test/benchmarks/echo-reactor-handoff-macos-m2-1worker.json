@@ -1,0 +1,71 @@
+{
+  "environment": {
+    "platform": "macOS-27.2.1-arm64-arm-64bit",
+    "cpu_count": 8,
+    "cpu": "Apple M2",
+    "memory_bytes": "17179869184",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
+    "lean": "Lean (version 4.35.0, arm64-apple-darwin24.6.0, commit eb6cafb7290e8bd5f2937522d8d804f58f02bafc, Release)"
+  },
+  "git_head": "d3ccc2ebb3d0cb4cee188eca5832181c7fed5caa",
+  "client_source_sha256": "9c586f99ac71ea2bd55b6d0ae66df48463f5a58568f7c750630243d0b2d36f77",
+  "driver_source_sha256": "f9108eaf179d97f4b4e07529958abdfeca283656d5b6c45a800c58240945e6d5",
+  "binary": "/Users/isavita/git/lean-net/.lake/build/bin/lean-net-echo",
+  "server_args": [
+    "1"
+  ],
+  "binary_sha256": "96b5c28c01e85a24dd595b3de826e3a890bd731e580068c080514a1f5f00dbe9",
+  "method": "fixed-count closed-loop, one outstanding verified echo per connection; connects excluded",
+  "runs": [
+    {
+      "requests": 200000,
+      "connections": 100,
+      "payload_bytes": 16,
+      "seconds": 1.077255,
+      "requests_per_second": 185657.06,
+      "latency_us_p50": 518.0,
+      "latency_us_p95": 710.0,
+      "latency_us_p99": 1081.0,
+      "latency_us_max": 2610.0,
+      "clients_progressed_in_first_second": 100,
+      "round": 1
+    },
+    {
+      "requests": 200000,
+      "connections": 100,
+      "payload_bytes": 16,
+      "seconds": 1.043362,
+      "requests_per_second": 191688.02,
+      "latency_us_p50": 512.0,
+      "latency_us_p95": 631.0,
+      "latency_us_p99": 828.0,
+      "latency_us_max": 1507.0,
+      "clients_progressed_in_first_second": 100,
+      "round": 2
+    },
+    {
+      "requests": 200000,
+      "connections": 100,
+      "payload_bytes": 16,
+      "seconds": 1.031204,
+      "requests_per_second": 193948.05,
+      "latency_us_p50": 512.0,
+      "latency_us_p95": 603.0,
+      "latency_us_p99": 691.0,
+      "latency_us_max": 1421.0,
+      "clients_progressed_in_first_second": 100,
+      "round": 3
+    }
+  ],
+  "source_sha256": {
+    "c/reactor_posix.c": "74a5306ef3c9e65fb7236295585a00c8651b11b0e181db53e8b06b0558807de5",
+    "c/reactor.h": "18b74b37567d199ff1131a7033e5625e6b8c8d9c6b4bc17fad1773288e5fc277",
+    "c/reactor_group.c": "8dcbf1a128a03695fdab4048a62a2b2d1cc856f7e74b901ac8624707da1bbdee",
+    "LeanNet/Echo/ReactorServer.lean": "3983a4bc3de7a4faea4ae4c9817b6713ca286702370448ecedc7780dd46f7de2",
+    "LeanNet/Reactor/Basic.lean": "f60dd61803fb05f8428f85b01a911d76895dafa0cab4b3ce87175517a6198b38",
+    "lakefile.lean": "8581077ffb7a92f7c13ea23c81d024039d68279735cf9e6dcf3dc0ac0479adae",
+    "test/bench_echo.c": "9c586f99ac71ea2bd55b6d0ae66df48463f5a58568f7c750630243d0b2d36f77",
+    "test/bench_echo.py": "f9108eaf179d97f4b4e07529958abdfeca283656d5b6c45a800c58240945e6d5"
+  },
+  "required_rps": 50000
+}

@@ -8,8 +8,9 @@ coverage, not evidence that the new architecture or performance gates pass.
 
 1. Native reactor: epoll on Linux, kqueue on macOS, IOCP on Windows; owned
    connections and pooled buffers; nonblocking completion operations; hashed
-   timer wheel; one dedicated loop per core; shared-nothing Unix listeners with
-   SO_REUSEPORT; phantom socket lifecycle states; echo above 50k requests/s.
+   timer wheel; one dedicated loop per core; Linux SO_REUSEPORT listeners and
+   approved macOS/Windows acceptor handoff; phantom socket lifecycle states;
+   echo above 50k requests/s.
 2. Pure HTTP/1.0 and HTTP/1.1 protocol/action machines, all specified framing,
    persistence, status/response, expectation, trailer and upgrade semantics;
    property tests and reactor integration.
@@ -36,38 +37,45 @@ coverage, not evidence that the new architecture or performance gates pass.
 - Server push behind --enable-push and off by default; RFC 9218 priorities honored.
 - No Std.Async in accept/read/write and no undeclared native FFI symbols.
 
-## Evidence so far
+## Current phase status
 
-- Starting revision: 9e5e0bd; macOS and Ubuntu tests from the previous design pass.
-- The existing HTTP/TLS architecture uses poll and in-loop nonblocking OpenSSL. These do not
-  satisfy the new reactor and off-loop TLS requirements.
-- Reactor work remains in progress. No new phase gate has
-  been declared complete.
-- Windows listener sharding requires a platform-specific acceptor design;
-  Windows lacks Unix SO_REUSEPORT listener semantics. The approved design uses
-  one acceptor transferring connections to dedicated per-core IOCP workers.
-  That transfer path remains to be implemented.
+Phase 1 reactor acceptance passed at d3ccc2e. Phases 2–6 and all final gates
+remain open. Existing HTTP/TLS servers still use poll and in-loop nonblocking
+OpenSSL; their regression tests do not establish the required migration.
 
-## Reactor progress (not a completed phase)
+## Reactor acceptance evidence
 
-- macOS kqueue echo passes all nine existing acceptance tests, native buffer/
-  generation/timer tests, and signal lifecycle tests under ASan/UBSan.
-- Three-round loopback measurements exceed 50k RPS with one and eight workers;
-  the latest acceptance repetition is recorded below.
-- The original blocking echo baseline at concurrency100 was approximately
-  17.3k RPS and only one client progressed in the first second.
-- Native reactor CI passed on Linux epoll, macOS kqueue, and Windows IOCP on
-  dd4ec64. Unix coverage includes lifecycle/allocation sanitizers and echo
-  acceptance; Windows coverage includes actual overlapped I/O cancellation,
-  buffer ownership, and console wakeup tests. The existing HTTP/1.1/h2c/TLS
-  regression workflow also passed on that revision.
-- Latest local completion-history echo gate: 191,923 verified RPS at
-  concurrency100 with eight workers, 200,000 requests, all clients progressing;
-  report: test/benchmarks/echo-reactor-completion-gate-macos-m2.json.
-- The approved Windows multi-core acceptor transfer path remains to be
-  implemented. Windows echo currently requires an explicit single worker.
-- macOS listener tracing found all connections assigned to the last-created
-  SO_REUSEPORT listener, including with four independent load processes and
-  1,000 concurrent connections. Multi-core scaling remains unproven; the raw
-  accept-distribution report is in test/benchmarks. No HTTP/TLS/static-file
-  phase substitutes for these gates.
+- Linux epoll, macOS kqueue, and Windows IOCP passed the
+  [native matrix](https://github.com/isavita/lean-net/actions/runs/43606979876).
+  Strict native compilation, phantom states, pooled immutable buffers,
+  generations, timer backlogs, and real Lean echo modes 1/4/default all pass.
+- Linux retains one SO_REUSEPORT listener per worker. The user approved one
+  acceptor with dedicated per-core workers on Windows and macOS. Windows has no
+  equivalent listener option; macOS duplicate TCP bindings routed all observed
+  traffic to the last listener. Those platform adaptations are now implemented.
+- macOS native stress verifies 50 accepts on each of eight real threads,
+  capacity-one retention/backpressure, saturated blocking polls, interrupted
+  cross-loop notifications, both teardown orders, descriptor reuse, and zero
+  backend native/buffer allocations during active I/O under ASan/UBSan.
+- Windows native stress verifies actual IOCP socket adoption, bounded queues,
+  round-robin distribution, cancellation lifetime, both teardown orders, flat
+  handle counts, no active-I/O native allocations, and console shutdown.
+- The real Lean echo checks concurrent binary traffic, half-close, resets, and
+  clean shutdown in direct and multi-worker modes. Unix acceptance also checks
+  all nine original cases, including 1,000 connections with flat descriptors.
+- Fault regressions preserve committed completions across EINTR/EIO, prevent a
+  Linux half-close busy loop, reject late drain-close writes without losing
+  leases, and verify borrowed FFI handle arrays do not leak references.
+- Fresh M2 loopback gates use 200,000 verified round trips at concurrency 100,
+  three rounds each: one worker median 191,688 RPS; eight workers median
+  188,213 RPS. Every round exceeds 50k and all clients progress. Reports are
+  `test/benchmarks/echo-reactor-handoff-macos-m2-{1worker,8workers}.json`.
+  These measurements do not establish linear multicore throughput scaling.
+- Separate instrumentation of the actual Lean executable confirms all eight
+  worker threads register and read their own sockets: 401 adoptions including
+  the startup probe, and 800,000 positive reads matching 800,000 verified echoes.
+  See `test/benchmarks/echo-reactor-handoff-macos-m2-worker-distribution.json`.
+  Instrumented timing is diagnostic rather than a throughput acceptance result.
+- Existing TCP/HTTP/1.1/h2c/TLS
+  [regression CI](https://github.com/isavita/lean-net/actions/runs/43606979883)
+  also passes on d3ccc2e. This remains coverage for the previous protocol design.

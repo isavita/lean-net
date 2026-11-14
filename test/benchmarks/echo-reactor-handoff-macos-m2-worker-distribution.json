@@ -1,0 +1,713 @@
+{
+  "binary_sha256": "96b5c28c01e85a24dd595b3de826e3a890bd731e580068c080514a1f5f00dbe9",
+  "git_head": "d3ccc2ebb3d0cb4cee188eca5832181c7fed5caa",
+  "environment": {
+    "platform": "macOS-27.2.1-arm64-arm-64bit",
+    "cpu": "Apple M2",
+    "logical_cpus": 8
+  },
+  "source_sha256": {
+    "c/reactor_posix.c": "74a5306ef3c9e65fb7236295585a00c8651b11b0e181db53e8b06b0558807de5",
+    "c/reactor.h": "18b74b37567d199ff1131a7033e5625e6b8c8d9c6b4bc17fad1773288e5fc277",
+    "c/reactor_group.c": "8dcbf1a128a03695fdab4048a62a2b2d1cc856f7e74b901ac8624707da1bbdee",
+    "LeanNet/Echo/ReactorServer.lean": "3983a4bc3de7a4faea4ae4c9817b6713ca286702370448ecedc7780dd46f7de2",
+    "LeanNet/Reactor/Basic.lean": "f60dd61803fb05f8428f85b01a911d76895dafa0cab4b3ce87175517a6198b38",
+    "lakefile.lean": "8581077ffb7a92f7c13ea23c81d024039d68279735cf9e6dcf3dc0ac0479adae",
+    "test/bench_echo.c": "9c586f99ac71ea2bd55b6d0ae66df48463f5a58568f7c750630243d0b2d36f77",
+    "test/bench_echo.py": "f9108eaf179d97f4b4e07529958abdfeca283656d5b6c45a800c58240945e6d5"
+  },
+  "trace_source_sha256": "8e8341f57e13dca403d2b75af9d2653552b6530714ca87d7d8e7e35bdc110ecd",
+  "trace_source": "#define _DARWIN_C_SOURCE 1\n#include <errno.h>\n#include <inttypes.h>\n#include <pthread.h>\n#include <stdatomic.h>\n#include <stdio.h>\n#include <sys/event.h>\n#include <sys/socket.h>\n#include <unistd.h>\n#define LIMIT 65536\nstatic _Atomic unsigned tracked_fd[LIMIT];\ntypedef struct queue_stats {\n    _Alignas(64) _Atomic uint64_t adopted, thread, reads, bytes, read_thread;\n} queue_stats;\nstatic queue_stats stats[LIMIT];\nstatic _Thread_local uint64_t cached_thread;\nstatic uint64_t current_thread(void) {\n    if (!cached_thread) (void)pthread_threadid_np(NULL, &cached_thread);\n    return cached_thread;\n}\nstatic int traced_kevent(int queue, const struct kevent *changes, int change_count,\n                         struct kevent *events, int event_count, const struct timespec *timeout) {\n    int result = kevent(queue, changes, change_count, events, event_count, timeout);\n    int saved_errno = errno;\n    if (result >= 0 && queue >= 0 && queue < LIMIT) {\n        for (int i = 0; i < change_count; ++i) {\n            const struct kevent *event = &changes[i];\n            if (event->filter != EVFILT_READ || !(event->flags & EV_ADD) || event->ident >= LIMIT) continue;\n            int fd = (int)event->ident;\n            if (atomic_load(&tracked_fd[fd])) continue;\n            struct sockaddr_storage peer; socklen_t peer_size = sizeof(peer);\n            if (getpeername(fd, (struct sockaddr *)&peer, &peer_size) < 0) continue;\n            uint64_t thread = current_thread();\n            atomic_store(&tracked_fd[fd], (unsigned)queue + 1u);\n            atomic_store(&stats[queue].thread, thread); atomic_fetch_add(&stats[queue].adopted, 1);\n        }\n    }\n    errno = saved_errno; return result;\n}\nstatic ssize_t traced_recv(int fd, void *bytes, size_t size, int flags) {\n    ssize_t result = recv(fd, bytes, size, flags);\n    int saved_errno = errno;\n    if (result > 0 && fd >= 0 && fd < LIMIT) {\n        unsigned entry = atomic_load(&tracked_fd[fd]);\n        if (entry && entry <= LIMIT) {\n            unsigned queue = entry - 1u;\n            atomic_store(&stats[queue].read_thread, current_thread());\n            atomic_fetch_add_explicit(&stats[queue].reads, 1, memory_order_relaxed);\n            atomic_fetch_add_explicit(&stats[queue].bytes, (uint64_t)result, memory_order_relaxed);\n        }\n    }\n    errno = saved_errno; return result;\n}\nstatic int traced_close(int fd) {\n    if (fd >= 0 && fd < LIMIT) atomic_store(&tracked_fd[fd], 0);\n    return close(fd);\n}\n__attribute__((destructor)) static void report(void) {\n    for (int q = 0; q < LIMIT; ++q) if (atomic_load(&stats[q].adopted))\n        fprintf(stderr, \"ADOPT_TRACE queue=%d adopted=%\" PRIu64 \" thread=%\" PRIu64 \" positive_reads=%\" PRIu64 \" read_bytes=%\" PRIu64 \" read_thread=%\" PRIu64 \"\\n\", q, atomic_load(&stats[q].adopted), atomic_load(&stats[q].thread), atomic_load(&stats[q].reads), atomic_load(&stats[q].bytes), atomic_load(&stats[q].read_thread));\n}\n#define INTERPOSE(replacement, original) \\\n    __attribute__((used, section(\"__DATA,__interpose\"))) \\\n    static const struct { const void *replacement_fn; const void *original_fn; } \\\n    interpose_##replacement = {(const void *)replacement, (const void *)original}\nINTERPOSE(traced_kevent, kevent);\nINTERPOSE(traced_close, close);\n\nINTERPOSE(traced_recv, recv);\n",
+  "driver_source": "import hashlib,json,os,pathlib,platform,re,shutil,signal,socket,statistics,subprocess,tempfile,time\nroot=pathlib.Path('/Users/isavita/git/lean-net');binary=root/'.lake/build/bin/lean-net-echo'\npaths=['c/reactor_posix.c','c/reactor.h','c/reactor_group.c','LeanNet/Echo/ReactorServer.lean','LeanNet/Reactor/Basic.lean','lakefile.lean','test/bench_echo.c','test/bench_echo.py']\nreport={'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'git_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),'environment':{'platform':platform.platform(),'cpu':'Apple M2','logical_cpus':os.cpu_count()},'source_sha256':{p:hashlib.sha256((root/p).read_bytes()).hexdigest() for p in paths},'trace_source_sha256':hashlib.sha256(pathlib.Path('/tmp/lean-net-adopt-trace.c').read_bytes()).hexdigest(),'trace_source':pathlib.Path('/tmp/lean-net-adopt-trace.c').read_text(),'driver_source':pathlib.Path(__file__).read_text(),'method':'Disposable DYLD kevent/recv/close tracer: first successful connected-socket read registration by kqueue, owning thread, positive recv count/bytes and read thread; four independent native clients, one startup probe. Timing is diagnostic only.','workers':8,'client_processes':4,'connections_per_client':100,'requests_per_client':200000,'payload_bytes':16}\nreport['driver_source_sha256']=hashlib.sha256(report['driver_source'].encode()).hexdigest()\nwith tempfile.TemporaryDirectory(prefix='lean-net-adoption-trace-') as d:\n d=pathlib.Path(d); serverpath=d/'server';clientpath=d/'client';shutil.copy2(binary,serverpath)\n subprocess.run(['cc','-O3','-std=c11','-Wall','-Wextra','-Wpedantic','-Werror',str(root/'test/bench_echo.c'),'-o',str(clientpath)],check=True)\n with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\n with tempfile.TemporaryFile(mode='w+') as log:\n  env=os.environ.copy();env['DYLD_INSERT_LIBRARIES']='/tmp/lean-net-adopt-trace.dylib'\n  server=subprocess.Popen([str(serverpath),str(port),'8'],stdout=log,stderr=log,env=env)\n  try:\n   for _ in range(100):\n    if server.poll() is not None:raise RuntimeError('server startup exit')\n    try:\n     with socket.create_connection(('127.0.0.1',port),timeout=.1):break\n    except OSError:time.sleep(.01)\n   start=time.monotonic();clients=[subprocess.Popen([str(clientpath),str(port),'100','200000','16'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for _ in range(4)];samples=[]\n   while any(p.poll() is None for p in clients):\n    r=subprocess.run(['ps','-p',','.join(str(p.pid) for p in [server,*clients]),'-o','pid=,pcpu=,rss='],capture_output=True,text=True,check=True)\n    processes=[]\n    for line in r.stdout.splitlines():\n     pid,cpu,rss=line.split();processes.append({'pid':int(pid),'role':'server' if int(pid)==server.pid else 'client','cpu_percent':float(cpu),'rss_kib':int(rss)})\n    samples.append({'seconds':time.monotonic()-start,'processes':processes});time.sleep(.25)\n   report['elapsed_upper_bound_seconds']=time.monotonic()-start;report['loads']=[]\n   for p in clients:\n    out,err=p.communicate(timeout=2)\n    if p.returncode:raise RuntimeError(err)\n    report['loads'].append(json.loads(out))\n  finally:\n   if server.poll() is None:server.send_signal(signal.SIGINT)\n   report['server_exit']=server.wait(timeout=5);log.seek(0);logtext=log.read()\n   if report['server_exit']:raise RuntimeError(logtext)\n report['worker_distribution']=[dict(zip(['queue','adopted','thread','positive_reads','read_bytes','read_thread'],map(int,m))) for m in re.findall(r'ADOPT_TRACE queue=(\\d+) adopted=(\\d+) thread=(\\d+) positive_reads=(\\d+) read_bytes=(\\d+) read_thread=(\\d+)',logtext)]\n report['samples']=samples\n cpus=[p['cpu_percent'] for s in samples if s['seconds']>=1 for p in s['processes'] if p['role']=='server']\n report['server_cpu_percent_median']=statistics.median(cpus);report['server_cpu_percent_max']=max(cpus)\n report['raw_log']=logtext\n pathlib.Path('/tmp/lean-net-adoption-diagnostic-raw.json').write_text(json.dumps(report,indent=2)+'\\n')\n distribution=report['worker_distribution']\n print(json.dumps(distribution),flush=True)\n assert len(distribution)==8 and len({w['thread'] for w in distribution})==8\n assert all(w['thread']==w['read_thread'] and w['positive_reads']>0 for w in distribution)\n assert sum(w['adopted'] for w in distribution)==401\n assert sum(w['read_bytes'] for w in distribution)==800000*16\n assert max(w['adopted'] for w in distribution)-min(w['adopted'] for w in distribution)==1\n assert hashlib.sha256(binary.read_bytes()).hexdigest()==report['binary_sha256']\n report['validation']='All8 distinct real Lean workers registered and read their own sockets; 401 adoptions include one startup probe, balanced50/51; 12,800,000 bytes match800,000 verified16-byte echoes; cleanSIGINT exit. Instrumented timing is not a throughput acceptance gate or linear-scaling claim.'\n(root/'test/benchmarks/echo-reactor-handoff-macos-m2-worker-distribution.json').write_text(json.dumps(report,indent=2)+'\\n')\nprint(json.dumps({k:v for k,v in report.items() if k in ['binary_sha256','git_head','worker_distribution','server_cpu_percent_median','server_cpu_percent_max','server_exit','validation']},indent=2))\n",
+  "method": "Disposable DYLD kevent/recv/close tracer: first successful connected-socket read registration by kqueue, owning thread, positive recv count/bytes and read thread; four independent native clients, one startup probe. Timing is diagnostic only.",
+  "workers": 8,
+  "client_processes": 4,
+  "connections_per_client": 100,
+  "requests_per_client": 200000,
+  "payload_bytes": 16,
+  "driver_source_sha256": "c9163093e5ced7b0978802c256bea12e4ee2e1c983c3c85eb098b5f6d3f7283b",
+  "elapsed_upper_bound_seconds": 4.840150374977384,
+  "loads": [
+    {
+      "requests": 200000,
+      "connections": 100,
+      "payload_bytes": 16,
+      "seconds": 4.732851,
+      "requests_per_second": 42257.83,
+      "latency_us_p50": 1268.0,
+      "latency_us_p95": 8050.0,
+      "latency_us_p99": 21811.0,
+      "latency_us_max": 147658.0,
+      "clients_progressed_in_first_second": 100
+    },
+    {
+      "requests": 200000,
+      "connections": 100,
+      "payload_bytes": 16,
+      "seconds": 4.423973,
+      "requests_per_second": 45208.23,
+      "latency_us_p50": 1135.0,
+      "latency_us_p95": 7330.0,
+      "latency_us_p99": 21963.0,
+      "latency_us_max": 128359.0,
+      "clients_progressed_in_first_second": 100
+    },
+    {
+      "requests": 200000,
+      "connections": 100,
+      "payload_bytes": 16,
+      "seconds": 4.730051,
+      "requests_per_second": 42282.84,
+      "latency_us_p50": 1251.0,
+      "latency_us_p95": 8140.0,
+      "latency_us_p99": 22125.0,
+      "latency_us_max": 143845.0,
+      "clients_progressed_in_first_second": 100
+    },
+    {
+      "requests": 200000,
+      "connections": 100,
+      "payload_bytes": 16,
+      "seconds": 4.679981,
+      "requests_per_second": 42735.22,
+      "latency_us_p50": 1271.0,
+      "latency_us_p95": 7154.0,
+      "latency_us_p99": 24796.0,
+      "latency_us_max": 163894.0,
+      "clients_progressed_in_first_second": 100
+    }
+  ],
+  "server_exit": 0,
+  "worker_distribution": [
+    {
+      "queue": 10,
+      "adopted": 51,
+      "thread": 4043364,
+      "positive_reads": 99897,
+      "read_bytes": 1598352,
+      "read_thread": 4043364
+    },
+    {
+      "queue": 13,
+      "adopted": 50,
+      "thread": 4043365,
+      "positive_reads": 100447,
+      "read_bytes": 1607152,
+      "read_thread": 4043365
+    },
+    {
+      "queue": 16,
+      "adopted": 50,
+      "thread": 4043366,
+      "positive_reads": 105288,
+      "read_bytes": 1684608,
+      "read_thread": 4043366
+    },
+    {
+      "queue": 19,
+      "adopted": 50,
+      "thread": 4043367,
+      "positive_reads": 93501,
+      "read_bytes": 1496016,
+      "read_thread": 4043367
+    },
+    {
+      "queue": 22,
+      "adopted": 50,
+      "thread": 4043368,
+      "positive_reads": 101092,
+      "read_bytes": 1617472,
+      "read_thread": 4043368
+    },
+    {
+      "queue": 25,
+      "adopted": 50,
+      "thread": 4043369,
+      "positive_reads": 96921,
+      "read_bytes": 1550736,
+      "read_thread": 4043369
+    },
+    {
+      "queue": 28,
+      "adopted": 50,
+      "thread": 4043370,
+      "positive_reads": 100427,
+      "read_bytes": 1606832,
+      "read_thread": 4043370
+    },
+    {
+      "queue": 31,
+      "adopted": 50,
+      "thread": 4043371,
+      "positive_reads": 102427,
+      "read_bytes": 1638832,
+      "read_thread": 4043371
+    }
+  ],
+  "samples": [
+    {
+      "seconds": 0.02602687498438172,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 0.7,
+          "rss_kib": 224368
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 0.0,
+          "rss_kib": 32
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 0.0,
+          "rss_kib": 32
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 0.0,
+          "rss_kib": 32
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 0.0,
+          "rss_kib": 32
+        }
+      ]
+    },
+    {
+      "seconds": 0.35195729098632,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 115.0,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 21.7,
+          "rss_kib": 1696
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 24.3,
+          "rss_kib": 1696
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 20.1,
+          "rss_kib": 1696
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 19.8,
+          "rss_kib": 1696
+        }
+      ]
+    },
+    {
+      "seconds": 0.6725496249855496,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 202.4,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 40.2,
+          "rss_kib": 1776
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 47.0,
+          "rss_kib": 1808
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 34.9,
+          "rss_kib": 1792
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 35.8,
+          "rss_kib": 1776
+        }
+      ]
+    },
+    {
+      "seconds": 0.9964371249952819,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 265.3,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 43.6,
+          "rss_kib": 1888
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 54.3,
+          "rss_kib": 1920
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 47.7,
+          "rss_kib": 1904
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 45.6,
+          "rss_kib": 1888
+        }
+      ]
+    },
+    {
+      "seconds": 1.340537249983754,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 297.3,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 45.4,
+          "rss_kib": 2000
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 51.2,
+          "rss_kib": 2064
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 46.4,
+          "rss_kib": 2016
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 46.1,
+          "rss_kib": 2000
+        }
+      ]
+    },
+    {
+      "seconds": 1.649177499988582,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 273.1,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 38.7,
+          "rss_kib": 2080
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 61.8,
+          "rss_kib": 2208
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 44.2,
+          "rss_kib": 2112
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 49.1,
+          "rss_kib": 2112
+        }
+      ]
+    },
+    {
+      "seconds": 1.9490583750011865,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 269.7,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 46.2,
+          "rss_kib": 2208
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 49.8,
+          "rss_kib": 2336
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 49.2,
+          "rss_kib": 2224
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 45.1,
+          "rss_kib": 2224
+        }
+      ]
+    },
+    {
+      "seconds": 2.2397357909940183,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 262.5,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 37.0,
+          "rss_kib": 2288
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 48.8,
+          "rss_kib": 2432
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 50.5,
+          "rss_kib": 2352
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 44.0,
+          "rss_kib": 2336
+        }
+      ]
+    },
+    {
+      "seconds": 2.5482895829773042,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 257.7,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 48.0,
+          "rss_kib": 2400
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 51.6,
+          "rss_kib": 2544
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 44.4,
+          "rss_kib": 2416
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 45.7,
+          "rss_kib": 2416
+        }
+      ]
+    },
+    {
+      "seconds": 2.8337713749788236,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 270.4,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 54.3,
+          "rss_kib": 2528
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 45.6,
+          "rss_kib": 2640
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 41.7,
+          "rss_kib": 2496
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 47.6,
+          "rss_kib": 2512
+        }
+      ]
+    },
+    {
+      "seconds": 3.1153725409822073,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 303.5,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 41.2,
+          "rss_kib": 2608
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 51.0,
+          "rss_kib": 2752
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 44.5,
+          "rss_kib": 2592
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 48.2,
+          "rss_kib": 2608
+        }
+      ]
+    },
+    {
+      "seconds": 3.4120641659828834,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 309.5,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 47.5,
+          "rss_kib": 2688
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 50.4,
+          "rss_kib": 2848
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 57.4,
+          "rss_kib": 2736
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 47.0,
+          "rss_kib": 2704
+        }
+      ]
+    },
+    {
+      "seconds": 3.71862216599402,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 238.9,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 40.0,
+          "rss_kib": 2784
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 50.2,
+          "rss_kib": 2928
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 37.0,
+          "rss_kib": 2800
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 52.2,
+          "rss_kib": 2784
+        }
+      ]
+    },
+    {
+      "seconds": 4.007131207996281,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 263.6,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 43.3,
+          "rss_kib": 2864
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 51.5,
+          "rss_kib": 3024
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 47.4,
+          "rss_kib": 2896
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 46.4,
+          "rss_kib": 2880
+        }
+      ]
+    },
+    {
+      "seconds": 4.294058374973247,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 292.2,
+          "rss_kib": 225072
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 45.7,
+          "rss_kib": 2960
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 46.0,
+          "rss_kib": 3120
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 41.8,
+          "rss_kib": 2976
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 47.8,
+          "rss_kib": 3008
+        }
+      ]
+    },
+    {
+      "seconds": 4.5851028749893885,
+      "processes": [
+        {
+          "pid": 28849,
+          "role": "server",
+          "cpu_percent": 299.2,
+          "rss_kib": 225184
+        },
+        {
+          "pid": 28857,
+          "role": "client",
+          "cpu_percent": 40.7,
+          "rss_kib": 3072
+        },
+        {
+          "pid": 28858,
+          "role": "client",
+          "cpu_percent": 0.0,
+          "rss_kib": 0
+        },
+        {
+          "pid": 28859,
+          "role": "client",
+          "cpu_percent": 44.7,
+          "rss_kib": 3072
+        },
+        {
+          "pid": 28860,
+          "role": "client",
+          "cpu_percent": 48.0,
+          "rss_kib": 3120
+        }
+      ]
+    }
+  ],
+  "server_cpu_percent_median": 271.75,
+  "server_cpu_percent_max": 309.5,
+  "raw_log": "ADOPT_TRACE queue=10 adopted=51 thread=4043364 positive_reads=99897 read_bytes=1598352 read_thread=4043364\nADOPT_TRACE queue=13 adopted=50 thread=4043365 positive_reads=100447 read_bytes=1607152 read_thread=4043365\nADOPT_TRACE queue=16 adopted=50 thread=4043366 positive_reads=105288 read_bytes=1684608 read_thread=4043366\nADOPT_TRACE queue=19 adopted=50 thread=4043367 positive_reads=93501 read_bytes=1496016 read_thread=4043367\nADOPT_TRACE queue=22 adopted=50 thread=4043368 positive_reads=101092 read_bytes=1617472 read_thread=4043368\nADOPT_TRACE queue=25 adopted=50 thread=4043369 positive_reads=96921 read_bytes=1550736 read_thread=4043369\nADOPT_TRACE queue=28 adopted=50 thread=4043370 positive_reads=100427 read_bytes=1606832 read_thread=4043370\nADOPT_TRACE queue=31 adopted=50 thread=4043371 positive_reads=102427 read_bytes=1638832 read_thread=4043371\n",
+  "validation": "All8 distinct real Lean workers registered and read their own sockets; 401 adoptions include one startup probe, balanced50/51; 12,800,000 bytes match800,000 verified16-byte echoes; cleanSIGINT exit. Instrumented timing is not a throughput acceptance gate or linear-scaling claim."
+}

@@ -72,7 +72,7 @@ Every round passed `--require-rps 50000`, and every client completed a request
 in the first second. This validates the loopback echo throughput gate on this
 Mac. It does not establish linear multi-core scaling: this workload did not
 show a reliable advantage for eight workers. The accept-distribution diagnosis
-below identifies a macOS listener-dispatch limitation in this implementation.
+below identifies a macOS listener-dispatch limitation in that snapshot.
 HTTP/2, TLS, Windows runtime, and long-duration production gates remain separate.
 
 Separate observational runs in `echo-reactor-macos-m2-resource-samples.json`
@@ -100,7 +100,7 @@ acceptance repetition in `echo-reactor-completion-gate-macos-m2.json` measured
 round trips), with all 100 clients progressing in the first second. Executable
 SHA-256 `41e7439d2e6baa62f7a86f9108a579d911d8592f25180a4308115d53cfdb4b8d`
 matched before and after the run; SIGINT exited normally. This is the latest
-local echo throughput gate, not evidence for any later protocol phase.
+local echo throughput gate before acceptor handoff; later evidence follows below.
 
 ## macOS worker-distribution diagnosis
 
@@ -134,6 +134,53 @@ balancing. In the published Apple XNU source,
 and [new PCBs enter at the list head](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/netinet/in_pcb.c#L2810-L2811).
 That is consistent with the observed last-created-listener selection. This
 source is `xnu-12377.1.9`, older than the running `xnu-13432.41.4`; the measured
-accept distribution is the direct evidence for this host. Balanced macOS
-connection assignment remains unfinished, and phase 1's multicore-scaling
-requirement remains open.
+accept distribution is the direct evidence for this host. This historical
+listener-starvation defect is resolved by the acceptor handoff measured below.
+
+## Acceptor handoff acceptance
+
+The user-approved macOS/Windows design uses one acceptor and bounded native
+channels to per-core workers. Each worker creates its own connection identity
+and registers its socket before receiving `ACCEPTED` or performing reads.
+Linux retains independent `SO_REUSEPORT` listeners.
+
+`echo-reactor-handoff-macos-m2-1worker.json` and
+`echo-reactor-handoff-macos-m2-8workers.json` record the final uninstrumented
+c=100 gate at source commit `d3ccc2ebb3d0cb4cee188eca5832181c7fed5caa`,
+executable SHA-256
+`96b5c28c01e85a24dd595b3de826e3a890bd731e580068c080514a1f5f00dbe9`.
+Both reports include source hashes and used 200,000 verified 16-byte echoes per
+round, three rounds, with the explicit `--require-rps 50000` threshold.
+
+| Workers | Completed requests/s by round | Median |
+| ---: | --- | ---: |
+| 1 | 185,657 / 191,688 / 193,948 | 191,688 |
+| 8 | 188,213 / 191,608 / 179,073 | 188,213 |
+
+All six rounds passed. All 100 clients progressed in the first second of every
+round, and all server SIGINT exits were zero. These short single-client-process
+measurements do not establish a throughput advantage for eight workers.
+
+The separate `echo-reactor-handoff-macos-m2-worker-distribution.json` records a
+disposable DYLD interposer against the same executable, using four independent
+native client processes with 100 connections and 200,000 requests each. The
+tracer joins connected-socket read registration to positive `recv` calls and
+records owning thread IDs; its full source, driver, hashes and raw CPU samples
+are embedded in the report. Timing from this instrumented run is diagnostic.
+
+All eight distinct Lean worker threads registered and read their own sockets.
+Their adoption counts were **51 / 50 / 50 / 50 / 50 / 50 / 50 / 50**, including
+one startup probe. Every worker performed positive reads (93,501–105,288 calls
+each), and each worker's registration thread matched its read thread. The
+800,000 positive reads and 12,800,000 bytes match the clients' 800,000 verified
+16-byte echoes. Server CPU after the first second had median 271.75% and maximum
+309.5%, showing activity across multiple logical CPUs on this host. SIGINT
+exited zero. This directly resolves the earlier last-listener starvation; it
+does not establish linear throughput scaling or later protocol/soak gates.
+
+`test/test_reactor_dispatch.py` additionally exercises eight real native worker
+threads with exactly 50 accepts each, bounded capacity-one queues, retained
+accepted sockets, saturated infinite waits, interrupted wake delivery,
+completion preservation, both endpoint destruction orders, descriptor reuse,
+and zero backend heap allocations during handoff/established I/O. It passes
+with ASan/UBSan on macOS; other platform runtime gates remain separately tracked.

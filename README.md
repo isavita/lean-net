@@ -41,19 +41,33 @@ python3 test/test_http1_faults.py -v
 python3 test/test_http2_e2e.py -v
 ```
 
-The build compiles the POSIX shim with `-Wall -Wextra -Wpedantic -Werror`.
+The native build uses `-Wall -Wextra -Wpedantic -Werror`. Windows native builds
+require MinGW GCC for the system SDK headers.
 The acceptance suite uses loopback sockets and checks descriptor counts using
 `/proc` on Linux or `lsof` on macOS. The echo server takes a port argument:
 
 ```sh
 .lake/build/bin/lean-net-echo 8080
-# Windows currently requires a single IOCP worker and a MinGW GCC toolchain:
-# .lake/build/bin/lean-net-echo.exe 8080 1
+# Choose an explicit worker count (the default is the active logical CPU count):
+# .lake/build/bin/lean-net-echo 8080 4
 # Or run the HTTP server and request its default route:
 .lake/build/bin/lean-net-http1 8080
 # In another terminal:
 # curl -v --http1.1 http://localhost:8080/
 # curl -v --http2-prior-knowledge http://localhost:8080/
+```
+
+The native reactor has additional ownership, concurrency and allocation checks:
+
+```sh
+lake build lean-net-reactor-native-test
+.lake/build/bin/lean-net-reactor-native-test
+lake env lean test/ReactorStateTest.lean
+python3 -m unittest discover -s test -p 'test_reactor_*.py' -v
+# Windows IOCP/Winsock fixtures (use lake env to resolve native tool paths):
+# lake env python test/test_reactor_setup.py -v
+# lake env python test/test_reactor_echo.py -v
+# lake env python test/test_windows_native.py -v
 ```
 
 The optional stdlib-only connection soak starts its own loopback server,
@@ -85,8 +99,9 @@ managed with explicit brackets rather than finalizers.
 The HTTP server has a scoped SIGINT handler with a self-pipe to wake socket
 waits and permit the Lean brackets to unwind. That facility is process-wide
 and assumes single-threaded use. The reactor echo server instead fans shutdown
-out to its dedicated workers. The socket shim uses `SO_REUSEADDR`,
-`TCP_NODELAY`, and platform SIGPIPE suppression by default.
+out to its dedicated workers. Unix listeners use `SO_REUSEADDR`; Windows uses
+`SO_EXCLUSIVEADDRUSE`. Accepted sockets use `TCP_NODELAY` and platform SIGPIPE
+suppression by default.
 
 `lakefile.lean` supplies the native build recipe: Lake cannot express this
 custom C compilation step in the static TOML manifest. Socket handles are
