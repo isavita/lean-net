@@ -6,6 +6,11 @@ Brotli because pkg-config suppressed the system multiarch library directory.
 The follow-up selects explicit shared-library paths in both Lake packages.
 Raw failed-job logs are retained under `ci/`.
 
+Both macOS jobs and Windows TLS passed, including all static wire cases.
+Windows Native separately failed its injected unsupported-disposition cleanup
+process-handle assertion before directory enumeration. This resource failure
+also prevents acceptance and is being investigated separately from linking.
+
 - Static wire: 32 cases, verified TLS, four curl modes, two 1,000-cycle
   resource checks, compression, validators, ranges and file cancellation.
 - HTTP/2: 48 wire cases and 147 strict h2spec cases on each transport, with

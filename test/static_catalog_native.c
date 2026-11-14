@@ -18,8 +18,16 @@ static struct dirent *tested_readdir(DIR *);
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <sddl.h>
 static BOOL WINAPI tested_set_information(HANDLE, FILE_INFO_BY_HANDLE_CLASS, LPVOID, DWORD);
+static HANDLE WINAPI tested_create_file(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD,
+                                        HANDLE);
+static BOOL WINAPI tested_close_handle(HANDLE);
+static BOOL WINAPI tested_security(LPCWSTR, DWORD, PSECURITY_DESCRIPTOR *, PULONG);
 #define SetFileInformationByHandle tested_set_information
+#define CreateFileW tested_create_file
+#define CloseHandle tested_close_handle
+#define ConvertStringSecurityDescriptorToSecurityDescriptorW tested_security
 #endif
 #define SC_NO_LEAN_FFI
 #include "../c/static_catalog.c"
@@ -30,6 +38,9 @@ static BOOL WINAPI tested_set_information(HANDLE, FILE_INFO_BY_HANDLE_CLASS, LPV
 #undef readdir
 #else
 #undef SetFileInformationByHandle
+#undef CreateFileW
+#undef CloseHandle
+#undef ConvertStringSecurityDescriptorToSecurityDescriptorW
 #endif
 #include "../c/reactor_file_impl.h"
 #include <assert.h>
@@ -47,6 +58,98 @@ static BOOL WINAPI tested_set_information(HANDLE, FILE_INFO_BY_HANDLE_CLASS, LPV
 static sc_builder *observed;
 #ifdef _WIN32
 static unsigned unsupported_disposition;
+static int capture_owned_handles;
+static HANDLE owned_handles[16];
+static unsigned owned_count, owned_created, owned_closed;
+static DWORD create_before[16], create_after[16], security_before, security_after;
+static HANDLE WINAPI tested_create_file(LPCWSTR path, DWORD access, DWORD sharing,
+                                        LPSECURITY_ATTRIBUTES security, DWORD disposition,
+                                        DWORD flags, HANDLE template) {
+  DWORD before = 0, after = 0;
+  if (capture_owned_handles)
+    REQUIRE(GetProcessHandleCount(GetCurrentProcess(), &before));
+  HANDLE handle = CreateFileW(path, access, sharing, security, disposition, flags, template);
+  if (capture_owned_handles && handle != INVALID_HANDLE_VALUE) {
+    REQUIRE(GetProcessHandleCount(GetCurrentProcess(), &after));
+    REQUIRE(owned_count < sizeof(owned_handles) / sizeof(*owned_handles));
+    create_before[owned_created] = before;
+    create_after[owned_created] = after;
+    owned_handles[owned_count++] = handle;
+    ++owned_created;
+  }
+  return handle;
+}
+static BOOL WINAPI tested_close_handle(HANDLE handle) {
+  BOOL result = CloseHandle(handle);
+  if (capture_owned_handles && result) {
+    for (unsigned i = 0; i < owned_count; ++i)
+      if (owned_handles[i] == handle) {
+        owned_handles[i] = owned_handles[--owned_count];
+        ++owned_closed;
+        break;
+      }
+  }
+  return result;
+}
+static BOOL WINAPI tested_security(LPCWSTR text, DWORD revision, PSECURITY_DESCRIPTOR *descriptor,
+                                   PULONG size) {
+  if (capture_owned_handles)
+    REQUIRE(GetProcessHandleCount(GetCurrentProcess(), &security_before));
+  BOOL result =
+      ConvertStringSecurityDescriptorToSecurityDescriptorW(text, revision, descriptor, size);
+  if (capture_owned_handles)
+    REQUIRE(GetProcessHandleCount(GetCurrentProcess(), &security_after));
+  return result;
+}
+typedef struct {
+  uint8_t used[16384];
+  unsigned count;
+} handle_snapshot;
+static void snapshot_handles(handle_snapshot *snapshot) {
+  memset(snapshot, 0, sizeof(*snapshot));
+  for (unsigned i = 1; i < sizeof(snapshot->used); ++i) {
+    DWORD flags;
+    if (GetHandleInformation((HANDLE)(uintptr_t)(i * 4), &flags)) {
+      snapshot->used[i] = 1;
+      ++snapshot->count;
+    }
+  }
+}
+static void describe_new_handles(const handle_snapshot *before, const handle_snapshot *after) {
+  typedef NTSTATUS(NTAPI * query_fn)(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+  FARPROC raw = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryObject");
+  query_fn query = NULL;
+  memcpy(&query, &raw, sizeof(query));
+  for (unsigned i = 1; i < sizeof(after->used); ++i) {
+    if (!after->used[i] || before->used[i])
+      continue;
+    HANDLE handle = (HANDLE)(uintptr_t)(i * 4);
+    char type[1024] = "unavailable", name[1024] = "unavailable";
+    for (unsigned position = 0; query && position < 2; ++position) {
+      unsigned field = position ? 1 : 2;
+      /* Name queries for synchronous pipe handles can block. Type information
+         is sufficient to distinguish them from builder file ownership. */
+      if (field == 1 && !strcmp(type, "File"))
+        continue;
+      union {
+        uint64_t alignment;
+        uint8_t bytes[4096];
+      } buffer;
+      ULONG size = 0;
+      NTSTATUS result =
+          query(handle, (OBJECT_INFORMATION_CLASS)field, buffer.bytes, sizeof(buffer.bytes), &size);
+      if (result >= 0) {
+        UNICODE_STRING *text = (UNICODE_STRING *)buffer.bytes;
+        char *output = field == 2 ? type : name;
+        int count = WideCharToMultiByte(CP_UTF8, 0, text->Buffer, text->Length / 2, output, 1023,
+                                        NULL, NULL);
+        if (count >= 0)
+          output[count] = 0;
+      }
+    }
+    fprintf(stderr, "new process handle=%p type=%s name=%s\n", (void *)handle, type, name);
+  }
+}
 static BOOL WINAPI tested_set_information(HANDLE file, FILE_INFO_BY_HANDLE_CLASS kind, LPVOID info,
                                           DWORD size) {
   if ((int)kind == 21 && unsupported_disposition) {
@@ -247,13 +350,35 @@ int main(int argc, char **argv) {
   REQUIRE(rn_file_prepare_residency_budget(8 * 1024 * 1024) == 0);
   no_private_pack_name(root);
 #ifdef _WIN32
+  handle_snapshot failed_snapshot_before, failed_snapshot_after;
+  snapshot_handles(&failed_snapshot_before);
   unsigned failed_before = handles();
+  capture_owned_handles = 1;
   sc_builder *unsupported = builder(root, 8192, 1);
+  unsigned failed_after_create = handles();
   unsupported_disposition = 1;
   REQUIRE(sc_builder_prepare(unsupported) == -ENOTSUP);
+  unsigned failed_after_prepare = handles();
   dispose(unsupported);
+  unsigned failed_after_dispose = handles();
+  capture_owned_handles = 0;
   no_private_pack_name(root);
-  REQUIRE(handles() <= failed_before);
+  unsigned failed_after_enumerate = handles();
+  snapshot_handles(&failed_snapshot_after);
+  fprintf(stderr,
+          "unsupported disposition handles: before=%u create=%u prepare=%u dispose=%u "
+          "enumerate=%u owned_created=%u owned_closed=%u owned_open=%u scan=%u/%u\n",
+          failed_before, failed_after_create, failed_after_prepare, failed_after_dispose,
+          failed_after_enumerate, owned_created, owned_closed, owned_count,
+          failed_snapshot_before.count, failed_snapshot_after.count);
+  describe_new_handles(&failed_snapshot_before, &failed_snapshot_after);
+  fprintf(stderr, "security descriptor handles=%lu/%lu\n", (unsigned long)security_before,
+          (unsigned long)security_after);
+  for (unsigned i = 0; i < owned_created; ++i)
+    fprintf(stderr, "owned CreateFile stage%u handles=%lu/%lu\n", i,
+            (unsigned long)create_before[i], (unsigned long)create_after[i]);
+  REQUIRE(owned_count == 0 && owned_created == owned_closed);
+  REQUIRE(failed_after_enumerate <= failed_before);
 #endif
   sc_builder *b = builder(root, 8 * 1024 * 1024, 16);
   observed = b;
