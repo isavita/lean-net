@@ -81,4 +81,10 @@ def main : IO Unit := do
   let (debited, streamResult) ← ok "connection credit survives stream violation" (flow.receiveData limited 4)
   check (debited.recvWindow == 65531) "connection credit lost on stream error"
   rejected "stream receive overflow" streamResult .flowControlError (.stream 1)
+  let receiveAdjusted ← ok "local SETTINGS receive decrease" (openStream.adjustInitialReceive (-70000))
+  check (receiveAdjusted.recvWindow == -4465) "local receive decrease lost negative window"
+  let (_, zeroCredit) ← ok "empty DATA on negative receive window" (flow.receiveData receiveAdjusted 0)
+  let zeroCredit ← ok "empty DATA stream credit" zeroCredit
+  check (zeroCredit.recvWindow == -4465) "empty DATA changed negative receive credit"
+  rejected "local receive delta overflow" ({ openStream with recvWindow := Int.ofNat maxWindow }.adjustInitialReceive 1) .flowControlError .connection
   IO.println "HTTP/2 stream and flow tests passed"

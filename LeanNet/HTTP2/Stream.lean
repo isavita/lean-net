@@ -144,9 +144,9 @@ structure Flow where
 def Flow.receiveData (flow : Flow) (stream : Stream) (size : Nat) :
     Except ProtocolError (Flow × Except ProtocolError Stream) := do
   let n := Int.ofNat size
-  if n > flow.recvWindow then throw (connectionError .flowControlError "connection receive window exceeded")
+  if size > 0 && n > flow.recvWindow then throw (connectionError .flowControlError "connection receive window exceeded")
   let flow := { flow with recvWindow := flow.recvWindow - n }
-  if n > stream.recvWindow then
+  if size > 0 && n > stream.recvWindow then
     return (flow, .error (streamError stream .flowControlError "stream receive window exceeded"))
   return (flow, .ok { stream with recvWindow := stream.recvWindow - n })
 
@@ -180,6 +180,13 @@ def Stream.adjustInitialSend (stream : Stream) (delta : Int) : Except ProtocolEr
   if next > Int.ofNat maxWindow then
     throw (connectionError .flowControlError "SETTINGS initial window overflow")
   return { stream with sendWindow := next }
+
+/-- Apply the acknowledged local initial receive-window delta. -/
+def Stream.adjustInitialReceive (stream : Stream) (delta : Int) : Except ProtocolError Stream := do
+  let next := stream.recvWindow + delta
+  if next > Int.ofNat maxWindow then
+    throw (connectionError .flowControlError "SETTINGS receive window overflow")
+  return { stream with recvWindow := next }
 
 /-- Record advertised local connection receive credit after WINDOW_UPDATE. -/
 def Flow.updateReceive (flow : Flow) (increment : Nat) : Except ProtocolError Flow := do

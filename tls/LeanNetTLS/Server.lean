@@ -1,4 +1,5 @@
 import LeanNet.HTTP1.Server
+import LeanNet.HTTP2.Server
 import LeanNetTLS.ReactorServer
 
 namespace LeanNetTLS.Server
@@ -17,10 +18,16 @@ def serveWith (router : LeanNet.HTTP1.Router) (certificate privateKey : String)
     (host : String := "127.0.0.1") (port : UInt16 := 8443) : IO Unit :=
   serveWithConfig router {} certificate privateKey host port
 
+/-- Configure HTTP/2 limits and optional push for the native TLS demo server. -/
+def serveWithOptions (certificate privateKey : String)
+    (http : LeanNet.HTTP.ReactorServerConfig := {})
+    (host : String := "127.0.0.1") (port : UInt16 := 8443) : IO Unit :=
+  ReactorServer.serveFactory (fun _ => pure LeanNet.HTTP2.demoHandlers)
+    { certificateChain := certificate, privateKey } http host port
+
 /-- Serve the default route with one HTTP reactor per available core. -/
 def serve (certificate privateKey : String) (host : String := "127.0.0.1")
     (port : UInt16 := 8443) : IO Unit :=
-  ReactorServer.serveFactory (fun _ => pure .default)
-    { certificateChain := certificate, privateKey } {} host port
+  serveWithOptions certificate privateKey {} host port
 
 end LeanNetTLS.Server

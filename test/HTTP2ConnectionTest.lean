@@ -83,11 +83,13 @@ def main : IO Unit := do
   check (secretFields.any (fun h => h.name == "set-cookie".toUTF8 && h.sensitive)) "cookie was not marked never-indexed"
 
   let (negativeConn, _, _) ← feed (← connect) ⟨1, 5, 1, requestBlock⟩
-  let (negativeConn, _) ← ok "queue response before settings reduction"
+  let (negativeConn, initialNegativeWire) ← ok "queue response before settings reduction"
     (negativeConn.respond 1 { body := ByteArray.mk (Array.replicate 70000 (65 : UInt8)) })
   let (negativeConn, settingAck, _) ← feed negativeConn ⟨4, 0, 0, ByteArray.mk #[0,4,0,0,0,0]⟩
   check (!negativeConn.canDrain && (← frames settingAck).size == 1) "negative SETTINGS window must stop DATA"
-  let (_, resumedWire, _) ← feed negativeConn ⟨8, 0, 1, b32 16385⟩
+  let sent := (← frames initialNegativeWire).foldl (fun n frame => n + if frame.kind == 0 then frame.payload.size else 0) 0
+  let (negativeConn, _, _) ← feed negativeConn ⟨8, 0, 0, b32 1⟩
+  let (_, resumedWire, _) ← feed negativeConn ⟨8, 0, 1, b32 (sent + 1)⟩
   let resumed ← frames resumedWire
   check (resumed.size == 1 && resumed[0]!.kind == 0 && resumed[0]!.payload.size == 1) "negative SETTINGS window did not recover correctly"
 
@@ -139,14 +141,16 @@ def main : IO Unit := do
 
   -- Exhaust connection credit with stream 1, queue stream 3, then open one
   -- byte of credit at a time: round-robin must not starve the later stream.
-  let (c, _, _) ← feed (← connect) ⟨1, 5, 1, requestBlock⟩
+  let (_, incrementalBlock) ← hpackOk (HPACK.encode HPACK.Context.new (baseHeaders.push { name := "priority".toUTF8, value := "i".toUTF8 }))
+  let (c, _, _) ← feed (← connect) ⟨1, 5, 1, incrementalBlock⟩
   let (c, _) ← ok "queue large response" (c.respond 1 { body := ByteArray.mk (Array.replicate 131070 (65 : UInt8)) })
   let mut fairConn := c
   for _ in [0:4] do
     if fairConn.canDrain then
       let (next, _) ← ok "exhaust connection window" fairConn.drain
       fairConn := next
-  let (next, _, _) ← feed fairConn ⟨1, 5, 3, requestBlock⟩
+  let (_, incrementalBlock2) ← hpackOk (HPACK.encode HPACK.Context.new (baseHeaders.push { name := "priority".toUTF8, value := "i".toUTF8 }))
+  let (next, _, _) ← feed fairConn ⟨1, 5, 3, incrementalBlock2⟩
   let (next, _) ← ok "queue second response" (next.respond 3 { body := "xy".toUTF8 })
   let (next, _, _) ← feed next ⟨8, 0, 1, b32 1⟩
   let (next, out, _) ← feed next ⟨8, 0, 0, b32 1⟩
@@ -166,7 +170,8 @@ def main : IO Unit := do
   let evenWindow ← wire ⟨8, 0, 2, b32 1⟩
   expectError "even idle WINDOW_UPDATE" (c.feed evenWindow) .protocolError
 
-  let mut many := ← connect
+  let (many, _, _) ← ok "bounded handshake" ((Connection.newWithConfig { maxConcurrentStreams := 32 }).feed (preface.append (← wire settings0)))
+  let mut many := many
   let mut batchEncoder := HPACK.Context.new
   for index in [0:32] do
     let (nextEncoder, block) ← hpackOk (HPACK.encode batchEncoder baseHeaders)
@@ -193,7 +198,7 @@ def main : IO Unit := do
   check (out.isEmpty && events.isEmpty) "late reset HEADERS should be decoded and discarded"
   let (c, out, _) ← feed c ⟨0, 0, 1, "abc".toUTF8⟩
   let updates ← frames out
-  check (updates.size == 1 && updates[0]!.kind == 8 && updates[0]!.streamId == 0 && read32 updates[0]!.payload == 3) "discarded DATA must replenish connection credit"
+  check updates.isEmpty "tiny discarded DATA must retain connection credit until the update threshold"
   let (_, nextBlock) ← hpackOk (HPACK.encode encoder (baseHeaders.push { name := "x-late".toUTF8, value := "yes".toUTF8 }))
   let (_, _, events) ← feed c ⟨1, 5, 3, nextBlock⟩
   check (events.size == 1) "late header block desynchronized HPACK"

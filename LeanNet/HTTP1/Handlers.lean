@@ -1,6 +1,7 @@
 import LeanNet.Bytes
 import LeanNet.HTTP1.Machine
 import LeanNet.HTTP1.Router
+import LeanNet.HTTP2.Push
 
 namespace LeanNet.HTTP1
 
@@ -25,6 +26,8 @@ inductive HeaderResult where
 structure Handlers where
   onRequest : Request → IO Reply
   onHeaders : RequestHead → BodyFraming → IO HeaderResult := fun _ _ => pure (.accept none)
+  /-- Called only for HTTP/2 when server push is enabled and the peer allows it. -/
+  onPush : Request → IO (Array HTTP2.Push) := fun _ => pure #[]
 
 def Handlers.ofRouter (router : Router) : Handlers :=
   { onRequest := fun request => return { response := ← router request } }

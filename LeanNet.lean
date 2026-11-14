@@ -22,6 +22,9 @@ import LeanNet.HTTP2.Frame
 import LeanNet.HTTP2.HPACK
 import LeanNet.HTTP2.Request
 import LeanNet.HTTP2.Stream
+import LeanNet.HTTP2.Priority
+import LeanNet.HTTP2.Push
+import LeanNet.HTTP2.Machine
 import LeanNet.HTTP2.Connection
 import LeanNet.HTTP2.Server
 

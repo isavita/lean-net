@@ -56,6 +56,8 @@ private def checkSettings (payload : ByteArray) : Except ProtocolError Unit := d
       throw (connError .flowControlError "invalid SETTINGS_INITIAL_WINDOW_SIZE")
     if id == 5 && (value < 16384 || value > 16777215) then
       throw (connError .protocolError "invalid SETTINGS_MAX_FRAME_SIZE")
+    if id == 9 && value > 1 then
+      throw (connError .protocolError "invalid SETTINGS_NO_RFC7540_PRIORITIES")
 
 /-- Validate wire-level frame constraints; stream sequencing and peer-specific
     semantics (such as client PUSH_PROMISE) belong to the connection layer. -/
@@ -83,6 +85,11 @@ def Frame.validate (frame : Frame) (maxFrameSize : Nat := 16384) : Except Protoc
     if read32 frame.payload 0 % 2147483648 == 0 then
       if stream == 0 then throw (connError .protocolError "zero connection window increment")
       else throw (streamError stream .protocolError "zero stream window increment")
+  if kind == 16 then
+    if stream != 0 then throw (connError .protocolError "PRIORITY_UPDATE requires the control stream")
+    if size < 4 then throw (connError .frameSizeError "PRIORITY_UPDATE omits the prioritized stream id")
+    if read32 frame.payload 0 % 2147483648 == 0 then
+      throw (connError .protocolError "PRIORITY_UPDATE has a zero prioritized stream id")
   if kind == 0 || kind == 1 || kind == 5 then
     let padded := bit frame.flags 8
     let prefixLen := if padded then 1 else 0
@@ -92,8 +99,8 @@ def Frame.validate (frame : Frame) (maxFrameSize : Nat := 16384) : Except Protoc
     let padding := if padded then (frame.payload[0]!).toNat else 0
     if padding > size - prefixLen - extra then
       throw (connError .protocolError "invalid frame padding")
-    if kind == 1 && extra == 5 && read32 frame.payload prefixLen % 2147483648 == stream.toNat then
-      throw (streamError stream .protocolError "stream depends on itself")
+    -- HEADERS dependency semantics belong to the connection: its HPACK block
+    -- must still be decoded before resetting a self-dependent stream.
     if kind == 5 && read32 frame.payload prefixLen % 2147483648 == 0 then
       throw (connError .protocolError "invalid promised stream id")
   if kind == 2 && read32 frame.payload 0 % 2147483648 == stream.toNat then
@@ -116,8 +123,9 @@ def Frame.encode (frame : Frame) (maxFrameSize : Nat := 16384) : Except Protocol
 where
   size := frame.payload.size
 
-/-- Bounded, resumable frame parser. The caller chooses its advertised local
-    frame limit; bytes are processed once and payload storage never exceeds it. -/
+/-- Bounded, resumable frame parser. Payload spans are copied into owned 4K
+    blocks; retaining an old parser bounds copy-on-write to one active block.
+    No parser state borrows or retains the caller's receive ByteArray. -/
 structure FrameParser where
   private maxFrameSize : Nat := 16384
   private header : ByteArray := ByteArray.empty
@@ -126,8 +134,7 @@ structure FrameParser where
   private flags : UInt8 := 0
   private streamId : UInt32 := 0
   private bodyBlocks : List ByteArray := []
-  private bodyRev : List UInt8 := []
-  private bodyBlockSize : Nat := 0
+  private body : ByteArray := ByteArray.empty
   private bodySize : Nat := 0
 
 def FrameParser.new (maxFrameSize : Nat := 16384) : FrameParser :=
@@ -140,61 +147,85 @@ inductive FrameParseResult where
       the caller can resume a new parser with `remaining`. -/
   | error (error : ProtocolError) (remaining : ByteArray)
 
-private def appendPayload (parser : FrameParser) (byte : UInt8) : FrameParser :=
-  let active := byte :: parser.bodyRev
-  if parser.bodyBlockSize + 1 == 4096 then
-    { parser with bodyBlocks := ByteArray.mk active.reverse.toArray :: parser.bodyBlocks,
-                  bodyRev := [], bodyBlockSize := 0, bodySize := parser.bodySize + 1 }
-  else
-    { parser with bodyRev := active, bodyBlockSize := parser.bodyBlockSize + 1,
-                  bodySize := parser.bodySize + 1 }
+/-- One-frame progress within a supplied byte range. `consumed` is relative to
+    that range, never an absolute offset. Errors preserve their original scope;
+    except for an oversized header, the complete frame has been consumed. -/
+inductive FrameSliceResult where
+  | needMore (parser : FrameParser) (consumed : Nat)
+  | complete (frame : Frame) (consumed : Nat)
+  | error (error : ProtocolError) (consumed : Nat)
+
+private def copyPayloadSpans (input : ByteArray) (offset count : Nat)
+    (initialBlocks : List ByteArray) (initial : ByteArray) : List ByteArray × ByteArray := Id.run do
+  let mut blocks := initialBlocks
+  let mut active := initial
+  let mut cursor := offset
+  let mut remaining := count
+  for _ in [:count / 4096 + 2] do
+    if remaining == 0 then break
+    let amount := min remaining (4096 - active.size)
+    active := input.copySlice cursor active active.size amount false
+    cursor := cursor + amount
+    remaining := remaining - amount
+    if active.size == 4096 then
+      blocks := active :: blocks
+      active := ByteArray.empty
+  return (blocks, active)
+
+private def appendPayloadSpan (parser : FrameParser) (input : ByteArray)
+    (offset count : Nat) : FrameParser :=
+  let (bodyBlocks, body) := copyPayloadSpans input offset count parser.bodyBlocks parser.body
+  { parser with bodyBlocks, body, bodySize := parser.bodySize + count }
 
 private def finishFrame (parser : FrameParser) : Frame := Id.run do
-  let mut payload := ByteArray.empty
+  if parser.bodyBlocks.isEmpty then
+    return ⟨parser.kind, parser.flags, parser.streamId, parser.body⟩
+  let mut payload := ByteArray.emptyWithCapacity parser.bodySize
   for block in parser.bodyBlocks.reverse do payload := payload.append block
-  payload := payload.append (ByteArray.mk parser.bodyRev.reverse.toArray)
+  payload := payload.append parser.body
   return ⟨parser.kind, parser.flags, parser.streamId, payload⟩
 
-private inductive FrameAdvance where
-  | more (parser : FrameParser)
-  | done (frame : Frame)
-  | fail (error : ProtocolError)
-
-private def completeFrame (parser : FrameParser) : FrameAdvance :=
+/-- Parse at most one frame without copying the unconsumed suffix. Only the
+    nine-byte header and consumed payload spans enter the owned parser state.
+    Invalid source ranges are rejected without consuming any bytes. -/
+def FrameParser.feedSlice (initial : FrameParser) (input : ByteArray)
+    (offset length : Nat) : FrameSliceResult := Id.run do
+  if offset > input.size || length > input.size - offset then
+    return .error (connError .internalError "invalid frame input slice") 0
+  let mut parser := initial
+  let mut consumed := 0
+  if parser.expected.isNone then
+    let amount := min length (9 - parser.header.size)
+    let header := input.copySlice offset parser.header parser.header.size amount false
+    parser := { parser with header }
+    consumed := amount
+    if header.size < 9 then return .needMore parser consumed
+    let expected := (header[0]!).toNat * 65536 + (header[1]!).toNat * 256 + (header[2]!).toNat
+    if expected > parser.maxFrameSize then
+      return .error (connError .frameSizeError "frame exceeds maximum size") consumed
+    parser := { parser with
+      expected := some expected
+      kind := header[3]!
+      flags := header[4]!
+      streamId := UInt32.ofNat (read32 header 5 % 2147483648) }
+  let some expected := parser.expected
+    | return .error (connError .internalError "missing frame payload length") consumed
+  let amount := min (length - consumed) (expected - parser.bodySize)
+  parser := appendPayloadSpan parser input (offset + consumed) amount
+  consumed := consumed + amount
+  if parser.bodySize < expected then return .needMore parser consumed
   let frame := finishFrame parser
   match frame.validate parser.maxFrameSize with
-  | .ok () => .done frame
-  | .error error => .fail error
+  | .ok () => return .complete frame consumed
+  | .error error => return .error error consumed
 
-private def advanceFrame (parser : FrameParser) (byte : UInt8) : FrameAdvance :=
-  match parser.expected with
-  | some expected =>
-    let next := appendPayload parser byte
-    if next.bodySize == expected then completeFrame next else .more next
-  | none =>
-    let header := parser.header.push byte
-    if header.size < 9 then .more { parser with header := header }
-    else
-      let length := (header[0]!).toNat * 65536 + (header[1]!).toNat * 256 + (header[2]!).toNat
-      if length > parser.maxFrameSize then .fail (connError .frameSizeError "frame exceeds maximum size")
-      else
-        let next := { parser with header := header, expected := some length,
-                                  kind := header[3]!, flags := header[4]!,
-                                  streamId := UInt32.ofNat (read32 header 5 % 2147483648) }
-        if length == 0 then completeFrame next else .more next
-
-/-- Feed bytes, returning the unconsumed suffix after a frame or error. -/
+/-- Compatibility adapter returning an owned remainder. New connection loops
+    use `feedSlice` and advance their cursor without copying that suffix. -/
 def FrameParser.feed (parser : FrameParser) (input : ByteArray) : FrameParseResult :=
-  go parser 0 input.size
-where
-  go (parser : FrameParser) (index remaining : Nat) : FrameParseResult :=
-    match remaining with
-    | 0 => .needMore parser
-    | count + 1 =>
-      match advanceFrame parser input[index]! with
-      | .more next => go next (index + 1) count
-      | .done frame => .complete frame (input.extract (index + 1) input.size)
-      | .fail error => .error error (input.extract (index + 1) input.size)
+  match parser.feedSlice input 0 input.size with
+  | .needMore next _ => .needMore next
+  | .complete frame consumed => .complete frame (input.extract consumed input.size)
+  | .error error consumed => .error error (input.extract consumed input.size)
 
 /-- EOF is clean only between frames. -/
 def FrameParser.finish (parser : FrameParser) : Except ProtocolError Unit :=

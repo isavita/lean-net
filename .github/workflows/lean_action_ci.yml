@@ -25,10 +25,14 @@ jobs:
           lake env lean --run test/HTTP1MachineTest.lean
           lake env lean --run test/HTTP2PrefaceTest.lean
           lake env lean --run test/HTTP2FrameTest.lean
+          lake env lean --run test/HTTP2FrameV2Test.lean
+          lake env lean --run test/PriorityTest.lean
+          lake env lean --run test/HTTP2MachineTest.lean
           lake env lean --run test/HPACKTest.lean
           lake env lean --run test/HTTP2RequestTest.lean
           lake env lean --run test/HTTP2StreamTest.lean
           lake env lean --run test/HTTP2ConnectionTest.lean
+          lake env lean --run test/HTTP2ConnectionV2Test.lean
           python3 test/test_echo.py -v
           python3 test/test_http1_server.py -v
           .lake/build/bin/lean-net-event-ffi-test

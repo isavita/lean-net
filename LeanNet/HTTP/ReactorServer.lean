@@ -1,7 +1,7 @@
 import Std.Data.HashMap
 import LeanNet.Reactor.Basic
 import LeanNet.HTTP1.Handlers
-import LeanNet.HTTP2.Connection
+import LeanNet.HTTP2.Machine
 import LeanNet.HTTP.WorkerPool
 import LeanNet.HTTP.Transport
 
@@ -18,6 +18,9 @@ structure ReactorServerConfig where
   maxInputBytes : Nat := 2 * 1024 * 1024 + 65536
   maxOutputBytes : Nat := 16 * 1024 * 1024
   workPerClient : Nat := 64
+  http2 : HTTP2.Connection.Config := {}
+  cleartextProtocol : Transport.Protocol := .detect
+  shutdownDrainMs : Nat := 2000
 
 namespace ReactorServer
 
@@ -26,7 +29,7 @@ private def preface : ByteArray := "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toUTF8
 private inductive Protocol where
   | detect (matched : Nat)
   | http1 (machine : Machine.State)
-  | http2 (connection : HTTP2.Connection)
+  | http2 (machine : HTTP2.Machine.State)
   | raw
 
 private structure InputChunk where
@@ -156,6 +159,9 @@ private def deadline (now : UInt64) (duration : Nat) : IO UInt64 := do
   return UInt64.ofNat result
 
 private def Driver.cancelRequest (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
+  unless ← id.isLive driver.reactor do
+    driver.forget id
+    return
   let some client ← driver.client? id | return
   if client.requestDeadline.isSome then
     client.socket.cancelTimer 1
@@ -331,68 +337,58 @@ private def Driver.startRequest (driver : Driver) (id : Reactor.SocketId) (start
     client.socket.armTimer 1 value
     driver.put id { client with requestDeadline := some value }
 
-private def withDate (response : Response) (date : ByteArray) : Response :=
-  if response.headers.any (fun header => header.name.toLower == "date") then response
-  else { response with headers := response.headers.push { name := "Date", value := date } }
-
-private def Driver.failH2 (driver : Driver) (id : Reactor.SocketId)
-    (connection : HTTP2.Connection) (error : HTTP2.ProtocolError) : IO Unit := do
-  driver.appendOutput id #[ByteSlice.full (connection.goAway error)]
+private partial def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
+    (step : HTTP2.Machine.Step) : IO Unit := do
   let some client ← driver.client? id | return
-  driver.put id { client with closeWhenQueued := true }
-  driver.setReading id false
-
-private def Driver.feedH2 (driver : Driver) (id : Reactor.SocketId) (part : ByteSlice) : IO Unit := do
-  let state ← driver.state.get
-  let some client := state.clients[id]? | return
-  let .http2 connection := client.protocol | return
-  let connection := (connection.setTime state.now.toNat).setDate state.date
-  -- This is the compatibility adapter for the existing pure H2 machine.
-  -- Its slice/frame parser migration is retained for phase four.
-  match connection.feed part.copy with
-  | .error error => driver.failH2 id connection error
-  | .ok (next, control, requests) =>
-    driver.put id { client with protocol := .http2 next }
-    driver.appendOutput id #[ByteSlice.full control]
-    for event in requests do
-      let some client ← driver.client? id | return
-      let .http2 connection := client.protocol | return
-      if !connection.canRespond event.streamId then continue
+  driver.put id { client with protocol := .http2 step.state, kick := true }
+  for action in step.actions do
+    let some client ← driver.client? id | return
+    match action with
+    | .write parts => driver.appendOutput id (parts.map ByteSlice.full)
+    | .drainClose => driver.beginDrain id
+    | .request event =>
+      let .http2 machine := client.protocol | return
+      if !machine.canRespond event.streamId then continue
       let reply ← try driver.handlers.onRequest event.request
         catch _ => pure { response := { status := 500 } }
-      let response := withDate (limitedReply driver.config reply).response state.date
-      let encoded : Except HTTP2.ProtocolError (HTTP2.Connection × ByteArray) := match connection.respond event.streamId response with
-        | .ok result => .ok result
-        | .error _ => connection.respond event.streamId (withDate { status := 500 } state.date)
-      match encoded with
-      | .error error => driver.failH2 id connection error
-      | .ok (next, wire) =>
-        let some client ← driver.client? id | return
-        driver.put id { client with protocol := .http2 next }
-        driver.appendOutput id #[ByteSlice.full wire]
-    if let some client ← driver.client? id then
-      if let .http2 connection := client.protocol then
-        if !connection.hasPartialInput then driver.cancelRequest id
+      let pushes ← if machine.canPush then
+        try driver.handlers.onPush event.request catch _ => pure #[]
+        else pure #[]
+      let some current ← driver.client? id | return
+      let .http2 machine := current.protocol | return
+      driver.applyH2Step id (machine.respond event.streamId (limitedReply driver.config reply) pushes)
+
+private def Driver.failH2 (driver : Driver) (id : Reactor.SocketId)
+    (machine : HTTP2.Machine.State) (error : HTTP2.ProtocolError) : IO Unit :=
+  driver.applyH2Step id (machine.fail error)
+
+private def Driver.feedH2 (driver : Driver) (id : Reactor.SocketId) (part : ByteSlice) : IO Bool := do
+  let state ← driver.state.get
+  let some client := state.clients[id]? | return false
+  let .http2 machine := client.protocol | return false
+  let step := ((machine.setTime state.now.toNat).setDate state.date).feedSlice part.bytes part.offset part.length
+  driver.consume id step.consumed
+  driver.applyH2Step id step
+  if let some client ← driver.client? id then
+    if let .http2 machine := client.protocol then
+      if !machine.hasPartialInput then driver.cancelRequest id
+  return step.consumed != 0 || !step.actions.isEmpty
 
 private def Driver.serviceH2 (driver : Driver) (id : Reactor.SocketId) : IO Bool := do
   let state ← driver.state.get
   let some client := state.clients[id]? | return false
-  let .http2 connection := client.protocol | return false
+  let .http2 machine := client.protocol | return false
   if client.closing || client.closeWhenQueued then return false
-  match connection.expireRequests state.now.toNat driver.config.server.requestTimeoutMs with
-  | .error error => driver.failH2 id connection error; return true
-  | .ok (connection, resets) =>
-    driver.put id { client with protocol := .http2 connection }
-    if !resets.isEmpty then driver.appendOutput id #[ByteSlice.full resets]
-    let some client ← driver.client? id | return true
-    if connection.canDrain && client.outputs.isEmpty then
-      match connection.drain with
-      | .error error => driver.failH2 id connection error
-      | .ok (next, wire) =>
-        driver.put id { client with protocol := .http2 next }
-        driver.appendOutput id #[ByteSlice.full wire]
-      return true
-    return !resets.isEmpty
+  let tick := ((machine.setTime state.now.toNat).setDate state.date).tick
+    state.now.toNat driver.config.server.requestTimeoutMs
+  driver.applyH2Step id tick
+  let some client ← driver.client? id | return !tick.actions.isEmpty
+  let .http2 machine := client.protocol | return !tick.actions.isEmpty
+  if machine.canDrain && client.outputs.isEmpty then
+    let step := machine.drain
+    driver.applyH2Step id step
+    return !tick.actions.isEmpty || !step.actions.isEmpty
+  return !tick.actions.isEmpty
 
 private inductive Detection where
   | more (matched consumed : Nat)
@@ -430,11 +426,12 @@ private def Driver.detectProtocol (driver : Driver) (id : Reactor.SocketId)
     driver.consume id consumed
     let state ← driver.state.get
     let some client := state.clients[id]? | return
-    match ((HTTP2.Connection.new.setTime state.now.toNat).setDate state.date).feed preface with
-    | .error error => driver.failH2 id HTTP2.Connection.new error
-    | .ok (connection, _, _) =>
-      driver.put id { client with protocol := .http2 connection, kick := true }
-      driver.appendOutput id #[ByteSlice.full HTTP2.Connection.initialSettings]
+    let machine := ((HTTP2.Machine.State.new driver.config.http2).setTime state.now.toNat).setDate state.date
+    driver.put id { client with protocol := .http2 machine, kick := true }
+    driver.applyH2Step id machine.start
+    if let some client ← driver.client? id then
+      if let .http2 machine := client.protocol then
+        driver.applyH2Step id (machine.feedSlice preface 0 preface.size)
 
 private def Driver.rawResult (driver : Driver) (id : Reactor.SocketId) (result : RawResult) : IO Unit := do
   driver.appendOutput id result.output
@@ -457,8 +454,7 @@ private def Driver.finishInput (driver : Driver) (id : Reactor.SocketId) : IO Un
         (preface.extract 0 matched))
       if let some client ← driver.client? id then
         if let .http1 machine := client.protocol then driver.applyStep id machine.finish
-  | .http2 connection =>
-    if !connection.hasPartialInput then driver.beginDrain id else driver.closeNow id
+  | .http2 machine => driver.applyH2Step id machine.finish
   | .raw =>
     match client.pipe with
     | none => driver.closeNow id
@@ -499,9 +495,7 @@ private def Driver.pump (driver : Driver) (id : Reactor.SocketId) : IO Unit := d
         advanced := step.consumed != 0 || !step.actions.isEmpty
     | some chunk, .http2 _ =>
       driver.startRequest id chunk.arrived
-      driver.feedH2 id chunk.view
-      driver.consume id chunk.view.length
-      advanced := true
+      advanced := (← driver.feedH2 id chunk.view) || advanced
     | some chunk, .raw =>
       match client.pipe with
       | none => driver.closeNow id
@@ -534,12 +528,14 @@ private def Driver.accepted (driver : Driver) (socket : Transport.Endpoint)
   let value ← deadline state.now driver.config.server.idleTimeoutMs
   socket.armTimer 0 value
   let protocol := match protocol with
+    | .detect => driver.config.cleartextProtocol
+    | other => other
+  let protocol := match protocol with
     | .detect => Protocol.detect 0
     | .http1 => .http1 ((Machine.State.new driver.config.machine).setDate state.date)
-    | .http2 => .http2 ((HTTP2.Connection.new.setTime state.now.toNat).setDate state.date)
+    | .http2 => .http2 (((HTTP2.Machine.State.new driver.config.http2).setTime state.now.toNat).setDate state.date)
   driver.put id { socket, protocol, idleDeadline := some value }
-  if let .http2 _ := protocol then
-    driver.appendOutput id #[ByteSlice.full HTTP2.Connection.initialSettings]
+  if let .http2 machine := protocol then driver.applyH2Step id machine.start
 
 private def Driver.read (driver : Driver) (id : Reactor.SocketId)
     (buffer : Reactor.Buffer) (offset length : UInt32) (release : IO Unit) : IO Unit := do
@@ -618,7 +614,7 @@ private def Driver.timer (driver : Driver) (id : Reactor.SocketId) (kind : UInt3
       driver.put id { client with requestDeadline := none }
       match client.protocol with
       | .http1 machine => driver.applyStep id ((machine.setDate state.date).timeout .request)
-      | .http2 connection => driver.failH2 id connection ⟨.enhanceYourCalm, .connection, "partial HTTP/2 input timed out"⟩
+      | .http2 machine => driver.failH2 id machine ⟨.enhanceYourCalm, .connection, "partial HTTP/2 input timed out"⟩
       | .detect _ => driver.closeNow id
       | .raw => pure ()
 
@@ -669,10 +665,34 @@ private def Driver.hasWork (driver : Driver) : IO Bool := do
     match client.protocol with
     | .http1 machine =>
       if machine.wantsInput && (client.inputBytes != 0 || client.kick) then return true
-    | .http2 connection =>
-      if client.inputBytes != 0 || (connection.canDrain && client.outputs.isEmpty) then return true
+    | .http2 machine =>
+      if machine.wantsInput && client.inputBytes != 0 then return true
+      if machine.canDrain && client.outputs.isEmpty then return true
     | _ => if client.inputBytes != 0 then return true
   return false
+
+private def Driver.pollEvents (driver : Driver) (timeout : Int32) (admitting : Bool := true) : IO Unit := do
+  match ← driver.reactor.poll timeout with
+  | .interrupted => pure ()
+  | .completions count =>
+    driver.refresh
+    let mut events := #[]
+    for index in [:count] do
+      let native ← driver.reactor.event index.toUInt32
+      if !admitting then
+        if let .accepted socket := native then
+          if ← socket.id.isLive driver.reactor then
+            let _ ← socket.close (by decide)
+            pure ()
+          continue
+      events := events ++ (← driver.transport.event native)
+    -- Historical completions cannot grant a closed connection new actions.
+    for event in events do
+      if let .closed id := event then driver.closed id
+    for event in events do
+      match event with
+      | .closed _ => pure ()
+      | _ => driver.event event
 
 private partial def Driver.loop (driver : Driver) : IO Unit := do
   if ← driver.group.stopping then return
@@ -681,24 +701,32 @@ private partial def Driver.loop (driver : Driver) : IO Unit := do
   driver.pumpAll
   let ready ← driver.hasWork
   let providerReady ← driver.transport.hasWork
-  let timeout : Int32 := if ready || providerReady then 0 else 100
-  match ← driver.reactor.poll timeout with
-  | .interrupted => pure ()
-  | .completions count =>
-    driver.refresh
-    -- The native batch can already contain historical write records. CLOSED
-    -- first reclaims known owners; explicit liveness handles a deferred CLOSED.
-    let mut events := #[]
-    for index in [:count] do
-      let native ← driver.reactor.event index.toUInt32
-      events := events ++ (← driver.transport.event native)
-    for event in events do
-      if let .closed id := event then driver.closed id
-    for event in events do
-      match event with
-      | .closed _ => pure ()
-      | _ => driver.event event
+  driver.pollEvents (if ready || providerReady then 0 else 100)
   driver.loop
+
+private def Driver.hasHTTP2 (driver : Driver) : IO Bool := do
+  for (_, client) in (← driver.state.get).clients.toArray do
+    if let .http2 _ := client.protocol then return true
+  return false
+
+/-- A connection-level GOAWAY keeps accepted streams alive, including their
+    WINDOW_UPDATE traffic. New native accepts are closed during the bounded
+    drain; the TLS provider still owns its later close-notify/join bracket. -/
+private def Driver.drainHTTP2 (driver : Driver) : IO Unit := do
+  if !(← driver.hasHTTP2) then return
+  let cutoff ← deadline (← Reactor.nowMs) driver.config.shutdownDrainMs
+  let mut active := true
+  while active && (← Reactor.nowMs) < cutoff do
+    driver.refresh
+    for event in (← driver.transport.poll) do driver.event event
+    for (id, client) in (← driver.state.get).clients.toArray do
+      if let .http2 machine := client.protocol then driver.applyH2Step id machine.goAway
+    driver.pumpAll
+    active ← driver.hasHTTP2
+    if active then
+      let ready ← driver.hasWork
+      let providerReady ← driver.transport.hasWork
+      driver.pollEvents (if ready || providerReady then 0 else 10) false
 
 private def withOutputSlots (reactor : Reactor.Reactor) (count : Nat)
     (use : Array OutputSlot → IO α) : IO α := go count #[]
@@ -727,7 +755,9 @@ private def runWorker (resources : WithWorkerResources) (config : ReactorServerC
    withOutputSlots reactor count fun slots => do
     let state ← IO.mkRef { slots : WorkerState }
     let driver : Driver := { reactor, group, config, handlers, transport, clientLimit, state }
-    try driver.loop
+    try
+      driver.loop
+      driver.drainHTTP2
     finally
       let state ← driver.state.get
       for (id, _) in state.clients.toArray do driver.forget id
@@ -739,7 +769,11 @@ def serveWorkerFactory (resources : WithWorkerResources) (config : ReactorServer
   if config.server.maxClients == 0 || config.server.idleTimeoutMs == 0 ||
       config.server.requestTimeoutMs == 0 || config.server.writeTimeoutMs == 0 ||
       config.outputBuffers == 0 || config.maxInputBytes == 0 || config.maxOutputBytes < 4096 ||
-      config.workPerClient == 0 then throw (IO.userError "HTTP limits and timeouts must be positive")
+      config.workPerClient == 0 || config.shutdownDrainMs == 0 ||
+      config.shutdownDrainMs > 9223372036854775807 then throw (IO.userError "HTTP limits and timeouts must be positive")
+  match config.http2.validate with
+  | .error message => throw (IO.userError message)
+  | .ok () => pure ()
   withWorkerPool host port config.workers config.server.maxClients config.native
     (runWorker resources config)
 

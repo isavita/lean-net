@@ -75,8 +75,14 @@ jobs:
           "$LEAN_NET_TEST_OPENSSL" version
           "$LEAN_NET_TEST_CURL" --version
           lake env ${{ matrix.python }} -c 'import ssl, sys; print(sys.version); print(ssl.OPENSSL_VERSION); assert ssl.HAS_TLSv1_3'
-      - name: Build public TLS APIs and native fixture
-        run: lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture
+      - name: Independent HTTP/2 test codec
+        run: |
+          lake env ${{ matrix.python }} -m pip install --require-hashes --target "$RUNNER_TEMP/lean-net-http2-test-deps" -r test/requirements-http2.txt
+          echo "PYTHONPATH=$RUNNER_TEMP/lean-net-http2-test-deps" >> "$GITHUB_ENV"
+      - name: Build public TLS APIs and native fixtures
+        run: |
+          lake build lean-net-http2-reactor-fixture
+          lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture
       - name: Context ownership and policy sanitizers
         if: runner.os != 'Windows'
         run: ${{ matrix.python }} tls/test/test_tls_context_native.py -v
@@ -87,3 +93,5 @@ jobs:
         env:
           LEAN_NET_TLS_CYCLES: '1000'
         run: lake env ${{ matrix.python }} tls/test/test_tls_reactor.py -v
+      - name: HTTP/2 frame isolation, priorities, push and TLS acceptance
+        run: lake env ${{ matrix.python }} test/test_http2_reactor.py -v
