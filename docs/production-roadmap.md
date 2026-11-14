@@ -39,11 +39,44 @@ coverage, not evidence that the new architecture or performance gates pass.
 
 ## Current phase status
 
-Phase 1 reactor acceptance passed at d3ccc2e. Phase 2 is in cross-platform
-integration: the pure HTTP/1 machine and cleartext native driver pass local
-acceptance, with Linux/Windows CI still required. Phases 3–6 and all final gates
-remain open. TLS still uses poll and in-loop nonblocking OpenSSL; h2c preserves
+Phase 1 reactor acceptance passed at d3ccc2e. Phase 2 HTTP/1 protocol-machine
+acceptance passed at 8be5466 on Linux, macOS and Windows. Phases 3–6 and all final
+gates remain open. TLS still uses poll and in-loop nonblocking OpenSSL; h2c preserves
 the previous pure HTTP/2 implementation pending its full phase-four migration.
+
+## HTTP/1 machine acceptance evidence
+
+- Pure Protocol/Parser/Encoding/Machine suites pass, including every-split and
+  bytewise framing, HTTP/1.0 and 1.1, configured obs-fold, body/trailer bounds,
+  explicit legacy EOF bodies, persistence, statuses, reason/header validation,
+  Date input, Expect refusal/100 barriers, pipeline ordering, timeout and EOF
+  transitions, and accepted-upgrade raw-tail preservation.
+- The [native matrix](https://github.com/isavita/lean-net/actions/runs/43617051125)
+  passes on all three platforms. Real one/four-worker HTTP acceptance exercises
+  37 cases: binary/trailer traffic, ten pipelines then EOF, early raw bytes/FIN
+  around 101, blocked-reader fairness, tiny two-cell pools, admission-credit
+  failure cleanup, absolute deadlines and 1,000 connection cycles in both modes.
+- Public cleartext APIs now use the new reactor. Compatibility Router callbacks
+  retain one-worker ownership; default serving and the factory API use independent
+  per-core handlers with the global client cap partitioned exactly. Existing h2c
+  behavior is preserved through its previous pure connection implementation.
+- Native vectors, read-pause/pool-pressure independence, retained leases,
+  cancellation, historical write liveness and nonwrapping token exhaustion pass
+  focused lifecycle tests. Native allocation counters cover the backend; parser
+  metadata, owned body blocks and application values still allocate in Lean.
+- The full [HTTP/TLS regression workflow](https://github.com/isavita/lean-net/actions/runs/43617051112)
+  passes. Local regression also passed 16 HTTP server, 15 event/backpressure,
+  20 h2c, 7 injected-fault and 28 legacy TLS tests.
+- Actual curl --http1.0, --http1.1 and --http2-prior-knowledge requests served
+  the same default route. The TLS curl leg must be repeated after phase three;
+  this is not the final four-protocol acceptance gate.
+- Controlled HTTP/1 characterization uses 128 clients of capacity, 512 requested
+  output credits, concurrency 100 and three 200,000-request rounds. Verified-body
+  median RPS: 40,555 with one worker, 93,328 with eight. Separate h2load --h1
+  medians: 37,094 and 96,701, with zero reported errors. All 1.2 million native
+  client response bodies matched; h2load additionally checked aggregate bytes.
+  Reports: `test/benchmarks/http1-reactor-macos-m2-*.json` and methodology README.
+  These are HTTP/1 measurements, not the final HTTP/2 >100k gate.
 
 ## Reactor acceptance evidence
 

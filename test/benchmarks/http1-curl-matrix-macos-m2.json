@@ -1,0 +1,21 @@
+{
+  "git_head": "8be54665d899e3e1bc781437592240574cd8709e",
+  "binary_sha256": "ab1ae2483794a1bec236f2cc4d451f1c2227e98bca86b8bc130f35680afd5707",
+  "runs": [
+    {
+      "flag": "--http1.0",
+      "http_version": "1",
+      "body_matches": true
+    },
+    {
+      "flag": "--http1.1",
+      "http_version": "1.1",
+      "body_matches": true
+    },
+    {
+      "flag": "--http2-prior-knowledge",
+      "http_version": "2",
+      "body_matches": true
+    }
+  ]
+}

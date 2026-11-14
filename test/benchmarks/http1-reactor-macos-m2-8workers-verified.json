@@ -1,0 +1,119 @@
+{
+  "environment": {
+    "platform": "macOS-27.2.1-arm64-arm-64bit",
+    "logical_cpus": 8,
+    "cpu": "Apple M2",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
+    "lean": "Lean (version 4.35.0, arm64-apple-darwin24.6.0, commit eb6cafb7290e8bd5f2937522d8d804f58f02bafc, Release)",
+    "h2load": "h2load nghttp2/1.71.0",
+    "openssl_cli": "OpenSSL 4.1.0 23 Oct 2026 (Library: OpenSSL 4.1.0 23 Oct 2026)"
+  },
+  "git_head": "407c604e424344ad0dfb657a758815c5f6b90849",
+  "git_status": "M test/windows_native.c\n?? test/benchmarks/http1-reactor-macos-m2-1worker-verified.json",
+  "binary": "/Users/isavita/git/lean-net/.lake/build/bin/lean-net-http1-reactor-fixture",
+  "binary_sha256": "ed39f08e1dc3c41dd96f69d048f9256f487f91f90c19039b958a7ab0f998d436",
+  "source_sha256": {
+    "LeanNet/HTTP/ReactorServer.lean": "3397b47775fa19facaf451c665c53a2c88373becae18faba427229f3b0770015",
+    "LeanNet/HTTP/WorkerPool.lean": "6772cfa9db8fbd8965939642a5b2fe98482aa3cbde115b71091cc441d60193e9",
+    "LeanNet/HTTP1/Config.lean": "d0082984d1e4a5ca8d2e0f2e9087edff8cdfefc2d306eceb4927368b028464ba",
+    "LeanNet/HTTP1/Encoding.lean": "528718e66b6fb1f286366adffc705ba0ae80fb3c44264a02dccd6a964ba41f09",
+    "LeanNet/HTTP1/Machine.lean": "d2fd027777d6491ce211097081988b970213f76da65d98e9f9792789c8e58be9",
+    "LeanNet/HTTP1/Parser.lean": "604da32c995658998a2d58c4dff55a94f19e12b55cb5b2fcc5ced1a8900352dc",
+    "LeanNet/HTTP1/Protocol.lean": "3c08a1f5f79e450f0e96b0559da45eb3df28eb393a648488fa74bfc69d78a4fc",
+    "LeanNet/Reactor/Basic.lean": "41a6b8cc49237903ac937edd727fbc8439c7d3c70f8a379a1ea694ed8f4f9f9f",
+    "c/reactor_group.c": "8dcbf1a128a03695fdab4048a62a2b2d1cc856f7e74b901ac8624707da1bbdee",
+    "c/reactor_posix.c": "262ecd2b3bc81b1934b610f6979b61c3578e4d326f4448a1c2d66c76aef28310",
+    "lakefile.lean": "10bd4d55ec8371b54278dac1483a54ac240738683edf2f961d02a374925bf44f",
+    "test/HTTP1ReactorFixture.lean": "672cb78ff305c7e544e0f5d32088e445ded52f20ec29c918d22c677b91f7ba31",
+    "test/bench_http1.c": "28b1f577fcfd293eecf274ce17c8575f1306a1c6f1ed810029ec006ab65f4bc9",
+    "test/bench_http1.py": "135824d4abdbb899e578506f25be46b0d3e2b69a854e4824aba207b15099dced"
+  },
+  "server_args": [
+    "bench",
+    "8"
+  ],
+  "path": "/binary",
+  "expected_body_hex": "00ff0d0a41",
+  "configuration": {
+    "fixture_mode": "bench",
+    "bench_mode_max_clients": 128,
+    "bench_mode_requested_output_buffers": 512,
+    "flights_per_client": 4,
+    "native": "defaults",
+    "machine": "defaults"
+  },
+  "client": "native",
+  "client_threads": 1,
+  "method": "fixed-count closed-loop HTTP/1.1, no pipelining, one outstanding request/connection; connects excluded; every200status/CL/body verified",
+  "runs": [
+    {
+      "requests": 200000,
+      "connections": 100,
+      "body_bytes": 5,
+      "seconds": 2.277443,
+      "requests_per_second": 87817.79,
+      "latency_us_p50": 894.0,
+      "latency_us_p95": 2224.0,
+      "latency_us_p99": 6407.0,
+      "latency_us_max": 27537.0,
+      "clients_progressed_in_first_second": 100,
+      "verified_responses": 200000,
+      "round": 1,
+      "command": [
+        "/var/folders/46/6lz6t86n4n10lwsyj3pyzd6h0000gn/T/lean-net-http1-bench-ax34eszd/client",
+        "59235",
+        "100",
+        "200000",
+        "/binary",
+        "00ff0d0a41"
+      ]
+    },
+    {
+      "requests": 200000,
+      "connections": 100,
+      "body_bytes": 5,
+      "seconds": 2.130116,
+      "requests_per_second": 93891.6,
+      "latency_us_p50": 869.0,
+      "latency_us_p95": 1978.0,
+      "latency_us_p99": 5849.0,
+      "latency_us_max": 23783.0,
+      "clients_progressed_in_first_second": 100,
+      "verified_responses": 200000,
+      "round": 2,
+      "command": [
+        "/var/folders/46/6lz6t86n4n10lwsyj3pyzd6h0000gn/T/lean-net-http1-bench-ax34eszd/client",
+        "59361",
+        "100",
+        "200000",
+        "/binary",
+        "00ff0d0a41"
+      ]
+    },
+    {
+      "requests": 200000,
+      "connections": 100,
+      "body_bytes": 5,
+      "seconds": 2.142973,
+      "requests_per_second": 93328.29,
+      "latency_us_p50": 890.0,
+      "latency_us_p95": 1980.0,
+      "latency_us_p99": 5180.0,
+      "latency_us_max": 28781.0,
+      "clients_progressed_in_first_second": 100,
+      "verified_responses": 200000,
+      "round": 3,
+      "command": [
+        "/var/folders/46/6lz6t86n4n10lwsyj3pyzd6h0000gn/T/lean-net-http1-bench-ax34eszd/client",
+        "59465",
+        "100",
+        "200000",
+        "/binary",
+        "00ff0d0a41"
+      ]
+    }
+  ],
+  "source_snapshot_sha256": "3bf1508d305a313d5b098fa302765ac22adadbb29c3be4ab70ac03d9284d5bf8",
+  "official_tool_documentation": "https://nghttp2.org/documentation/h2load.1.html",
+  "interpretation": "HTTP/1.1 characterization on the production native driver with explicit maxClients128/outputBuffers512 fixture configuration; not a final HTTP/2, TLS, or soak gate."
+}

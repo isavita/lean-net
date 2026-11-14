@@ -184,3 +184,66 @@ accepted sockets, saturated infinite waits, interrupted wake delivery,
 completion preservation, both endpoint destruction orders, descriptor reuse,
 and zero backend heap allocations during handoff/established I/O. It passes
 with ASan/UBSan on macOS; other platform runtime gates remain separately tracked.
+
+## HTTP/1.1 production-driver characterization
+
+The HTTP/1 native driver was measured through the fixture's `/binary` route at
+source commit `407c604e424344ad0dfb657a758815c5f6b90849`, executable SHA-256
+`ed39f08e1dc3c41dd96f69d048f9256f487f91f90c19039b958a7ab0f998d436`.
+All four reports below contain matching source-file hashes, a source-manifest
+hash, compiler/tool versions, commands, configuration and per-round results.
+The executable was snapshotted and its original hash rechecked after each run.
+Measurements ran sequentially on the Apple M2 after other local builds/tests
+finished.
+
+The controlled `bench` fixture mode admits 128 clients and requests 512 output
+buffers, preserving four outstanding write credits per admitted client with
+both one and eight workers. Native pool/parser settings use their defaults.
+The admission override permits c=100; the library's default admission limit is
+32. The fixture serves the five exact bytes `00 ff 0d 0a 41`, with Date caching
+and the production parser/encoder/reactor path enabled. Each round completes
+200,000 HTTP/1.1 GET requests over 100 persistent connections, with one request
+outstanding per connection and no pipelining.
+
+| Client | Server workers | Completed requests/s by round | Median |
+| --- | ---: | --- | ---: |
+| Verified native client | 1 | 40,137 / 40,903 / 40,555 | 40,555 |
+| Verified native client | 8 | 87,818 / 93,892 / 93,328 | 93,328 |
+| h2load HTTP/1, four client threads | 1 | 37,186 / 37,094 / 37,058 | 37,094 |
+| h2load HTTP/1, four client threads | 8 | 96,701 / 96,861 / 93,484 | 96,701 |
+
+`http1-reactor-macos-m2-{1worker,8workers}-verified.json` uses
+`test/bench_http1.c`, compiled with `-O3` and strict C11 warnings. It checks every
+response's 200 status, explicit Content-Length, and all body bytes before
+counting completion. Connection setup is excluded. All 1.2 million responses
+were verified, and every round had all 100 clients progressing in the first
+second. The eight-worker median was 2.30 times the one-worker median in this
+workload. Tail latency was less consistent with eight workers: native-client
+p99 ranged from 5.18–6.41 ms, versus 2.72–3.51 ms with one worker; full latency
+statistics remain in the reports.
+
+`http1-reactor-macos-m2-{1worker,8workers}-h2load.json` records nghttp2/h2load
+1.71.0. Its [official options](https://nghttp2.org/documentation/h2load.1.html)
+define `--h1` to force HTTP/1.1, `-n` as total requests, `-c` as client count,
+`-t` as native client threads, and `-m 1` as one pipelined request in flight per
+HTTP/1 connection. All 1.2 million requests completed as 2xx, with zero failures,
+network errors, or timeouts and exactly 6,000,000 response-body bytes. h2load
+checks status/traffic counts rather than inspecting each body; exact content
+verification comes from the native-client reports. Its elapsed time includes
+connection setup, so the two client methods should be assessed separately.
+
+Reproduction:
+
+```sh
+lake build lean-net-http1-reactor-fixture
+python3 test/bench_http1.py --server-arg bench --server-arg 1 --output /tmp/http1-1worker.json
+python3 test/bench_http1.py --server-arg bench --server-arg 8 --output /tmp/http1-8workers.json
+python3 test/bench_http1.py --client h2load --threads 4 --server-arg bench --server-arg 8 --output /tmp/http1-h2load.json
+```
+
+Neither wrk nor h2load was initially installed. nghttp2 1.71.0 was installed
+through Homebrew with auto-update and cleanup disabled. Its dependency install
+selected OpenSSL 4.1.0 for the global CLI while retaining the versioned OpenSSL
+3.6.3 installation; plain HTTP was measured throughout. These are short HTTP/1
+characterization runs. The final HTTP/2 100k-RPS, TLS and 24-hour-soak gates
+remain separately required.
