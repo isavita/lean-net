@@ -27,6 +27,7 @@ static int injected_wait_error;
 static unsigned native_wait_calls;
 static int injected_read_error;
 static unsigned native_read_calls;
+static size_t injected_recv_prefix;
 static size_t vector_send_limit;
 static unsigned native_vector_calls, max_vector_count;
 static int vector_prefix(const struct iovec *input, int count, struct iovec *output) {
@@ -63,6 +64,14 @@ static ssize_t rn_test_read(int fd, void *bytes, size_t size) {
     return read(fd, bytes, size);
 }
 #define read(...) rn_test_read(__VA_ARGS__)
+static ssize_t rn_test_recv(int fd, void *bytes, size_t size, int flags) {
+    if (injected_recv_prefix) {
+        if (size > injected_recv_prefix) size = injected_recv_prefix;
+        injected_recv_prefix = 0;
+    }
+    return recv(fd, bytes, size, flags);
+}
+#define recv(...) rn_test_recv(__VA_ARGS__)
 #if defined(__linux__)
 static int rn_test_epoll_wait(int fd, struct epoll_event *events, int count, int timeout) {
     ++native_wait_calls;
@@ -91,6 +100,7 @@ static int rn_test_kevent(int fd, const struct kevent *changes, int change_count
 #undef realloc
 #undef lean_alloc_sarray
 #undef read
+#undef recv
 #if defined(__linux__)
 #undef sendmsg
 #else
@@ -239,6 +249,88 @@ static uint64_t connected_peer(rn_reactor *r, uint64_t listener, int *peer) {
         }
     }
     check(0, "transport accept timeout"); return 0;
+}
+static size_t collect_large_reads(rn_reactor *r, int count, uint64_t connection,
+    const unsigned char *expected, size_t total, size_t *received,
+    uint64_t *held, unsigned *held_count, int *eof) {
+    check(count >= 0, "poll large-buffer receive burst");
+    size_t batch_bytes = 0;
+    for (int i = 0; i < count; ++i) {
+        const rn_event *event = rn_event_at(r, (uint32_t)i);
+        check(event->connection == connection, "large-buffer completion identity");
+        if (event->kind == RN_READ) {
+            lean_object *view = NULL;
+            check(rn_buffer_view(r, event->buffer, &view) == 0 &&
+                r->buffers[rn_index(event->buffer)].capacity == 65536,
+                "receive uses fallback 64K pool class");
+            check(event->length <= total - *received && event->offset == 0 &&
+                lean_sarray_size(view) == event->length &&
+                memcmp(lean_sarray_cptr(view), expected + *received, event->length) == 0,
+                "bounded receive burst preserves exact binary order");
+            *received += event->length; batch_bytes += event->length;
+            if (held) {
+                check(*held_count < 16, "bounded first-batch leases");
+                held[(*held_count)++] = event->buffer;
+            } else check(rn_buffer_release(r, event->buffer) == 0, "return resumed large-buffer lease");
+        } else {
+            check(event->kind == RN_EOF && *received == total && !*eof,
+                "large-buffer EOF follows every payload byte once");
+            *eof = 1;
+        }
+    }
+    check(batch_bytes <= 65536, "one connection returns at most 64KiB per poll even with 64K buffers");
+    return batch_bytes;
+}
+static void large_read_budget_regression(void) {
+    hot_path = 0;
+    rn_config config = {1, 32, 1, 0, 0, 20, 1}; rn_reactor *r = NULL;
+    check(rn_new(&config, &r) == 0, "create 64K-only receive pool");
+    int pair[2]; check(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0, "create large receive burst pair");
+    int capacity = 262144;
+    check(setsockopt(pair[1], SOL_SOCKET, SO_SNDBUF, &capacity, sizeof(capacity)) == 0 &&
+        rn_nonblocking(pair[0]) == 0 && rn_nonblocking(pair[1]) == 0,
+        "reserve socket capacity for preloaded receive burst");
+    uint64_t connection = 0; check(rn_socket_new(r, &connection) == 0, "allocate large burst connection");
+    rn_conn *native = &r->connections[rn_index(connection)]; native->fd = pair[0]; native->state = 4;
+    check(rn_interest(r, rn_index(connection), 1) == 0, "watch preloaded receive burst");
+    unsigned char payload[2 * 65536 + 137];
+    for (size_t i = 0; i < sizeof(payload); ++i) payload[i] = (unsigned char)(i * 29u + (i >> 7));
+    unsigned allocations = allocation_attempts; hot_path = 1;
+    size_t sent = 0;
+    while (sent < sizeof(payload)) {
+        ssize_t n = send(pair[1], payload + sent, sizeof(payload) - sent, 0);
+        check(n > 0, "preload more than 64KiB before native poll"); sent += (size_t)n;
+    }
+    check(shutdown(pair[1], SHUT_WR) == 0, "half-close preloaded binary burst");
+    size_t received = 0; uint64_t held[16]; unsigned held_count = 0; int eof = 0;
+    /* A short first recv forces the following 64K cell to use only the
+     * remaining quantum rather than overshooting before checking a counter. */
+    injected_recv_prefix = 17;
+    size_t first = collect_large_reads(r, rn_step(r, 10), connection, payload,
+        sizeof(payload), &received, held, &held_count, &eof);
+    check(first > 0 && received < sizeof(payload) && !eof && rn_connection_live(r, connection) == 1,
+        "first receive quantum leaves unread data and live socket");
+    check(rn_set_read_enabled(r, connection, 0) == 0, "pause after returned large-buffer batch");
+    for (unsigned i = 0; i < 4; ++i) check(rn_step(r, 1) == 0, "application pause prevents further large reads and EOF");
+    size_t offset = 0;
+    for (unsigned i = 0; i < held_count; ++i) {
+        lean_object *view = NULL;
+        check(rn_buffer_view(r, held[i], &view) == 0 &&
+            memcmp(lean_sarray_cptr(view), payload + offset, lean_sarray_size(view)) == 0,
+            "pause leaves already-returned leases intact");
+        offset += lean_sarray_size(view);
+        check(rn_buffer_release(r, held[i]) == 0, "return paused large-buffer lease");
+    }
+    check(offset == first && rn_set_read_enabled(r, connection, 1) == 0,
+        "resume preserves independent user read control");
+    for (unsigned i = 0; i < 100 && !eof; ++i)
+        (void)collect_large_reads(r, rn_step(r, 10), connection, payload,
+            sizeof(payload), &received, NULL, NULL, &eof);
+    check(eof && received == sizeof(payload) && allocation_attempts == allocations,
+        "resumed 64K quanta deliver all bytes without native or Lean-buffer allocation");
+    check(rn_close_connection(r, connection) == 0 && rn_step(r, 0) == 1 &&
+        rn_event_at(r, 0)->kind == RN_CLOSED, "large-buffer connection closes once");
+    hot_path = 0; check(close(pair[1]) == 0 && rn_free(r) == 0, "free large receive budget fixture");
 }
 static void pause_and_vectors_regression(void) {
     for (unsigned mode = 0; mode < 2; ++mode) {
@@ -453,6 +545,7 @@ static void retained_waker_regression(void) {
 
 int main(void) {
     lean_initialize_runtime_module();
+    large_read_budget_regression();
     pause_and_vectors_regression();
     historical_write_liveness();
     generation_retirement();

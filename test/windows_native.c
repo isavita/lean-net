@@ -435,7 +435,12 @@ static void test_transport_pause_vectors(void) {
         }
         check(rn_set_read_enabled(r, connection, 1) == 0, "resume user-paused read");
       } else {
-        if (marker == 2) check(rn_set_read_enabled(r, connection, 0) == 0, "pause returned read batch with next receive outstanding");
+        if (marker == 2) {
+          check(!c->read.pending && rn_step(r, 0) == 0 && c->read.pending,
+                "separate empty poll posts next receive before owner pauses");
+          check(rn_set_read_enabled(r, connection, 0) == 0 && c->read.pending,
+                "pause preserves a receive already posted by a prior step");
+        }
         check(send(peer, &byte, 1, 0) == 1, "complete outstanding paused receive");
       }
       int received = 0; uint64_t end = rn_now_ms() + 3000;
@@ -450,7 +455,7 @@ static void test_transport_pause_vectors(void) {
           } else check(event->kind != RN_ERROR, "controlled receive has no error");
         }
       }
-      check(received == 1 && (marker == 1 || !c->read.pending), "only an already-posted receive completes under pause");
+      check(received == 1 && !c->read.pending, "positive receive returns owner control before any repost");
     }
     check(rn_set_read_enabled(r, connection, 1) == 0 && !c->read.pending && rn_connection_live(r, connection) == 1, "resume defers receive submission and failure until next native step");
     check(rn_set_read_enabled(r, connection, 0) == 0 && !c->read.pending, "pause cancels deferred resume without posting IO");
@@ -585,6 +590,63 @@ static void test_historical_write_liveness(void) {
   check(rn_socket_new(r, &fresh) == 0 && fresh != connection && rn_connection_live(r, fresh) == 0 && rn_connection_live(r, connection) == 0, "IOCP liveness rejects reused generations");
   atomic_store(&track_native_allocations, 0);
   check(atomic_load(&native_allocations) == 0 && closesocket(peer) == 0 && rn_free(r) == 0, "liveness has no hot native allocations");
+}
+
+typedef struct read_burst_sender {
+  SOCKET socket;
+  const uint8_t *payload;
+  uint32_t length;
+  atomic_uint sent;
+} read_burst_sender;
+static DWORD WINAPI send_read_burst(LPVOID argument) {
+  read_burst_sender *sender = argument;
+  uint32_t offset = 0;
+  while (offset < sender->length) {
+    uint32_t length = sender->length - offset; if (length > 4096) length = 4096;
+    int count = send(sender->socket,(const char *)sender->payload + offset,(int)length,0);
+    check(count > 0, "native burst client sends without error");
+    offset += (uint32_t)count; atomic_store(&sender->sent,offset);
+  }
+  return 0;
+}
+static void test_read_batch_pause_boundary(void) {
+  rn_config options = {4,32,4,8,0,0,1}; rn_reactor *r = NULL; uint64_t listener = 0;
+  check(rn_new(&options,&r) == 0 && rn_listen(r,"127.0.0.1",0,0,&listener) == 0,"create IOCP read-boundary reactor");
+  SOCKET peer = connect_client(listener_port(r,listener)); uint64_t connection = accept_client(r);
+  uint8_t payload[131073],received[131073];
+  for(size_t i=0;i<sizeof(payload);++i)payload[i]=(uint8_t)(i*37u + (i>>8));
+  DWORD timeout=5000;check(setsockopt(peer,SOL_SOCKET,SO_SNDTIMEO,(const char *)&timeout,sizeof(timeout))==0,"burst send deadline");
+  read_burst_sender sender={.socket=peer,.payload=payload,.length=sizeof(payload)};
+  HANDLE thread=CreateThread(NULL,0,send_read_burst,&sender,0,NULL);check(thread!=NULL,"start native burst sender");
+  uint64_t end=rn_now_ms()+3000;
+  while(atomic_load(&sender.sent)<8192 && rn_now_ms()<end)SwitchToThread();
+  check(atomic_load(&sender.sent)>=8192,"burst queued before owner poll");
+  atomic_store(&native_allocations,0);atomic_store(&track_native_allocations,1);
+  size_t total=0;unsigned polls=0;int paused=0;end=rn_now_ms()+10000;
+  while(total<sizeof(payload) && rn_now_ms()<end){
+    int count=rn_step(r,10);check(count>=0,"poll queued read burst");unsigned reads=0;++polls;
+    for(int i=0;i<count;++i){const rn_event *event=rn_event_at(r,(uint32_t)i);
+      check(event->kind!=RN_ERROR && event->kind!=RN_CLOSED,"burst peer remains live");
+      if(event->kind!=RN_READ || event->connection!=connection)continue;
+      ++reads;check(reads==1,"one peer returns at most one READ per immutable batch");
+      lean_object *view=NULL;check(rn_buffer_view(r,event->buffer,&view)==0 && event->length<=sizeof(received)-total,"burst receive lease bounded");
+      memcpy(received+total,lean_sarray_cptr(view)+event->offset,event->length);total+=event->length;
+      check(rn_buffer_release(r,event->buffer)==0,"release burst read lease");
+      check(!r->connections[rn_index(connection)].read.pending,"positive READ waits for next owner step before repost");
+    }
+    if(reads && !paused){
+      check(rn_set_read_enabled(r,connection,0)==0,"pause immediately after returned READ");
+      int idle=rn_step(r,10);check(idle>=0,"poll while burst read paused");
+      for(int i=0;i<idle;++i)check(rn_event_at(r,(uint32_t)i)->kind!=RN_READ,"owner pause prevents next burst receive");
+      check(!r->connections[rn_index(connection)].read.pending,"paused connection has no reposted read");
+      check(rn_set_read_enabled(r,connection,1)==0 && !r->connections[rn_index(connection)].read.pending,"resume schedules receive for later poll");paused=1;
+    }
+  }
+  check(paused && polls>16 && total==sizeof(payload) && memcmp(payload,received,sizeof(payload))==0,"greater-than64KiB burst resumes without loss");
+  atomic_store(&track_native_allocations,0);
+  check(atomic_load(&native_allocations)==0,"bounded read batches allocate no hot native memory");
+  check(WaitForSingleObject(thread,3000)==WAIT_OBJECT_0 && CloseHandle(thread),"join native burst sender");
+  check(rn_close_connection(r,connection)==0 && closesocket(peer)==0 && rn_free(r)==0,"free read-boundary reactor");
 }
 
 static void test_claimed_transport(void) {
@@ -1042,6 +1104,7 @@ int main(int argc, char **argv) {
     test_historical_write_liveness();
     test_generation_retirement();
     test_claimed_transport();
+    test_read_batch_pause_boundary();
     test_retained_waker();
   } else if (argc == 2 && strcmp(argv[1], "--dispatch") == 0) {
     test_dispatch_validation();

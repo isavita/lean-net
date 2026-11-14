@@ -38,8 +38,8 @@ writes coalesce queued segments while preserving each logical completion.
 Linux uses sendmsg with MSG_NOSIGNAL for equivalent vector writes and SIGPIPE
 suppression. Partial writes and cancellation keep every referenced buffer alive.
 
-Final responses advance the HTTP machine once all their parts enter the native
-FIFO. Continue and upgrade barriers advance only after their last write
+Final responses advance the HTTP machine once all their parts enter the ordered
+transport FIFO. Continue and upgrade barriers advance only after their last write
 completes. The driver checks historical completion liveness, releases orphaned
 read leases, and ignores obsolete timer records after rearming. Request and
 write deadlines remain absolute; timers are not extended by trickle progress.
@@ -51,9 +51,13 @@ to the new owner exactly once. `onClose` runs when that connection is released.
 
 Cleartext h2c currently reuses the existing pure `HTTP2.Connection` through the
 new reactor adapter, preserving existing behavior. Its full RFC 9113/9218,
-priority, push and h2spec work remains phase four. `serveWithTransport` retains
-the old TLS scheduler until the dedicated TLS-worker implementation in phase
-three. Neither compatibility path is evidence that those phases are complete.
+priority, push and h2spec work remains phase four. The native TLS provider shares
+this controller, selects HTTP/1 or HTTP/2 from ALPN, and acknowledges plaintext
+writes after their encrypted wire fences. Its permanently reserved plaintext
+buffer returns credit through an explicit consumption callback; ciphertext
+output, HTTP output, and native wire receive have independent credits. The
+older `serveWithTransport` scheduler remains an explicit compatibility API;
+public TLS server entry points use the native provider.
 
 Run the pure suites and real transport fixtures with:
 

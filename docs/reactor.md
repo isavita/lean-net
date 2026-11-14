@@ -21,6 +21,9 @@ transitions. Accepted completions supply connected sockets. `close` requires
 `state ≠ .closed` and returns a closed-state handle. Private constructors prevent
 applications from manufacturing a different state. Runtime generation checks
 also reject stale aliases, which phantom types alone cannot eliminate in Lean.
+TLS claims embed a `Socket .tls_handshaking` in a private `Wire`, advancing to
+`Socket .tls_ready` only after the handshake's wire fence. Native capability
+checks reject plain operations through aliases obtained before the claim.
 
 A read completion transfers a buffer lease to the dispatcher. Queueing a write
 pins native storage until completion; releasing the lease does not invalidate
@@ -64,5 +67,17 @@ under `test/benchmarks`. This does not imply linear multicore throughput scaling
 
 The hashed timer wheel has eight timer kinds per connection and a configurable
 tick. Timers are one-shot completion events and do not allocate one kernel timer
-per connection. The newer HTTP protocol/TLS machines have not yet been ported to
-this reactor; their existing tests remain regression coverage for later phases.
+per connection. HTTP/1 uses this reactor through its pure action machine; TLS
+uses dedicated native workers and the same HTTP controller. The current HTTP/2
+adapter retains its previous pure connection machine pending phase four.
+
+Read batches preserve owner backpressure: POSIX yields after sixteen reads or
+64 KiB from a peer; IOCP returns a positive read before reposting that peer's
+receive on the next poll. This prevents an immutable native batch from filling
+a transport's bounded per-client input before the owner can pause reads.
+
+Native TLS threads retain a `Waker` instead of a reactor pointer. Its independent
+OS endpoint remains valid through its last reference; waking after reactor
+closure returns cancellation. POSIX retains both pipe ends to prevent late
+SIGPIPE, while Windows retains the original IOCP port owner. TLS threads stop
+and join before their loop's socket and buffer brackets leave scope.

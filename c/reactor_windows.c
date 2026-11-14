@@ -854,7 +854,11 @@ static void rn_completed(rn_reactor *r, rn_operation *op, DWORD bytes,
       b->leased = 1;
       rn_emit(r, RN_READ, token, 0, rn_token(op->buffer, b->generation), bytes,
               0, 0, bytes);
-      rn_post_read(r, index);
+      /* Let the owning dispatcher apply backpressure before another receive.
+       * Reposting here can fill an entire immutable batch from one peer before
+       * set_read_enabled(false) gets a chance to run. Resume on the next step. */
+      c->read_paused = 1;
+      rn_pause(r, index);
     }
   } else if (op->kind == RN_OP_WRITE) {
     rn_write *w = &r->writes[op->write];

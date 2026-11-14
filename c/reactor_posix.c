@@ -36,6 +36,7 @@
 #define RN_NONE UINT32_MAX
 #define RN_WHEEL_SIZE 1024u
 #define RN_READ_BUDGET 16u
+#define RN_READ_BYTES_BUDGET 65536u
 #define RN_WRITE_BUDGET 16u
 #define RN_ACCEPT_BUDGET 64u
 #define RN_GENERATION_MAX ((uint32_t)INT32_MAX)
@@ -648,13 +649,15 @@ static int rn_accept_ready(rn_reactor *r, uint32_t index) {
 static int rn_read_ready(rn_reactor *r, uint32_t index) {
     rn_conn *c = &r->connections[index]; uint64_t token = rn_token(index, c->generation);
     if (c->eof || c->drain_close || c->read_disabled) return 0;
-    for (uint32_t attempt = 0; attempt < RN_READ_BUDGET && r->event_count < r->config.max_events; ++attempt) {
+    uint32_t remaining = RN_READ_BYTES_BUDGET;
+    for (uint32_t attempt = 0; attempt < RN_READ_BUDGET && remaining && r->event_count < r->config.max_events; ++attempt) {
         uint64_t lease;
         int error = rn_acquire_buffer(r, 4096, &lease);
         if (error == -EAGAIN) { rn_pause(r, index); return rn_interest(r, index, (uint8_t)(c->interest & 2u)); }
         if (error) return error;
         rn_buffer *b = &r->buffers[rn_index(lease)];
-        ssize_t n = recv(c->fd, lean_sarray_cptr(b->bytes), b->capacity, 0);
+        uint32_t length = b->capacity < remaining ? b->capacity : remaining;
+        ssize_t n = recv(c->fd, lean_sarray_cptr(b->bytes), length, 0);
         if (n <= 0) {
             int e = errno;
             (void)rn_buffer_release(r, lease);
@@ -670,6 +673,7 @@ static int rn_read_ready(rn_reactor *r, uint32_t index) {
             if (e != EINTR) return rn_close_connection_impl(r, token);
             return 0;
         }
+        remaining -= (uint32_t)n;
         lean_sarray_set_size(b->bytes, (size_t)n);
         error = rn_emit(r, RN_READ, token, 0, lease, 0, (uint32_t)n, n, 0);
         if (error) { (void)rn_buffer_release(r, lease); return error; }
