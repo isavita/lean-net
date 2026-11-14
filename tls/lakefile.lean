@@ -8,7 +8,22 @@ package «lean-net-tls» where
     let output ← IO.Process.output { cmd := "pkg-config", args := #["--libs", "openssl"] }
     if output.exitCode != 0 then throw <| IO.userError "pkg-config --libs openssl failed"
     let flags := (output.stdout.trimAscii.toString.splitOn " ").filter (· != "") |>.toArray
-    return if System.Platform.isWindows then flags else flags ++ #["-pthread"]
+    if System.Platform.isWindows then
+      -- A broad MSYS2 -L path also overrides Lean's matching MinGW CRT archives.
+      -- Select only OpenSSL's DLL import libraries, retaining Lean's CRT order.
+      let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", "openssl"] }
+      if location.exitCode != 0 || location.stdout.trimAscii.toString.isEmpty then
+        throw <| IO.userError "pkg-config could not locate the OpenSSL import libraries"
+      let directory := System.FilePath.mk location.stdout.trimAscii.toString
+      let mut libraries : Array String := #[]
+      for name in #["libssl.dll.a", "libcrypto.dll.a"] do
+        let path := directory / name
+        unless ← path.pathExists do
+          throw <| IO.userError s!"missing OpenSSL DLL import library: {path}"
+        libraries := libraries.push path.toString
+      return libraries ++ flags.filter (fun flag =>
+        !flag.startsWith "-L" && flag != "-lssl" && flag != "-lcrypto")
+    return flags ++ #["-pthread"]
 
 require «lean-net» from "../"
 

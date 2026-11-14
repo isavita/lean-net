@@ -91,7 +91,7 @@ private def Driver.forget (driver : Driver) (id : LeanNet.Reactor.SocketId) : IO
 private def Driver.abort (driver : Driver) (id : LeanNet.Reactor.SocketId) : IO Unit := do
   let some session := (← driver.state.get).sessions[id]? | return
   if session.native == 0 then
-    if ← id.isLive driver.reactor then session.wire.close
+    if ← id.isLive driver.reactor then session.wire.close (by decide)
   else checkZero "TLS abort" (← FFI.Worker.abort driver.handle session.native)
 
 private def Driver.setCipherReading (driver : Driver) (id : LeanNet.Reactor.SocketId)

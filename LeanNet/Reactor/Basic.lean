@@ -223,7 +223,7 @@ def Wire.closeAfterWrites (wire : Wire state) : IO Unit := do
   ensureWire wire
   checkedZero "transport drain close" (← FFI.Reactor.transportDrain wire.socket.reactor.handle wire.socket.token wire.capability)
 
-def Wire.close (wire : Wire state) : IO Unit := do
+def Wire.close (wire : Wire state) (_open : state ≠ .closed) : IO Unit := do
   ensureWire wire
   checkedZero "transport abort" (← FFI.Reactor.transportAbort wire.socket.reactor.handle wire.socket.token wire.capability)
 
