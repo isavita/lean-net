@@ -1,0 +1,5 @@
+Running full testssl v3.2.5 scan for alpha.test; timeout 900s
+alpha.test: grades=['A+'] passed=True
+Running full testssl v3.2.5 scan for beta.test; timeout 900s
+beta.test: grades=['A+'] passed=True
+Full-scan evidence: /Users/isavita/git/lean-net/tls/test/reports/2026-11-14-native-tls-e2dbbf0/testssl/summary.json; passed=True

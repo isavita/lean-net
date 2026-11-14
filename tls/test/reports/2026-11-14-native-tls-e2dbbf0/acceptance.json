@@ -1,0 +1,64 @@
+{
+  "started_utc": "2026-11-14T18:25:01.458359+00:00",
+  "source_head": "e2dbbf08b5057e8c24af2e7bc0a5d73f0cd3221f",
+  "source_status_at_start": "",
+  "binary_sha256": "26c01df14c714947c1bfa96da4d5f820110877e52c7946a86b77b4ee6c183cfd",
+  "immutable_binary": "/tmp/lean-net-tls-final-26c01df14c71",
+  "test_cycles": 1000,
+  "platform": "macOS-27.2.1-arm64-arm-64bit",
+  "python": "3.11.7 (main, Apr 28 2024, 11:48:32) [Clang 15.0.0 (clang-1500.3.9.4)]",
+  "source_file_sha256": {
+    "tls/test/test_tls_reactor.py": "2d5e7631b92c4611499275168dc9326135e466ff16cf0ef8fd59d87560232bf6",
+    "tls/test/tls_test_support.py": "934689dd0a27b5088f63abeff7f7df319bf8b4e02a3232d9bd4d240617851803",
+    "tls/test/TLSReactorFixture.lean": "e86a3103b2a6656ba5ba896bee9f80f60dfb7a501af69ac4915b09dc248c460e",
+    "tls/test/run_testssl.py": "c3bf21d4c095a0f923e521a14d6eda81cede491092abefee038250aea6fd99ce",
+    "tls/c/tls_worker.c": "7ff91b3e39c39db1640e1c3d61f9e8a491b61d2fab2d6a075a57e295bc70bd75",
+    "tls/LeanNetTLS/Reactor.lean": "be5b01ba4c12e1efc46a99bf6c60095d5541540acd9cf47e29114c7b6d1dd56b",
+    "LeanNet/HTTP/ReactorServer.lean": "e91ae8f0a7fa2462ee67bea84a39a0d4111b4219c17da8afb7dffff23387393c",
+    "c/reactor_posix.c": "d2edc5fdd33f695ca7f23869a85ff8aee6519cde0fbab651883075799028d0a1",
+    "c/reactor_windows.c": "ba1da19152e7195f525bb93fa8c5f7b08cf235b89ce9902ba3497a580be53d67"
+  },
+  "linked_libraries": "/tmp/lean-net-tls-final-26c01df14c71:\n\t/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib (compatibility version 3.0.0, current version 3.0.0)\n\t/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib (compatibility version 3.0.0, current version 3.0.0)\n\t/usr/lib/libc++.dylib (compatibility version 1.0.0, current version 1.0.0)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1356.0.0)",
+  "openssl_library_version": "OpenSSL 3.6.3 9 Jun 2026 (Library: OpenSSL 3.6.3 9 Jun 2026)\nbuilt on: Tue Jun  9 11:46:57 2026 UTC\nplatform: darwin64-arm64-cc\noptions:  bn(64,64)\ncompiler: clang -fPIC -arch arm64 -O3 -Wall -DL_ENDIAN -DOPENSSL_PIC -D_REENTRANT -DOPENSSL_BUILDING_OPENSSL -DNDEBUG\nOPENSSLDIR: \"/opt/homebrew/etc/openssl@3\"\nENGINESDIR: \"/opt/homebrew/Cellar/openssl@3/3.6.3/lib/engines-3\"\nMODULESDIR: \"/opt/homebrew/Cellar/openssl@3/3.6.3/lib/ossl-modules\"\nSeeding source: os-specific\nCPUINFO: OPENSSL_armcap=0x987d",
+  "curl_version": "curl 8.14.1 (aarch64-apple-darwin24.4.0) libcurl/8.14.1 OpenSSL/3.6.3 (SecureTransport) zlib/1.2.12 brotli/1.1.0 zstd/1.5.7 AppleIDN libssh2/1.11.1 nghttp2/1.71.0 librtmp/2.3\nRelease-Date: 2025-06-04\nProtocols: dict file ftp ftps gopher gophers http https imap imaps ipfs ipns ldap ldaps mqtt pop3 pop3s rtmp rtsp scp sftp smb smbs smtp smtps telnet tftp ws wss\nFeatures: alt-svc AsynchDNS brotli GSS-API HSTS HTTP2 HTTPS-proxy IDN IPv6 Kerberos Largefile libz MultiSSL NTLM SPNEGO SSL threadsafe TLS-SRP UnixSockets zstd",
+  "testssl_commit": "4f17be931a9d60f3f987975aea8221f1a8eaf7aa",
+  "ci": {
+    "native_reactors_three_os": "https://github.com/isavita/lean-net/actions/runs/43625971883",
+    "native_tls_three_os": "https://github.com/isavita/lean-net/actions/runs/43625971927",
+    "full_regressions": "https://github.com/isavita/lean-net/actions/runs/43625971933"
+  },
+  "test_command": [
+    "python3",
+    "tls/test/test_tls_reactor.py",
+    "-v"
+  ],
+  "test_exit_code": 0,
+  "test_seconds": 11.133,
+  "test_count": 34,
+  "unittest_seconds": 11.001,
+  "acceptance_passed": true,
+  "scanner_command": [
+    "python3",
+    "tls/test/run_testssl.py",
+    "--testssl",
+    "/tmp/lean-net-testssl-v3.2.5",
+    "--fixture",
+    "/tmp/lean-net-tls-final-26c01df14c71",
+    "--output",
+    "/Users/isavita/git/lean-net/tls/test/reports/2026-11-14-native-tls-e2dbbf0/testssl",
+    "--timeout",
+    "900"
+  ],
+  "scanner_exit_code": 0,
+  "scanner_passed": true,
+  "finished_utc": "2026-11-14T18:30:23.445575+00:00",
+  "passed": true,
+  "nonblocking_findings": "nonblocking-findings.json",
+  "fixture_profile": "Two-SNI native fixture, explicit private-CA trust, and HSTS on the scanned / handler. No independent A+ claim for the public CLI default route without that header.",
+  "host_hardware": {
+    "hw.model": "Mac14,7",
+    "hw.ncpu": "8",
+    "hw.physicalcpu": "8",
+    "hw.logicalcpu": "8"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "command": [
+    "/tmp/lean-net-tools/h2spec-v2.6.0/bin/h2spec",
+    "--strict",
+    "--tls",
+    "--insecure",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "52927",
+    "--path",
+    "/binary",
+    "--timeout",
+    "2",
+    "--junit-report",
+    "/tmp/lean-net-tools/h2spec-tls-baseline-e2dbbf0/junit.xml"
+  ],
+  "server": "/tmp/lean-net-tools/h2spec-tls-baseline-e2dbbf0/lean-net-tls-reactor-fixture",
+  "server_sha256": "26c01df14c714947c1bfa96da4d5f820110877e52c7946a86b77b4ee6c183cfd",
+  "repo_head": "e2dbbf08b5057e8c24af2e7bc0a5d73f0cd3221f",
+  "tool_version": "Version: 2.6.0 (70ac2294010887f48b18e2d64f5cccd48421fad1)",
+  "tool_sha256": "844982faff743b70eae6258dc6f2b1a83a3614ed3e7e42d292dec86b32aa5701",
+  "scope": "Full official strict generic+HTTP2(RFC7540)+HPACK(RFC7541) over TLS ALPN h2. --insecure is confined to this wire conformance run: official CLI has no separate CA/SNI override, IP dial selects default certificate; independently verified CA+hostname+ALPN preflight below. Not Phase4 acceptance.",
+  "certificate_fingerprints": [
+    "97583d0f621d6fa2a441fff664a8e597b19f0d02f2eca3f846d909309c66e11c",
+    "478c41e0e8fdb24c60c4ffe610f03831bcd1a65fdf52feaeef9dd6a6a7c0b752"
+  ],
+  "verified_preflight": {
+    "alpn": "h2",
+    "tls_version": "TLSv1.3",
+    "hostname": "alpha.test",
+    "certificate_verification": true
+  },
+  "exit_code": 0,
+  "groups": {
+    "generic": {
+      "tests": 44,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "http2": {
+      "tests": 95,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "hpack": {
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "server_exit_code": 0,
+  "temporary_private_keys_removed_on_exit": true
+}

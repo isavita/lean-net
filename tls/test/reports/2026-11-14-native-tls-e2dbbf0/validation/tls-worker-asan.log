@@ -1,0 +1,6 @@
+test_queues_wire_fences_and_join_lifetime (__main__.TLSWorkerNative.test_queues_wire_fences_and_join_lifetime) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 3.776s
+
+OK

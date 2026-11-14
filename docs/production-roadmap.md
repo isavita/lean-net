@@ -40,12 +40,70 @@ coverage, not evidence that the new architecture or performance gates pass.
 ## Current phase status
 
 Phase 1 reactor acceptance passed at d3ccc2e. Phase 2 HTTP/1 protocol-machine
-acceptance passed at 8be5466 on Linux, macOS and Windows. Phases 3–6 and all final
-gates remain open. The TLS worker implementation is under acceptance: dedicated
-native threads, bounded byte lanes, SNI/resumption and native transport sharing
-are implemented. Full matrix/scanner acceptance must pass before Phase 3 is
-marked complete. h2c preserves the previous pure HTTP/2 implementation pending
-its full phase-four migration.
+acceptance passed at 8be5466 on Linux, macOS and Windows. Phase 3 TLS acceptance
+passed at e2dbbf0 on all three platforms, including matching-artifact full scans
+of both SNI fixture hosts. Phases 4–6 and the remaining final gates stay open. h2c and negotiated h2 retain the previous pure HTTP/2
+implementation pending its phase-four migration.
+
+## TLS worker acceptance evidence
+
+- The [TLS matrix](https://github.com/isavita/lean-net/actions/runs/43625971927)
+  passes on Linux, macOS and Windows. All four public TLS executables build.
+  Each platform passes 34 real cases with 1,000 verified connection cycles,
+  malformed/reset peers, capacity-one and capacity-three queues, slow readers,
+  fragmented records, raw upgrades, absolute deadlines and bounded shutdown.
+  Windows performs the full suite through actual IOCP and native OpenSSL.
+- The [native matrix](https://github.com/isavita/lean-net/actions/runs/43625971883)
+  passes on all three platforms, including permanent buffer ownership,
+  cancellation and generations, the claimed transport capability, stale plain
+  aliases, Socket/Wire phantom states, and retained wake-handle lifetime.
+  POSIX bounds each peer's read batch by 16 reads and 64 KiB; IOCP defers another
+  positive receive until its next poll. Burst tests exercise fallback 64 KiB
+  cells and owner pause/resume without exceeding transport input bounds.
+- One dedicated native TLS worker serves each HTTP reactor through fixed SPSC
+  byte lanes. Every session SSL/BIO operation runs on that worker; sealed context
+  setup occurs before listeners start. The reactor owns sockets and Lean values.
+  Instrumented verified connections observe all four real workers, zero SSL
+  owner-thread violations and one native TLS thread per worker.
+- Ciphertext output and plaintext input have independent permanent native buffer
+  credits. HTTP output and wire receive credits are additional: four cells are
+  the one-client minimum, and three-cell startup is rejected with endpoint reuse.
+  Returned plaintext credit waits for retained ByteArray views before mutation.
+  Unique-block binary payloads and blocked raw-view traffic verify exact bytes
+  while another connection on the same worker progresses.
+- Plaintext completion is fenced by actual encrypted socket completion. Initial
+  readiness waits for outbound handshake bytes; 100 Continue and 101 Upgrade
+  retain their wire barriers. Native CLOSED acknowledges canceled IOCP buffer
+  ownership before a TLS slot can be reused. Fatal alerts drain within a bound.
+- Verified TLS 1.2/1.3, h2-preferred ALPN, no-ALPN HTTP/1 fallback, current-protocol
+  dispatch after resumption and two SNI certificate chains pass. TLS 1.2 cache-only
+  resumption and TLS 1.2/1.3 tickets resume across actual workers; host changes do
+  not resume another host's identity. Obsolete TLS clients receive a protocol
+  version alert rather than being mistaken for a client-side unsupported option.
+- SIGINT allows already-accepted handshakes to finish within the stop bound,
+  sends close_notify and joins every native worker before reactor destruction.
+  The shutdown regression passed 20 old-SIGINT repeats, 10 immediate verified
+  handshake stops and the full 34-case/1,000-cycle suite. Full HTTP/2 GOAWAY and
+  application stream draining remain part of phase six.
+- Focused native ASan/UBSan fixtures check context-table borrowing and partial
+  setup failures, byte-lane wrap, write fences, retained plaintext credit,
+  failed-join storage lifetime and exact SSL/BIO allocation/free balance.
+  The [full regression](https://github.com/isavita/lean-net/actions/runs/43625971933)
+  also passes, including all 28 public TLS compatibility tests.
+- The [accepted report](../tls/test/reports/2026-11-14-native-tls-e2dbbf0/README.md)
+  records the exact source, executable SHA-256, library versions, commands, CI
+  results, 34-case/1,000-cycle run and ownership diagnostics. Both full pinned
+  testssl v3.2.5 scans report **A+, score 93** (150/159 seconds). This is the
+  two-host private-CA fixture with its explicit HSTS application header, not a
+  hosted Qualys assessment or a default-public-route A+ claim. Raw LOW/MEDIUM
+  findings and the scoped missing-GOST client warning and test-certificate
+  revocation-metadata HIGH finding are retained. No private keys are committed.
+- A separate official h2spec v2.6.0 strict TLS/ALPN baseline passes all 147 tests
+  with zero skips ([baseline artifacts](../tls/test/reports/2026-11-14-native-tls-e2dbbf0/h2spec-baseline/metadata.json)).
+  Its IP-based conformance client uses --insecure; a separate
+  hostname/CA-verified preflight and the verified curl suite check certificate
+  trust. This old RFC 7540/7541 tool does not establish RFC 9113/9218 priority,
+  push or stream-error isolation, so phase four remains open.
 
 ## HTTP/1 machine acceptance evidence
 

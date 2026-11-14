@@ -1,0 +1,140 @@
+{
+  "started_utc": "2026-11-14T18:25:12.852047+00:00",
+  "source_head": "e2dbbf08b5057e8c24af2e7bc0a5d73f0cd3221f",
+  "source_status": "?? tls/test/reports/",
+  "fixture": "/private/tmp/lean-net-tls-final-26c01df14c71",
+  "fixture_sha256": "26c01df14c714947c1bfa96da4d5f820110877e52c7946a86b77b4ee6c183cfd",
+  "testssl_commit": "4f17be931a9d60f3f987975aea8221f1a8eaf7aa",
+  "testssl_sha256": "cf49497b6c43bd3b906a017a91ea87a8ca73d0f8682bf947f802f4df04acecb3",
+  "openssl": "OpenSSL 3.6.3 9 Jun 2026 (Library: OpenSSL 3.6.3 9 Jun 2026)\nbuilt on: Tue Jun  9 11:46:57 2026 UTC\nplatform: darwin64-arm64-cc\noptions:  bn(64,64)\ncompiler: clang -fPIC -arch arm64 -O3 -Wall -DL_ENDIAN -DOPENSSL_PIC -D_REENTRANT -DOPENSSL_BUILDING_OPENSSL -DNDEBUG\nOPENSSLDIR: \"/opt/homebrew/etc/openssl@3\"\nENGINESDIR: \"/opt/homebrew/Cellar/openssl@3/3.6.3/lib/engines-3\"\nMODULESDIR: \"/opt/homebrew/Cellar/openssl@3/3.6.3/lib/ossl-modules\"\nSeeding source: os-specific\nCPUINFO: OPENSSL_armcap=0x987d",
+  "trust_scope": "isolated ephemeral root supplied via --add-ca; no system trust changes",
+  "workers": 4,
+  "results": [
+    {
+      "name": "alpha.test",
+      "command": [
+        "bash",
+        "/private/tmp/lean-net-testssl-v3.2.5/testssl.sh",
+        "--openssl",
+        "/opt/homebrew/opt/openssl@3/bin/openssl",
+        "--warnings",
+        "batch",
+        "--color",
+        "0",
+        "--ip",
+        "127.0.0.1",
+        "--nodns",
+        "none",
+        "--add-ca",
+        "/var/folders/46/6lz6t86n4n10lwsyj3pyzd6h0000gn/T/lean-net-testssl-pki-3wag4lvr/ca.pem",
+        "--jsonfile-pretty",
+        "/Users/isavita/git/lean-net/tls/test/reports/2026-11-14-native-tls-e2dbbf0/testssl/alpha.test.json",
+        "--logfile",
+        "/Users/isavita/git/lean-net/tls/test/reports/2026-11-14-native-tls-e2dbbf0/testssl/alpha.test.log",
+        "https://alpha.test:54549/"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "grades": [
+        "A+"
+      ],
+      "completed": true,
+      "scan_seconds": 150,
+      "problems": [],
+      "scanner_limitations": [
+        {
+          "id": "engine_problem",
+          "severity": "WARN",
+          "finding": "No engine or GOST support via engine with your /opt/homebrew/opt/openssl@3/bin/openssl"
+        }
+      ],
+      "fixture_certificate_limitations": [
+        {
+          "id": "cert_revocation",
+          "severity": "HIGH",
+          "finding": "Neither CRL nor OCSP URI provided"
+        }
+      ],
+      "grade_caps": [],
+      "scores": [
+        {
+          "id": "rating_spec",
+          "severity": "INFO",
+          "finding": "SSL Labs's 'SSL Server Rating Guide' (version 2009r from 2025-05-16)"
+        },
+        {
+          "id": "final_score",
+          "severity": "INFO",
+          "finding": "93"
+        }
+      ]
+    },
+    {
+      "name": "beta.test",
+      "command": [
+        "bash",
+        "/private/tmp/lean-net-testssl-v3.2.5/testssl.sh",
+        "--openssl",
+        "/opt/homebrew/opt/openssl@3/bin/openssl",
+        "--warnings",
+        "batch",
+        "--color",
+        "0",
+        "--ip",
+        "127.0.0.1",
+        "--nodns",
+        "none",
+        "--add-ca",
+        "/var/folders/46/6lz6t86n4n10lwsyj3pyzd6h0000gn/T/lean-net-testssl-pki-3wag4lvr/ca.pem",
+        "--jsonfile-pretty",
+        "/Users/isavita/git/lean-net/tls/test/reports/2026-11-14-native-tls-e2dbbf0/testssl/beta.test.json",
+        "--logfile",
+        "/Users/isavita/git/lean-net/tls/test/reports/2026-11-14-native-tls-e2dbbf0/testssl/beta.test.log",
+        "https://beta.test:54549/"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "grades": [
+        "A+"
+      ],
+      "completed": true,
+      "scan_seconds": 159,
+      "problems": [],
+      "scanner_limitations": [
+        {
+          "id": "engine_problem",
+          "severity": "WARN",
+          "finding": "No engine or GOST support via engine with your /opt/homebrew/opt/openssl@3/bin/openssl"
+        }
+      ],
+      "fixture_certificate_limitations": [
+        {
+          "id": "cert_revocation",
+          "severity": "HIGH",
+          "finding": "Neither CRL nor OCSP URI provided"
+        }
+      ],
+      "grade_caps": [],
+      "scores": [
+        {
+          "id": "rating_spec",
+          "severity": "INFO",
+          "finding": "SSL Labs's 'SSL Server Rating Guide' (version 2009r from 2025-05-16)"
+        },
+        {
+          "id": "final_score",
+          "severity": "INFO",
+          "finding": "93"
+        }
+      ]
+    }
+  ],
+  "testssl_banner": "\u001b[1m\n#####################################################################\u001b[m\n  \u001b[1mtestssl.sh\u001b[m version \u001b[1m3.2.5\u001b[m from \u001b[1mhttps://testssl.sh/\u001b[m\n  \u001b[1m(\u001b[m\u001b[0;37m4f17be9 2026-11-04 18:01:06\u001b[m\u001b[1m)\u001b[m\n\u001b[1m\n  This program is free software. Distribution and modification under\n  GPLv2 permitted. USAGE w/o ANY WARRANTY. USE IT AT YOUR OWN RISK!\u001b[m\n\n  Please file bugs @ \u001b[1mhttps://testssl.sh/bugs/\u001b[m\n\u001b[1m#####################################################################\u001b[m\n\n  Using \u001b[3mOpenSSL 4.1.0 (Oct 23 2026)\u001b[m  [~96 ciphers]\n  on Aleksandars-MacBook-Pro:/opt/homebrew/bin/openssl\n  built: \u001b[3mFri Oct 23 12:16:44 2026\u001b[m, platform: \u001b[3mdarwin64-arm64-cc\u001b[m\n  Using \u001b[3mbash 3.2.57\u001b[m",
+  "certificate_sha256": {
+    "alpha.test": "644065c51e88f0b282b41724d1c4a7c4c750821e363374655f7c3332a7410c19",
+    "beta.test": "b410b9caa064fa7e21f7219cb8c2df5100085aece58fc5f9f1874b847e126f27"
+  },
+  "fixture_exit_code": 0,
+  "finished_utc": "2026-11-14T18:30:23.392361+00:00",
+  "passed": true
+}

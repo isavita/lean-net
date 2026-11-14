@@ -1,0 +1,701 @@
+{
+  "retrieved_utc": "2026-11-14T18:26:24.666630+00:00",
+  "method": "GitHub CLI read-only workflow API; connector fetch was unavailable",
+  "runs": [
+    {
+      "conclusion": "success",
+      "headSha": "e2dbbf08b5057e8c24af2e7bc0a5d73f0cd3221f",
+      "jobs": [
+        {
+          "completedAt": "2026-11-14T18:21:31Z",
+          "conclusion": "success",
+          "databaseId": 132541738158,
+          "name": "native (macos-latest)",
+          "startedAt": "2026-11-14T18:19:45Z",
+          "status": "completed",
+          "steps": [
+            {
+              "conclusion": "success",
+              "name": "Set up job",
+              "number": 1,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run actions/checkout@v7",
+              "number": 2,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run leanprover/lean-action@v1",
+              "number": 3,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Build reactor and echo",
+              "number": 4,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Pure HTTP/1 protocol machines",
+              "number": 5,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Phantom lifecycle checks",
+              "number": 6,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Native buffers, timers and generations",
+              "number": 7,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Worker echo and FFI setup ownership (Unix)",
+              "number": 8,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Worker echo and FFI setup ownership (Windows)",
+              "number": 9,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Echo acceptance",
+              "number": 10,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Native signal and endpoint ownership",
+              "number": 11,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Pooled I/O allocation and lifecycle sanitizers",
+              "number": 12,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "macOS accept handoff distribution and ownership",
+              "number": 13,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "IOCP operations and cancellation lifetime",
+              "number": 14,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Post Run actions/checkout@v7",
+              "number": 28,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Complete job",
+              "number": 29,
+              "status": "completed"
+            }
+          ],
+          "url": "https://github.com/isavita/lean-net/actions/runs/43625971883/job/132541738158"
+        },
+        {
+          "completedAt": "2026-11-14T18:22:39Z",
+          "conclusion": "success",
+          "databaseId": 132541738332,
+          "name": "native (windows-latest)",
+          "startedAt": "2026-11-14T18:19:45Z",
+          "status": "completed",
+          "steps": [
+            {
+              "conclusion": "success",
+              "name": "Set up job",
+              "number": 1,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run actions/checkout@v7",
+              "number": 2,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run leanprover/lean-action@v1",
+              "number": 3,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Build reactor and echo",
+              "number": 4,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Pure HTTP/1 protocol machines",
+              "number": 5,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Phantom lifecycle checks",
+              "number": 6,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Native buffers, timers and generations",
+              "number": 7,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Worker echo and FFI setup ownership (Unix)",
+              "number": 8,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Worker echo and FFI setup ownership (Windows)",
+              "number": 9,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Echo acceptance",
+              "number": 10,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Native signal and endpoint ownership",
+              "number": 11,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Pooled I/O allocation and lifecycle sanitizers",
+              "number": 12,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "macOS accept handoff distribution and ownership",
+              "number": 13,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "IOCP operations and cancellation lifetime",
+              "number": 14,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Post Run actions/checkout@v7",
+              "number": 28,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Complete job",
+              "number": 29,
+              "status": "completed"
+            }
+          ],
+          "url": "https://github.com/isavita/lean-net/actions/runs/43625971883/job/132541738332"
+        },
+        {
+          "completedAt": "2026-11-14T18:20:36Z",
+          "conclusion": "success",
+          "databaseId": 132541738397,
+          "name": "native (ubuntu-latest)",
+          "startedAt": "2026-11-14T18:19:44Z",
+          "status": "completed",
+          "steps": [
+            {
+              "conclusion": "success",
+              "name": "Set up job",
+              "number": 1,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run actions/checkout@v7",
+              "number": 2,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run leanprover/lean-action@v1",
+              "number": 3,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Build reactor and echo",
+              "number": 4,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Pure HTTP/1 protocol machines",
+              "number": 5,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Phantom lifecycle checks",
+              "number": 6,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Native buffers, timers and generations",
+              "number": 7,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Worker echo and FFI setup ownership (Unix)",
+              "number": 8,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Worker echo and FFI setup ownership (Windows)",
+              "number": 9,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Echo acceptance",
+              "number": 10,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Native signal and endpoint ownership",
+              "number": 11,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Pooled I/O allocation and lifecycle sanitizers",
+              "number": 12,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "macOS accept handoff distribution and ownership",
+              "number": 13,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "IOCP operations and cancellation lifetime",
+              "number": 14,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Post Run actions/checkout@v7",
+              "number": 28,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Complete job",
+              "number": 29,
+              "status": "completed"
+            }
+          ],
+          "url": "https://github.com/isavita/lean-net/actions/runs/43625971883/job/132541738397"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/isavita/lean-net/actions/runs/43625971883",
+      "workflowName": "Native reactor",
+      "run_id": 43625971883
+    },
+    {
+      "conclusion": "success",
+      "headSha": "e2dbbf08b5057e8c24af2e7bc0a5d73f0cd3221f",
+      "jobs": [
+        {
+          "completedAt": "2026-11-14T18:21:20Z",
+          "conclusion": "success",
+          "databaseId": 132541738209,
+          "name": "tls (ubuntu-latest, python3)",
+          "startedAt": "2026-11-14T18:19:44Z",
+          "status": "completed",
+          "steps": [
+            {
+              "conclusion": "success",
+              "name": "Set up job",
+              "number": 1,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run actions/checkout@v7",
+              "number": 2,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run leanprover/lean-action@v1",
+              "number": 3,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Install Linux TLS tools",
+              "number": 4,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Install macOS TLS tools",
+              "number": 5,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Install Windows MINGW64 TLS tools",
+              "number": 6,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Select Windows native toolchain and DLL paths",
+              "number": 7,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Record TLS toolchain",
+              "number": 8,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Build public TLS APIs and native fixture",
+              "number": 9,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Context ownership and policy sanitizers",
+              "number": 10,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "TLS byte lanes, wire fences and worker lifetime sanitizers",
+              "number": 11,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Verified native TLS, SNI, ALPN and resumption acceptance",
+              "number": 12,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Post Run actions/checkout@v7",
+              "number": 24,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Complete job",
+              "number": 25,
+              "status": "completed"
+            }
+          ],
+          "url": "https://github.com/isavita/lean-net/actions/runs/43625971927/job/132541738209"
+        },
+        {
+          "completedAt": "2026-11-14T18:21:11Z",
+          "conclusion": "success",
+          "databaseId": 132541738360,
+          "name": "tls (macos-latest, python3)",
+          "startedAt": "2026-11-14T18:19:44Z",
+          "status": "completed",
+          "steps": [
+            {
+              "conclusion": "success",
+              "name": "Set up job",
+              "number": 1,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run actions/checkout@v7",
+              "number": 2,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run leanprover/lean-action@v1",
+              "number": 3,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Install Linux TLS tools",
+              "number": 4,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Install macOS TLS tools",
+              "number": 5,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Install Windows MINGW64 TLS tools",
+              "number": 6,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Select Windows native toolchain and DLL paths",
+              "number": 7,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Record TLS toolchain",
+              "number": 8,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Build public TLS APIs and native fixture",
+              "number": 9,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Context ownership and policy sanitizers",
+              "number": 10,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "TLS byte lanes, wire fences and worker lifetime sanitizers",
+              "number": 11,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Verified native TLS, SNI, ALPN and resumption acceptance",
+              "number": 12,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Post Run actions/checkout@v7",
+              "number": 24,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Complete job",
+              "number": 25,
+              "status": "completed"
+            }
+          ],
+          "url": "https://github.com/isavita/lean-net/actions/runs/43625971927/job/132541738360"
+        },
+        {
+          "completedAt": "2026-11-14T18:22:07Z",
+          "conclusion": "success",
+          "databaseId": 132541738469,
+          "name": "tls (windows-latest, python)",
+          "startedAt": "2026-11-14T18:19:44Z",
+          "status": "completed",
+          "steps": [
+            {
+              "conclusion": "success",
+              "name": "Set up job",
+              "number": 1,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run actions/checkout@v7",
+              "number": 2,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run leanprover/lean-action@v1",
+              "number": 3,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Install Linux TLS tools",
+              "number": 4,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Install macOS TLS tools",
+              "number": 5,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Install Windows MINGW64 TLS tools",
+              "number": 6,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Select Windows native toolchain and DLL paths",
+              "number": 7,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Record TLS toolchain",
+              "number": 8,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Build public TLS APIs and native fixture",
+              "number": 9,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "Context ownership and policy sanitizers",
+              "number": 10,
+              "status": "completed"
+            },
+            {
+              "conclusion": "skipped",
+              "name": "TLS byte lanes, wire fences and worker lifetime sanitizers",
+              "number": 11,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Verified native TLS, SNI, ALPN and resumption acceptance",
+              "number": 12,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Post Run actions/checkout@v7",
+              "number": 24,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Complete job",
+              "number": 25,
+              "status": "completed"
+            }
+          ],
+          "url": "https://github.com/isavita/lean-net/actions/runs/43625971927/job/132541738469"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/isavita/lean-net/actions/runs/43625971927",
+      "workflowName": "Native TLS reactor",
+      "run_id": 43625971927
+    },
+    {
+      "conclusion": "success",
+      "headSha": "e2dbbf08b5057e8c24af2e7bc0a5d73f0cd3221f",
+      "jobs": [
+        {
+          "completedAt": "2026-11-14T18:20:56Z",
+          "conclusion": "success",
+          "databaseId": 132541738143,
+          "name": "build",
+          "startedAt": "2026-11-14T18:19:44Z",
+          "status": "completed",
+          "steps": [
+            {
+              "conclusion": "success",
+              "name": "Set up job",
+              "number": 1,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run actions/checkout@v7",
+              "number": 2,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Run leanprover/lean-action@v1",
+              "number": 3,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Build and test TCP, HTTP/1.1 and h2c",
+              "number": 4,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Install OpenSSL development files",
+              "number": 5,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Build and test TLS package",
+              "number": 6,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Post Run actions/checkout@v7",
+              "number": 12,
+              "status": "completed"
+            },
+            {
+              "conclusion": "success",
+              "name": "Complete job",
+              "number": 13,
+              "status": "completed"
+            }
+          ],
+          "url": "https://github.com/isavita/lean-net/actions/runs/43625971933/job/132541738143"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/isavita/lean-net/actions/runs/43625971933",
+      "workflowName": "Lean Action CI",
+      "run_id": 43625971933
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+test_lifecycle_and_no_established_allocations (__main__.ReactorPosixNative.test_lifecycle_and_no_established_allocations) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 3.824s
+
+OK

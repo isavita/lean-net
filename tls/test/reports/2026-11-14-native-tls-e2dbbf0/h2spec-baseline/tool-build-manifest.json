@@ -1,0 +1,11 @@
+{
+  "official_source": "https://github.com/summerwind/h2spec",
+  "tag": "v2.6.0",
+  "verified_tag_commit": "70ac2294010887f48b18e2d64f5cccd48421fad1",
+  "local_commit": "70ac2294010887f48b18e2d64f5cccd48421fad1",
+  "go": "go version go1.22.2 darwin/arm64",
+  "version": "Version: 2.6.0 (70ac2294010887f48b18e2d64f5cccd48421fad1)",
+  "sha256": "844982faff743b70eae6258dc6f2b1a83a3614ed3e7e42d292dec86b32aa5701",
+  "dependency_verification": "all modules verified",
+  "build_command": "go build -mod=readonly -trimpath -ldflags '-X main.VERSION=2.6.0 -X main.COMMIT=70ac2294010887f48b18e2d64f5cccd48421fad1' -o bin/h2spec cmd/h2spec/h2spec.go"
+}

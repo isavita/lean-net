@@ -1,0 +1,135 @@
+{
+  "scope": "Complete LOW/MEDIUM findings from both full scans, retained without altering the actual tool grade. A heuristic/potential warning is not a confirmed exploit finding.",
+  "findings": {
+    "alpha.test": [
+      {
+        "id": "cipherlist_OBSOLETED",
+        "severity": "LOW",
+        "cwe": "CWE-310",
+        "finding": "offered"
+      },
+      {
+        "id": "cipher-tls1_2_xc028",
+        "severity": "LOW",
+        "finding": "TLSv1.2   xc028   ECDHE-RSA-AES256-SHA384           ECDH 253   AES         256      TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384"
+      },
+      {
+        "id": "cipher-tls1_2_xc027",
+        "severity": "LOW",
+        "finding": "TLSv1.2   xc027   ECDHE-RSA-AES128-SHA256           ECDH 253   AES         128      TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
+      },
+      {
+        "id": "cipher-tls1_2_xc014",
+        "severity": "LOW",
+        "finding": "TLSv1.2   xc014   ECDHE-RSA-AES256-SHA              ECDH 253   AES         256      TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"
+      },
+      {
+        "id": "cipher-tls1_2_xc013",
+        "severity": "LOW",
+        "finding": "TLSv1.2   xc013   ECDHE-RSA-AES128-SHA              ECDH 253   AES         128      TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA"
+      },
+      {
+        "id": "cipher-tls1_2_x3d",
+        "severity": "LOW",
+        "finding": "TLSv1.2   x3d     AES256-SHA256                     RSA        AES         256      TLS_RSA_WITH_AES_256_CBC_SHA256"
+      },
+      {
+        "id": "cipher-tls1_2_x3c",
+        "severity": "LOW",
+        "finding": "TLSv1.2   x3c     AES128-SHA256                     RSA        AES         128      TLS_RSA_WITH_AES_128_CBC_SHA256"
+      },
+      {
+        "id": "cipher-tls1_2_x35",
+        "severity": "LOW",
+        "finding": "TLSv1.2   x35     AES256-SHA                        RSA        AES         256      TLS_RSA_WITH_AES_256_CBC_SHA"
+      },
+      {
+        "id": "cipher-tls1_2_x2f",
+        "severity": "LOW",
+        "finding": "TLSv1.2   x2f     AES128-SHA                        RSA        AES         128      TLS_RSA_WITH_AES_128_CBC_SHA"
+      },
+      {
+        "id": "cert_serialNumberLen",
+        "severity": "LOW",
+        "finding": "1 is not enough entropy"
+      },
+      {
+        "id": "security_headers",
+        "severity": "MEDIUM",
+        "finding": "--"
+      },
+      {
+        "id": "LUCKY13",
+        "severity": "LOW",
+        "cve": "CVE-2013-0169",
+        "cwe": "CWE-310",
+        "finding": "potentially vulnerable, uses obsolete TLS CBC ciphers"
+      }
+    ],
+    "beta.test": [
+      {
+        "id": "cipherlist_OBSOLETED",
+        "severity": "LOW",
+        "cwe": "CWE-310",
+        "finding": "offered"
+      },
+      {
+        "id": "cipher-tls1_2_xc028",
+        "severity": "LOW",
+        "finding": "TLSv1.2   xc028   ECDHE-RSA-AES256-SHA384           ECDH 253   AES         256      TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384"
+      },
+      {
+        "id": "cipher-tls1_2_xc027",
+        "severity": "LOW",
+        "finding": "TLSv1.2   xc027   ECDHE-RSA-AES128-SHA256           ECDH 253   AES         128      TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
+      },
+      {
+        "id": "cipher-tls1_2_xc014",
+        "severity": "LOW",
+        "finding": "TLSv1.2   xc014   ECDHE-RSA-AES256-SHA              ECDH 253   AES         256      TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"
+      },
+      {
+        "id": "cipher-tls1_2_xc013",
+        "severity": "LOW",
+        "finding": "TLSv1.2   xc013   ECDHE-RSA-AES128-SHA              ECDH 253   AES         128      TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA"
+      },
+      {
+        "id": "cipher-tls1_2_x3d",
+        "severity": "LOW",
+        "finding": "TLSv1.2   x3d     AES256-SHA256                     RSA        AES         256      TLS_RSA_WITH_AES_256_CBC_SHA256"
+      },
+      {
+        "id": "cipher-tls1_2_x3c",
+        "severity": "LOW",
+        "finding": "TLSv1.2   x3c     AES128-SHA256                     RSA        AES         128      TLS_RSA_WITH_AES_128_CBC_SHA256"
+      },
+      {
+        "id": "cipher-tls1_2_x35",
+        "severity": "LOW",
+        "finding": "TLSv1.2   x35     AES256-SHA                        RSA        AES         256      TLS_RSA_WITH_AES_256_CBC_SHA"
+      },
+      {
+        "id": "cipher-tls1_2_x2f",
+        "severity": "LOW",
+        "finding": "TLSv1.2   x2f     AES128-SHA                        RSA        AES         128      TLS_RSA_WITH_AES_128_CBC_SHA"
+      },
+      {
+        "id": "cert_serialNumberLen",
+        "severity": "LOW",
+        "finding": "1 is not enough entropy"
+      },
+      {
+        "id": "security_headers",
+        "severity": "MEDIUM",
+        "finding": "--"
+      },
+      {
+        "id": "LUCKY13",
+        "severity": "LOW",
+        "cve": "CVE-2013-0169",
+        "cwe": "CWE-310",
+        "finding": "potentially vulnerable, uses obsolete TLS CBC ciphers"
+      }
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "source_head": "e2dbbf08b5057e8c24af2e7bc0a5d73f0cd3221f",
+  "reported_exit_codes": {
+    "posix-asan.log": 0,
+    "tls-worker-asan.log": 0,
+    "tls-context-asan.log": 0,
+    "phantom-compile.log": 0,
+    "mac-http37.log": 0,
+    "mac-tls34.log": 0
+  },
+  "provenance": "Root executed these checks after the receive-budget changes and confirmed each exit code zero. Logs are copied unchanged; the phantom compile is silent on success. CI runtime/compile steps provide independent source-pinned confirmation.",
+  "sanitizers": "Native POSIX, TLS worker, and TLS context harnesses compile with address,undefined sanitizers by default; these runs used that default.",
+  "sha256": {
+    "posix-asan.log": "7c3d36cc8dcec5464699445ad89dd306368b37c3c5fda9b07733ffc766714782",
+    "tls-worker-asan.log": "eab79a0573867ef3d6b782c8e6a0fb7c6843d9b9afdec3053d6a94d1510484fe",
+    "tls-context-asan.log": "7eb93cc2e6307cc90fb4232d37bf52f3adbf8d9df1b338025bb66d79efdb2ded",
+    "phantom-compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mac-http37.log": "6beaa7750cb8557ad7f1f24a7e45621fd94511c3c59fb8f035533e369d311173",
+    "mac-tls34.log": "d4c9f2fcda78fc669e8326b0a6523fcf4ebbcbec2b1a7acac626f2ece014504d"
+  },
+  "reproduction_commands": {
+    "posix-asan.log": "python3 test/test_reactor_posix.py -v",
+    "tls-worker-asan.log": "PKG_CONFIG_PATH=/opt/homebrew/opt/openssl@3/lib/pkgconfig python3 tls/test/test_tls_worker_native.py -v",
+    "tls-context-asan.log": "PKG_CONFIG_PATH=/opt/homebrew/opt/openssl@3/lib/pkgconfig python3 tls/test/test_tls_context_native.py -v",
+    "phantom-compile.log": "lake env lean test/ReactorStateTest.lean",
+    "mac-http37.log": "python3 test/test_http1_reactor.py -v",
+    "mac-tls34.log": "LEAN_NET_TLS_CYCLES=1000 python3 tls/test/test_tls_reactor.py -v"
+  }
+}
