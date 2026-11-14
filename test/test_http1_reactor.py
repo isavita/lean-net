@@ -559,7 +559,13 @@ class Deadlines(ServerCase, unittest.TestCase):
             reader = Reader(sock)
             self.assertEqual(reader.response().status, 408)
             self.assertLess(time.monotonic() - started, 1.0, "request deadline was reset by trickled input")
-            reader.eof()
+            try:
+                reader.eof()
+            except ConnectionResetError:
+                # The complete 408 arrived before the deadline. Late bytes
+                # already queued by this trickling peer can make TCP close
+                # reset the connection while discarding that unread input.
+                pass
 
 
 class FoldPolicy(ServerCase, unittest.TestCase):
