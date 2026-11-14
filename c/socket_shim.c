@@ -16,6 +16,9 @@
  *     never padded to the requested max_len.
  */
 
+#if defined(_WIN32)
+#include "socket_windows.c"
+#else
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
 #define _DARWIN_C_SOURCE 1
 #endif
@@ -687,3 +690,6 @@ lean_object *shim_poll(b_lean_obj_arg entries, int32_t timeout_ms) {
     free(fds);
     return mk_count_ba_ok(ready, result);
 }
+
+#endif /* POSIX compatibility shim */
+#include "reactor_ffi.h"

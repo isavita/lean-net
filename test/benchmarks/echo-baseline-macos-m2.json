@@ -1,0 +1,133 @@
+{
+  "environment": {
+    "platform": "macOS-27.2.1-arm64-arm-64bit",
+    "cpu_count": 8,
+    "cpu": "Apple M2",
+    "memory_bytes": "17179869184",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
+    "lean": "Lean (version 4.35.0, arm64-apple-darwin24.6.0, commit eb6cafb7290e8bd5f2937522d8d804f58f02bafc, Release)"
+  },
+  "binary": "/Users/isavita/git/lean-net/.lake/build/bin/lean-net-echo",
+  "server_args": [],
+  "binary_sha256": "90af05e9c2b7b460386155b53b8a9a975d946e598e468788ec613f8b07ed8220",
+  "method": "fixed-count closed-loop, one outstanding verified echo per connection; connects excluded",
+  "runs": [
+    {
+      "requests": 200000,
+      "connections": 1,
+      "payload_bytes": 16,
+      "seconds": 4.696172,
+      "requests_per_second": 42587.88,
+      "latency_us_p50": 23.0,
+      "latency_us_p95": 27.0,
+      "latency_us_p99": 36.0,
+      "latency_us_max": 15983.0,
+      "clients_progressed_in_first_second": 1,
+      "round": 1
+    },
+    {
+      "requests": 200000,
+      "connections": 1,
+      "payload_bytes": 16,
+      "seconds": 4.566903,
+      "requests_per_second": 43793.35,
+      "latency_us_p50": 23.0,
+      "latency_us_p95": 28.0,
+      "latency_us_p99": 40.0,
+      "latency_us_max": 751.0,
+      "clients_progressed_in_first_second": 1,
+      "round": 2
+    },
+    {
+      "requests": 200000,
+      "connections": 1,
+      "payload_bytes": 16,
+      "seconds": 4.417914,
+      "requests_per_second": 45270.23,
+      "latency_us_p50": 22.0,
+      "latency_us_p95": 27.0,
+      "latency_us_p99": 40.0,
+      "latency_us_max": 1755.0,
+      "clients_progressed_in_first_second": 1,
+      "round": 3
+    },
+    {
+      "requests": 200000,
+      "connections": 16,
+      "payload_bytes": 16,
+      "seconds": 5.443997,
+      "requests_per_second": 36737.71,
+      "latency_us_p50": 27.0,
+      "latency_us_p95": 32.0,
+      "latency_us_p99": 42.0,
+      "latency_us_max": 5443991.0,
+      "clients_progressed_in_first_second": 1,
+      "round": 1
+    },
+    {
+      "requests": 200000,
+      "connections": 16,
+      "payload_bytes": 16,
+      "seconds": 5.35702,
+      "requests_per_second": 37334.19,
+      "latency_us_p50": 25.0,
+      "latency_us_p95": 35.0,
+      "latency_us_p99": 55.0,
+      "latency_us_max": 5357018.0,
+      "clients_progressed_in_first_second": 1,
+      "round": 2
+    },
+    {
+      "requests": 200000,
+      "connections": 16,
+      "payload_bytes": 16,
+      "seconds": 5.414087,
+      "requests_per_second": 36940.67,
+      "latency_us_p50": 26.0,
+      "latency_us_p95": 32.0,
+      "latency_us_p99": 47.0,
+      "latency_us_max": 5414085.0,
+      "clients_progressed_in_first_second": 1,
+      "round": 3
+    },
+    {
+      "requests": 200000,
+      "connections": 100,
+      "payload_bytes": 16,
+      "seconds": 11.836029,
+      "requests_per_second": 16897.56,
+      "latency_us_p50": 58.0,
+      "latency_us_p95": 70.0,
+      "latency_us_p99": 109.0,
+      "latency_us_max": 11836027.0,
+      "clients_progressed_in_first_second": 1,
+      "round": 1
+    },
+    {
+      "requests": 200000,
+      "connections": 100,
+      "payload_bytes": 16,
+      "seconds": 11.534324,
+      "requests_per_second": 17339.55,
+      "latency_us_p50": 57.0,
+      "latency_us_p95": 68.0,
+      "latency_us_p99": 89.0,
+      "latency_us_max": 11534321.0,
+      "clients_progressed_in_first_second": 1,
+      "round": 2
+    },
+    {
+      "requests": 200000,
+      "connections": 100,
+      "payload_bytes": 16,
+      "seconds": 11.539375,
+      "requests_per_second": 17331.96,
+      "latency_us_p50": 57.0,
+      "latency_us_p95": 69.0,
+      "latency_us_p99": 95.0,
+      "latency_us_max": 11539372.0,
+      "clients_progressed_in_first_second": 1,
+      "round": 3
+    }
+  ]
+}

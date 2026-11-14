@@ -1,0 +1,458 @@
+{
+  "binary_sha256": "ffbac50140b0bed2844fea3fe19af93973224625e54a15620899895f9a28aa0f",
+  "method": "separate observational run; external ps every250ms; first second excluded from summaries",
+  "runs": [
+    {
+      "workers": 1,
+      "load": {
+        "requests": 2000000,
+        "connections": 100,
+        "payload_bytes": 16,
+        "seconds": 10.345716,
+        "requests_per_second": 193316.73,
+        "latency_us_p50": 498.0,
+        "latency_us_p95": 671.0,
+        "latency_us_p99": 1039.0,
+        "latency_us_max": 3441.0,
+        "clients_progressed_in_first_second": 100
+      },
+      "cpu_percent_median": 98.5,
+      "cpu_percent_max": 100.0,
+      "rss_kib_min": 4448,
+      "rss_kib_max": 4480,
+      "samples": [
+        {
+          "seconds": 0.003984707989729941,
+          "cpu_percent": 0.1,
+          "rss_kib": 31728
+        },
+        {
+          "seconds": 0.2695546250033658,
+          "cpu_percent": 15.5,
+          "rss_kib": 31760
+        },
+        {
+          "seconds": 0.5370933329977561,
+          "cpu_percent": 65.6,
+          "rss_kib": 31760
+        },
+        {
+          "seconds": 0.810489541006973,
+          "cpu_percent": 80.1,
+          "rss_kib": 31760
+        },
+        {
+          "seconds": 1.0774738749896642,
+          "cpu_percent": 83.4,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 1.3447820830042474,
+          "cpu_percent": 86.2,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 1.6105887909943704,
+          "cpu_percent": 92.7,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 1.8763647910091095,
+          "cpu_percent": 96.1,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 2.14241937501356,
+          "cpu_percent": 97.8,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 2.408450582996011,
+          "cpu_percent": 98.5,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 2.673609416000545,
+          "cpu_percent": 98.4,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 2.9291928749880753,
+          "cpu_percent": 98.7,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 3.194460375001654,
+          "cpu_percent": 98.4,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 3.450215707998723,
+          "cpu_percent": 98.5,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 3.716480291011976,
+          "cpu_percent": 98.8,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 3.981576332997065,
+          "cpu_percent": 100.0,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 4.2469424580049235,
+          "cpu_percent": 95.3,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 4.510448457993334,
+          "cpu_percent": 97.8,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 4.777188333013328,
+          "cpu_percent": 98.5,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 5.042209500010358,
+          "cpu_percent": 98.5,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 5.307182582997484,
+          "cpu_percent": 99.7,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 5.572799290996045,
+          "cpu_percent": 99.2,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 5.829620375006925,
+          "cpu_percent": 100.0,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 6.0996050410030875,
+          "cpu_percent": 98.0,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 6.366304666007636,
+          "cpu_percent": 95.2,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 6.629441625002073,
+          "cpu_percent": 96.9,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 6.886898041004315,
+          "cpu_percent": 97.0,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 7.143791500013322,
+          "cpu_percent": 98.1,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 7.408924290997675,
+          "cpu_percent": 97.6,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 7.675069541000994,
+          "cpu_percent": 98.4,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 7.9369329159962945,
+          "cpu_percent": 98.5,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 8.196715708007105,
+          "cpu_percent": 98.7,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 8.462239165994106,
+          "cpu_percent": 98.8,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 8.72710979101248,
+          "cpu_percent": 98.8,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 8.99278395800502,
+          "cpu_percent": 99.4,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 9.258829124999465,
+          "cpu_percent": 99.0,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 9.524408375000348,
+          "cpu_percent": 99.0,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 9.790344832988922,
+          "cpu_percent": 99.5,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 10.046800083015114,
+          "cpu_percent": 99.7,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 10.312439208006253,
+          "cpu_percent": 99.4,
+          "rss_kib": 4448
+        },
+        {
+          "seconds": 10.576602749992162,
+          "cpu_percent": 99.4,
+          "rss_kib": 4480
+        }
+      ]
+    },
+    {
+      "workers": 8,
+      "load": {
+        "requests": 2000000,
+        "connections": 100,
+        "payload_bytes": 16,
+        "seconds": 10.639049,
+        "requests_per_second": 187986.73,
+        "latency_us_p50": 501.0,
+        "latency_us_p95": 764.0,
+        "latency_us_p99": 1231.0,
+        "latency_us_max": 13186.0,
+        "clients_progressed_in_first_second": 100
+      },
+      "cpu_percent_median": 97.8,
+      "cpu_percent_max": 99.6,
+      "rss_kib_min": 4672,
+      "rss_kib_max": 7984,
+      "samples": [
+        {
+          "seconds": 0.004521666007349268,
+          "cpu_percent": 0.0,
+          "rss_kib": 223888
+        },
+        {
+          "seconds": 0.2797184160153847,
+          "cpu_percent": 44.2,
+          "rss_kib": 10224
+        },
+        {
+          "seconds": 0.5470925410045311,
+          "cpu_percent": 67.9,
+          "rss_kib": 7984
+        },
+        {
+          "seconds": 0.8070257079962175,
+          "cpu_percent": 86.8,
+          "rss_kib": 7984
+        },
+        {
+          "seconds": 1.0730623330164235,
+          "cpu_percent": 92.9,
+          "rss_kib": 7984
+        },
+        {
+          "seconds": 1.332247832993744,
+          "cpu_percent": 97.2,
+          "rss_kib": 7984
+        },
+        {
+          "seconds": 1.5974385410081595,
+          "cpu_percent": 96.5,
+          "rss_kib": 7984
+        },
+        {
+          "seconds": 1.8636360829987098,
+          "cpu_percent": 97.5,
+          "rss_kib": 7984
+        },
+        {
+          "seconds": 2.128687832999276,
+          "cpu_percent": 99.6,
+          "rss_kib": 7984
+        },
+        {
+          "seconds": 2.394546541007003,
+          "cpu_percent": 99.1,
+          "rss_kib": 7984
+        },
+        {
+          "seconds": 2.659205000003567,
+          "cpu_percent": 98.6,
+          "rss_kib": 7984
+        },
+        {
+          "seconds": 2.924181750015123,
+          "cpu_percent": 98.1,
+          "rss_kib": 7984
+        },
+        {
+          "seconds": 3.1895030830055475,
+          "cpu_percent": 98.4,
+          "rss_kib": 7984
+        },
+        {
+          "seconds": 3.456276291020913,
+          "cpu_percent": 97.9,
+          "rss_kib": 4672
+        },
+        {
+          "seconds": 3.7159190000093076,
+          "cpu_percent": 95.4,
+          "rss_kib": 4672
+        },
+        {
+          "seconds": 3.980670624994673,
+          "cpu_percent": 97.7,
+          "rss_kib": 4672
+        },
+        {
+          "seconds": 4.247517750016414,
+          "cpu_percent": 97.0,
+          "rss_kib": 4672
+        },
+        {
+          "seconds": 4.512865625001723,
+          "cpu_percent": 90.4,
+          "rss_kib": 4672
+        },
+        {
+          "seconds": 4.777654208010063,
+          "cpu_percent": 92.5,
+          "rss_kib": 4672
+        },
+        {
+          "seconds": 5.044445458013797,
+          "cpu_percent": 96.1,
+          "rss_kib": 4672
+        },
+        {
+          "seconds": 5.313767540996196,
+          "cpu_percent": 95.1,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 5.580599333014106,
+          "cpu_percent": 95.6,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 5.844863041013014,
+          "cpu_percent": 92.1,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 6.110181708005257,
+          "cpu_percent": 96.3,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 6.375465499993879,
+          "cpu_percent": 97.5,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 6.640788207994774,
+          "cpu_percent": 98.0,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 6.905203875008738,
+          "cpu_percent": 97.8,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 7.171435958007351,
+          "cpu_percent": 99.3,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 7.427018415997736,
+          "cpu_percent": 98.8,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 7.692755416006548,
+          "cpu_percent": 98.7,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 7.958053416019538,
+          "cpu_percent": 98.6,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 8.224525541008916,
+          "cpu_percent": 98.7,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 8.482460291008465,
+          "cpu_percent": 98.7,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 8.74732879101066,
+          "cpu_percent": 99.0,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 9.005248000001302,
+          "cpu_percent": 98.4,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 9.270358041016152,
+          "cpu_percent": 98.3,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 9.531839000002947,
+          "cpu_percent": 98.5,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 9.797430625010747,
+          "cpu_percent": 98.8,
+          "rss_kib": 4688
+        },
+        {
+          "seconds": 10.067544958001235,
+          "cpu_percent": 97.8,
+          "rss_kib": 4672
+        },
+        {
+          "seconds": 10.33645879101823,
+          "cpu_percent": 95.0,
+          "rss_kib": 4672
+        },
+        {
+          "seconds": 10.60368508301326,
+          "cpu_percent": 91.5,
+          "rss_kib": 4672
+        }
+      ]
+    }
+  ]
+}

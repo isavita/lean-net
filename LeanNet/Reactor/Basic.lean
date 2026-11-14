@@ -1,0 +1,259 @@
+import LeanNet.Socket.State
+import LeanNet.FFI.Errno
+import LeanNet.FFI.Reactor
+
+namespace LeanNet.Reactor
+
+structure Config where
+  maxConnections : UInt32 := 4096
+  maxEvents : UInt32 := 1024
+  maxWrites : UInt32 := 8192
+  buffers4k : UInt32 := 4096
+  buffers16k : UInt32 := 256
+  buffers64k : UInt32 := 64
+  timerTickMs : UInt32 := 10
+
+/-- One thread owns this reactor and every connection and buffer lease it creates. -/
+structure Reactor where
+  private mk ::
+  private handle : UInt64
+  private alive : IO.Ref Bool
+
+/-- Native generation tokens prevent stale aliases from reaching a reused socket. -/
+structure Socket (state : SocketState) where
+  private mk ::
+  private reactor : Reactor
+  private token : UInt64
+
+/-- A non-actionable, reactor-scoped identity for completion accounting. -/
+structure SocketId where
+  private mk ::
+  private owner : UInt64
+  private token : UInt64
+  deriving BEq, Hashable
+
+def Socket.id (socket : Socket state) : SocketId := ⟨socket.reactor.handle, socket.token⟩
+
+/-- A reactor-owned receive buffer. Retained ByteArray views prevent reuse. -/
+structure Buffer where
+  private mk ::
+  private reactor : Reactor
+  private token : UInt64
+
+private def ensureAlive (reactor : Reactor) : IO Unit := do
+  unless (← reactor.alive.get) do throw (IO.userError "reactor is closed")
+
+private def checked (operation : String) (raw : UInt64) : IO UInt64 := do
+  let value := LeanNet.Errno.decode raw
+  if value < 0 then throw (← LeanNet.Errno.error operation value)
+  return raw
+
+private def checkedZero (operation : String) (raw : UInt64) : IO Unit := do
+  let value ← checked operation raw
+  unless value == 0 do throw (IO.userError s!"{operation}: invalid native success result")
+
+private def destroy (reactor : Reactor) : IO Unit := do
+  ensureAlive reactor
+  reactor.alive.set false
+  checkedZero "reactor free" (← FFI.Reactor.free reactor.handle)
+
+/-- Bracket the reactor, including every still-open connection and pooled buffer. -/
+def withReactor (config : Config) (use : Reactor → IO α) : IO α := do
+  let handle ← checked "reactor create" (← FFI.Reactor.create config.maxConnections config.maxEvents
+    config.maxWrites config.buffers4k config.buffers16k config.buffers64k config.timerTickMs)
+  if handle == 0 then throw (IO.userError "reactor create: null native handle")
+  let reactor : Reactor := ⟨handle, ← IO.mkRef true⟩
+  try use reactor finally destroy reactor
+
+def Reactor.socket (reactor : Reactor) : IO (Socket .fresh) := do
+  ensureAlive reactor
+  let token ← checked "reactor socket" (← FFI.Reactor.socketNew reactor.handle)
+  if token == 0 then throw (IO.userError "reactor socket: null token")
+  return ⟨reactor, token⟩
+
+def Socket.bind (socket : Socket .fresh) (host : String) (port : UInt16)
+    (reusePort : Bool := false) : IO (Socket .bound) := do
+  ensureAlive socket.reactor
+  if host.toUTF8.toList.contains 0 then throw (IO.userError "bind host contains NUL")
+  checkedZero "reactor bind" (← FFI.Reactor.bind socket.reactor.handle socket.token host port (if reusePort then 1 else 0))
+  return ⟨socket.reactor, socket.token⟩
+
+def Socket.listen (socket : Socket .bound) (backlog : UInt32 := 4096) : IO (Socket .listening) := do
+  ensureAlive socket.reactor
+  checkedZero "reactor start listening" (← FFI.Reactor.startListening socket.reactor.handle socket.token backlog)
+  return ⟨socket.reactor, socket.token⟩
+
+def Reactor.listen (reactor : Reactor) (host : String) (port : UInt16)
+    (reusePort : Bool := false) : IO (Socket .listening) := do
+  ensureAlive reactor
+  if host.toUTF8.toList.contains 0 then throw (IO.userError "listen host contains NUL")
+  let token ← checked "reactor listen" (← FFI.Reactor.listen reactor.handle host port (if reusePort then 1 else 0))
+  if token == 0 then throw (IO.userError "reactor listen: null socket token")
+  return ⟨reactor, token⟩
+
+/-- Closing an already-closed phantom state cannot be expressed by a caller. -/
+def Socket.close (socket : Socket state) (_open : state ≠ .closed) : IO (Socket .closed) := do
+  ensureAlive socket.reactor
+  checkedZero "reactor close" (← FFI.Reactor.close socket.reactor.handle socket.token)
+  return ⟨socket.reactor, socket.token⟩
+
+def Buffer.view (buffer : Buffer) : IO ByteArray := do
+  ensureAlive buffer.reactor
+  let (result, bytes) ← FFI.Reactor.buffer buffer.reactor.handle buffer.token
+  checkedZero "reactor buffer view" result
+  return bytes
+
+def Buffer.release (buffer : Buffer) : IO Unit := do
+  ensureAlive buffer.reactor
+  checkedZero "reactor buffer release" (← FFI.Reactor.release buffer.reactor.handle buffer.token)
+
+def withBuffer (buffer : Buffer) (use : Buffer → IO α) : IO α :=
+  try use buffer finally buffer.release
+
+inductive Submission where
+  | queued
+  | wouldBlock
+
+/-- Queue an owned slice. Backpressure preserves the caller's buffer lease. -/
+def Socket.tryWrite (socket : Socket .connected) (buffer : Buffer)
+    (offset length : UInt32) (operation : UInt64 := 0) : IO Submission := do
+  ensureAlive socket.reactor
+  ensureAlive buffer.reactor
+  if socket.reactor.handle != buffer.reactor.handle then
+    throw (IO.userError "write buffer belongs to another reactor")
+  let raw ← FFI.Reactor.write socket.reactor.handle socket.token buffer.token offset length operation
+  let result := LeanNet.Errno.decode raw
+  if result < 0 && (← LeanNet.Errno.isWouldBlock result) then return .wouldBlock
+  checkedZero "reactor queue write" raw
+  return .queued
+
+/-- Convenience for protocols that reserve one native write credit per read. -/
+def Socket.write (socket : Socket .connected) (buffer : Buffer)
+    (offset length : UInt32) (operation : UInt64 := 0) : IO Unit := do
+  match ← socket.tryWrite buffer offset length operation with
+  | .queued => pure ()
+  | .wouldBlock => throw (IO.userError "reactor queue write exhausted reserved credits")
+
+/-- Drain all already-queued writes before closing a peer that half-closed. -/
+def Socket.closeAfterWrites (socket : Socket .connected) : IO Unit := do
+  ensureAlive socket.reactor
+  checkedZero "reactor drain close" (← FFI.Reactor.closeAfterWrites socket.reactor.handle socket.token)
+
+def Reactor.acquire (reactor : Reactor) (minimum : UInt32) : IO Buffer := do
+  ensureAlive reactor
+  let token ← checked "reactor acquire buffer" (← FFI.Reactor.acquire reactor.handle minimum)
+  if token == 0 then throw (IO.userError "reactor acquire: null buffer token")
+  return ⟨reactor, token⟩
+
+def Buffer.copyFrom (buffer : Buffer) (bytes : ByteArray) : IO Unit := do
+  ensureAlive buffer.reactor
+  checkedZero "reactor copy buffer" (← FFI.Reactor.copy buffer.reactor.handle buffer.token bytes)
+
+def Socket.armTimer (socket : Socket .connected)
+    (kind : UInt32) (deadlineMs : UInt64) : IO Unit := do
+  ensureAlive socket.reactor
+  checkedZero "reactor arm timer" (← FFI.Reactor.armTimer socket.reactor.handle socket.token kind deadlineMs)
+
+def Socket.cancelTimer (socket : Socket .connected) (kind : UInt32) : IO Unit := do
+  ensureAlive socket.reactor
+  checkedZero "reactor cancel timer" (← FFI.Reactor.cancelTimer socket.reactor.handle socket.token kind)
+
+inductive Event where
+  | accepted (socket : Socket .connected)
+  | read (socket : Socket .connected) (buffer : Buffer) (offset length : UInt32)
+  | written (socket : SocketId) (operation : UInt64) (count : Nat)
+  | eof (socket : Socket .connected)
+  | timer (socket : Socket .connected) (kind : UInt32)
+  | closed (socket : Socket .closed)
+  | error (token : UInt64) (flags : UInt32) (code : Int)
+  | wake
+
+inductive PollResult where
+  | interrupted
+  | completions (count : Nat)
+
+def Reactor.poll (reactor : Reactor) (timeoutMs : Int32 := -1) : IO PollResult := do
+  ensureAlive reactor
+  let raw ← FFI.Reactor.step reactor.handle timeoutMs
+  let result := LeanNet.Errno.decode raw
+  if result < 0 then
+    if ← LeanNet.Errno.isInterrupted result then return .interrupted
+    throw (← LeanNet.Errno.error "reactor step" result)
+  return .completions result.toNat
+
+/-- Events remain valid only until the next poll. Leases explicitly outlive it. -/
+def Reactor.event (reactor : Reactor) (index : UInt32) : IO Event := do
+  ensureAlive reactor
+  let event ← FFI.Reactor.event reactor.handle index
+  let result := LeanNet.Errno.decode event.result
+  if event.kind == 7 then return .error event.connection event.flags result
+  if result < 0 then throw (← LeanNet.Errno.error "reactor event" result)
+  match event.kind.toNat with
+  | 1 => return .accepted ⟨reactor, event.connection⟩
+  | 2 => return .read ⟨reactor, event.connection⟩ ⟨reactor, event.buffer⟩ event.offset event.length
+  | 3 => return .written ⟨reactor.handle, event.connection⟩ event.operation result.toNat
+  | 4 => return .eof ⟨reactor, event.connection⟩
+  | 5 => return .timer ⟨reactor, event.connection⟩ event.operation.toUInt32
+  | 6 => return .closed ⟨reactor, event.connection⟩
+  | 8 => return .wake
+  | _ => throw (IO.userError "reactor returned an invalid completion kind")
+
+/-- Setup-time reactor collection; each later worker owns one member. -/
+def withReactors (count : Nat) (config : Config) (use : Array Reactor → IO α) : IO α :=
+  go count #[]
+where
+  go (remaining : Nat) (reactors : Array Reactor) : IO α :=
+    match remaining with
+    | 0 => use reactors
+    | n + 1 => withReactor config fun reactor => go n (reactors.push reactor)
+
+structure Group where
+  private mk ::
+  private handle : UInt64
+  private alive : IO.Ref Bool
+
+private def ensureGroup (group : Group) : IO Unit := do
+  unless (← group.alive.get) do throw (IO.userError "reactor group is closed")
+
+def Group.stop (group : Group) : IO Unit := do
+  ensureGroup group
+  checkedZero "reactor group stop" (← FFI.Reactor.groupStop group.handle)
+
+def Group.stopping (group : Group) : IO Bool := do
+  ensureGroup group
+  let value ← checked "reactor group stopping" (← FFI.Reactor.groupStopping group.handle)
+  if value > 1 then throw (IO.userError "invalid reactor group stop result")
+  return value == 1
+
+/-- Workers must be joined before returning from this bracket. -/
+def withGroup (reactors : Array Reactor) (use : Group → IO α) : IO α := do
+  let mut handles := #[]
+  for reactor in reactors do
+    ensureAlive reactor
+    handles := handles.push reactor.handle
+  let handle ← checked "reactor group create" (← FFI.Reactor.groupNew handles)
+  if handle == 0 then throw (IO.userError "reactor group returned a null handle")
+  let group : Group := ⟨handle, ← IO.mkRef true⟩
+  try
+    checkedZero "reactor group install" (← FFI.Reactor.groupInstall handle)
+    let result ← use group
+    checkedZero "reactor group wake" (← FFI.Reactor.groupWakeError handle)
+    return result
+  finally
+    group.alive.set false
+    checkedZero "reactor group free" (← FFI.Reactor.groupFree handle)
+
+/-- One process owns an endpoint while its per-core listeners share SO_REUSEPORT. -/
+def withEndpoint (port : UInt16) (use : IO α) : IO α := do
+  let handle ← checked "reactor endpoint claim" (← FFI.Reactor.endpointAcquire port)
+  if handle == 0 then throw (IO.userError "reactor endpoint claim: null handle")
+  try use finally checkedZero "reactor endpoint release" (← FFI.Reactor.endpointRelease handle)
+
+def cpuCount : IO Nat := do
+  let value ← checked "reactor cpu count" (← FFI.Reactor.cpuCount)
+  if value == 0 then throw (IO.userError "reactor cpu count returned zero")
+  return value.toNat
+
+def nowMs : IO UInt64 := FFI.Reactor.now
+
+end LeanNet.Reactor

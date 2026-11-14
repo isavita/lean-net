@@ -6,6 +6,13 @@ The HTTP server uses a non-blocking poll loop and supports HTTP/1.1 and
 prior-knowledge HTTP/2 over cleartext (h2c) on the same listener. The
 separate `tls/` package adds OpenSSL TLS and ALPN for HTTP/2 and HTTP/1.1.
 
+The expanded production brief is being implemented phase by phase on the
+reactor work branch. [The acceptance ledger](docs/production-roadmap.md) retains
+all pending gates, including h2spec, sustained throughput, and the actual
+24-hour soak. The new native-reactor echo and its ownership model are described
+in [docs/reactor.md](docs/reactor.md); the HTTP/TLS paths still use the previous
+event-loop design until their scheduled migration phases.
+
 ## Build and test
 
 Install the Lean toolchain selected by `lean-toolchain`, then run:

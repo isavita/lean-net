@@ -1,10 +1,7 @@
 import LeanNet.FFI.Errno
+import LeanNet.Socket.State
 
 namespace LeanNet
-
-inductive SocketRole where
-  | listener
-  | connection
 
 inductive ReadOutcome where
   | data (bytes : ByteArray)
@@ -39,7 +36,7 @@ structure ConnectionTransport where
   close : IO Unit
 
 /-- A socket's role is tracked statically. Its constructor is not public. -/
-structure Socket (role : SocketRole) where
+structure Socket (state : SocketState) where
   private mk ::
   private fd : Int64
   private identity : Nat
@@ -48,24 +45,24 @@ structure Socket (role : SocketRole) where
 
 private initialize nextSocketIdentity : IO.Ref Nat ← IO.mkRef 0
 
-private def newSocket (fd : Int64) : IO (Socket role) := do
+private def newSocket (fd : Int64) : IO (Socket state) := do
   let identity ← nextSocketIdentity.get
   nextSocketIdentity.set (identity + 1)
   return ⟨fd, identity, ← IO.mkRef true, ← IO.mkRef none⟩
 
-private def ensureOpen (socket : Socket role) : IO Unit := do
+private def ensureOpen (socket : Socket state) : IO Unit := do
   unless (← socket.alive.get) do
     throw (IO.userError "socket is closed (library bug)")
 
-abbrev Listener := Socket .listener
-abbrev Connection := Socket .connection
+abbrev Listener := Socket .listening
+abbrev Connection := Socket .connected
 
 private def checkResult (operation : String) (value : UInt64) : IO Int := do
   let result := Errno.decode value
   if result < 0 then throw (← Errno.error operation result)
   return result
 
-private def closeSocket (socket : Socket role) : IO Unit := do
+private def closeSocket (socket : Socket state) (_open : state ≠ .closed) : IO Unit := do
   ensureOpen socket
   -- Mark dead before calling close; even a failing close must never be retried.
   socket.alive.set false
@@ -78,19 +75,24 @@ private def closeSocket (socket : Socket role) : IO Unit := do
     let _ ← checkResult "close" result
     pure ()
 
+/-- The closed state cannot supply the proof required for another close. -/
+def Socket.close (socket : Socket state) (isOpen : state ≠ .closed) : IO (Socket .closed) := do
+  closeSocket socket isOpen
+  return ⟨socket.fd, socket.identity, socket.alive, socket.transport⟩
+
 /-- Closes the listener when the callback exits, including when it throws.
     Callbacks must not retain the handle beyond the scope of this bracket. -/
 def withListener (host : String) (port : UInt16) (use : Listener → IO α) : IO α := do
   let result ← checkResult "listen" (← FFI.rawTcpListen host port)
   let listener : Listener ← newSocket (Int64.ofInt result)
-  try use listener finally closeSocket listener
+  try use listener finally closeSocket listener (by decide)
 
 /-- Own an accepted connection for the duration of the callback.
     The caller must pass each connection to this bracket once and must not use
     or retain it after the callback exits; Lean does not enforce affine ownership. -/
 def withConnection (connection : Connection) (use : Connection → IO α) : IO α := do
   ensureOpen connection
-  try use connection finally closeSocket connection
+  try use connection finally closeSocket connection (by decide)
 
 namespace Listener
 
@@ -250,7 +252,7 @@ private def verifiedPeerFailure (result : Int) : IO Bool :=
     FFI.errnoEtimedout, FFI.errnoEnetreset, FFI.errnoEnetdown, FFI.errnoEnetunreach,
     FFI.errnoEhostunreach, FFI.errnoEconnrefused, FFI.errnoEnotconn]
 
-private def setSocketNonblocking (socket : Socket role) : IO Unit := do
+private def setSocketNonblocking (socket : Socket state) : IO Unit := do
   ensureOpen socket
   let _ ← checkResult "set nonblocking" (← FFI.setNonblocking socket.fd 1)
   pure ()
@@ -266,7 +268,7 @@ def ConnectionPool.close (pool : ConnectionPool) (connection : Connection) : IO 
     throw (IO.userError "close: connection is not owned by pool (library bug)")
   -- Remove before close: close is never retried, even if the syscall fails.
   pool.active.set (active.filter (fun c => c.identity != connection.identity))
-  closeSocket connection
+  closeSocket connection (by decide)
 
 def ConnectionPool.accept (pool : ConnectionPool) (listener : Listener) : IO AcceptOutcome := do
   ensurePoolOpen pool
@@ -299,7 +301,7 @@ private def closePool (pool : ConnectionPool) : IO Unit := do
   pool.active.set #[]
   let mut firstError : Option IO.Error := none
   for connection in active do
-    try closeSocket connection
+    try closeSocket connection (by decide)
     catch error =>
       if firstError.isNone then firstError := some error
   if let some error := firstError then throw error
