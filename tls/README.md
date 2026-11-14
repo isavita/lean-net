@@ -10,7 +10,8 @@ ALPN prefers `h2`, then `http/1.1`; clients without ALPN use HTTP/1.1. An offere
 list without either protocol fails negotiation. TLS 1.2 is the minimum, server
 cipher preference is enabled, and compression and renegotiation are disabled.
 The negotiated protocol selects its parser; an h2 connection must still send
-its HTTP/2 preface. The HTTP/2 machine's full production migration remains open.
+its HTTP/2 preface. The pure HTTP/2 machine is integrated with this transport;
+phase 4 acceptance and the later production gates remain open.
 
 Install OpenSSL development headers/libraries (1.1.1 or newer) and `pkg-config`.
 Windows builds use MinGW GCC and matching OpenSSL import libraries/DLLs. On
@@ -28,6 +29,8 @@ Serve the default route with a PEM chain and matching unencrypted PEM key:
 ```sh
 ./tls/.lake/build/bin/lean-net-tls /path/to/cert-chain.pem /path/to/private-key.pem 8443
 curl --cacert /path/to/ca.pem --http2 https://localhost:8443/
+# To enable the optional demo push when the peer permits it:
+# ./tls/.lake/build/bin/lean-net-tls /path/to/cert-chain.pem /path/to/private-key.pem --enable-push 8443
 ```
 
 The executable binds `127.0.0.1` and starts one HTTP reactor per available core.
@@ -59,8 +62,9 @@ Handshake and TLS shutdown have absolute deadlines. Orderly closes send
 `close_notify`, await peer notification within the bound, then close the native
 connection. Fatal alerts drain before peer-error cleanup. SIGINT stops admission
 and attempts bounded TLS notification before joining all native TLS threads and
-freeing reactor resources. Full HTTP/2 GOAWAY and application stream draining
-remain part of production hardening.
+freeing reactor resources. The HTTP/2 machine performs a bounded GOAWAY and
+stream drain before TLS shutdown. Remaining graceful shutdown and production
+acceptance gates are tracked in the roadmap.
 
 The older explicit `Context`/`Session` API remains available for compatibility;
 public server entry points use the native worker transport. The legacy Windows

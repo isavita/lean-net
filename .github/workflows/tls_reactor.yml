@@ -81,7 +81,7 @@ jobs:
           echo "PYTHONPATH=$RUNNER_TEMP/lean-net-http2-test-deps" >> "$GITHUB_ENV"
       - name: Build public TLS APIs and native fixtures
         run: |
-          lake build lean-net-http2-reactor-fixture
+          lake build lean-net-http1 lean-net-http2-reactor-fixture
           lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture
       - name: Context ownership and policy sanitizers
         if: runner.os != 'Windows'
@@ -95,3 +95,5 @@ jobs:
         run: lake env ${{ matrix.python }} tls/test/test_tls_reactor.py -v
       - name: HTTP/2 frame isolation, priorities, push and TLS acceptance
         run: lake env ${{ matrix.python }} test/test_http2_reactor.py -v
+      - name: Public HTTP/2 CLI push acceptance
+        run: lake env ${{ matrix.python }} test/test_http2_cli.py -v

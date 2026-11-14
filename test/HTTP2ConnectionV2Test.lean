@@ -335,6 +335,29 @@ private def pushAndDrain : IO Unit := do
   let (c, _) ← ok (late.connection.queueResponse 1 {})
   check (c.drainComplete && c.isClosed) "graceful drain did not complete"
 
+private def peerGoAwayControlLiveness : IO Unit := do
+  for code in #[0, 255] do
+    let c ← connect { enablePush := true }
+    let received ← send c ⟨7, 0, 0, (b32 0).append (b32 code)⟩
+    check (received.connection.draining && !received.connection.drainComplete &&
+      !received.connection.isClosed && !received.connection.canPush) "peer-only GOAWAY prematurely closes an idle connection"
+    let ping := filled 8 80
+    let answered ← send received.connection ⟨6, 0, 0, ping⟩
+    let output ← frames (flatten answered.output)
+    check (output.size == 1 && output[0]!.kind == 6 && output[0]!.flags == 1 &&
+      output[0]!.payload == ping && !answered.connection.drainComplete) "PING after peer GOAWAY was not acknowledged on a live connection"
+    let (_, block) ← hp (HPACK.encode HPACK.Context.new head)
+    let rejected ← send answered.connection ⟨1, 5, 1, block⟩
+    let output ← frames (flatten rejected.output)
+    check (rejected.requests.isEmpty && output.size == 1 && output[0]!.kind == 3 &&
+      output[0]!.payload == b32 7 && !rejected.connection.drainComplete) "peer-GOAWAY draining policy accepted a new request or closed control traffic"
+    let ended := rejected.connection.finish
+    let output ← frames (flatten ended.output)
+    check (ended.error.isNone && ended.connection.drainComplete && ended.connection.isClosed &&
+      output.any (fun frame => frame.kind == 7 && frame.payload.extract 4 8 == b32 0)) "peer EOF after GOAWAY did not complete the drain with our own GOAWAY"
+    let (locallyDraining, output) ← ok received.connection.beginGoAway
+    check (locallyDraining.drainComplete && locallyDraining.isClosed && (← frames output).any (fun frame => frame.kind == 7)) "local GOAWAY did not finish an empty peer drain"
+
 private def responseAndEOF : IO Unit := do
   let date := "Sun, 06 Nov 1994 08:49:37 GMT".toUTF8
   let c ← requests ((← connect).setDate date) #[head]
@@ -394,5 +417,6 @@ def main : IO Unit := do
   receiveCreditThresholds
   scheduling
   pushAndDrain
+  peerGoAwayControlLiveness
   responseAndEOF
   IO.println "HTTP/2 connection V2 tests passed"

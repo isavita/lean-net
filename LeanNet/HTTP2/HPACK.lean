@@ -382,7 +382,7 @@ def huffmanDecode (input : ByteArray) (maxBytes : Nat := 65536) : Except String 
   let mut tailBits := 0
   for byte in input do
     for index in [:8] do
-      let bit := (byte.toNat / 2 ^ (7 - index)) % 2
+      let bit := ((byte >>> UInt8.ofNat (7 - index)) &&& 1).toNat
       let current := huffmanTree[node]!
       node := if bit == 0 then current.zero else current.one
       if node == 0 then throw "invalid Huffman code"

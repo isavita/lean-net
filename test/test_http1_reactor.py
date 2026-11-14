@@ -569,6 +569,119 @@ class Deadlines(ServerCase, unittest.TestCase):
                 # reset the connection while discarding that unread input.
                 pass
 
+    def test_absolute_write_deadline_survives_trickled_completions(self):
+        # Four existing 2 MiB responses exceed ordinary TCP send buffers while
+        # staying within the driver's declared output bounds. A single response
+        # can fit entirely in an autotuned kernel send buffer on some platforms.
+        response_size = 2 * 1024 * 1024
+        slow = socket.socket()
+        slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+        slow.settimeout(1)
+        slow.connect((HOST, self.port))
+        with slow:
+            started = time.monotonic()
+            slow.sendall(b"GET /large HTTP/1.1\r\nHost: x\r\n\r\n" * 4)
+            received = bytearray()
+            admission_checked = False
+            terminated = False
+            trickle_deadline = started + 3.25
+            while time.monotonic() < trickle_deadline:
+                slow.settimeout(max(.001, min(.2, trickle_deadline - time.monotonic())))
+                try:
+                    part = slow.recv(16384)
+                except socket.timeout:
+                    part = None
+                except ConnectionResetError:
+                    self.assertGreaterEqual(time.monotonic() - started, 2.9,
+                                            "blocked writer reset before its absolute deadline")
+                    terminated = True
+                    break
+                if part == b"":
+                    # Small kernel queues can finish draining during the final
+                    # trickle after the configured 3s timer has already fired.
+                    self.assertGreaterEqual(time.monotonic() - started, 2.9,
+                                            "blocked writer closed before its absolute deadline")
+                    terminated = True
+                    break
+                if part:
+                    received.extend(part)
+                    self.assertLess(len(received), response_size, "trickle consumed the entire blocked response")
+                if not admission_checked and time.monotonic() - started >= .7:
+                    # maxClients=1 must still be occupied before the deadline;
+                    # otherwise this host did not exercise blocked native writes.
+                    try:
+                        with socket.create_connection((HOST, self.port), timeout=.2) as probe:
+                            probe.settimeout(.15)
+                            probe.sendall(GET)
+                            try:
+                                available = probe.recv(1)
+                            except (socket.timeout, ConnectionResetError):
+                                available = b""
+                            self.assertFalse(available, "pipeline fit in kernel buffers; no blocked writer to test")
+                    except OSError:
+                        pass
+                    admission_checked = True
+                time.sleep(.05)
+            self.assertTrue(admission_checked)
+            self.assertGreater(len(received), 4096, "trickle did not permit partial write progress")
+            # Check admission before draining the slow socket: progress from the
+            # test's fast final reads must not be what frees the old client slot.
+            health_deadline = started + 4.25
+            with socket.create_connection((HOST, self.port), timeout=.7) as healthy:
+                healthy.settimeout(max(.01, health_deadline - time.monotonic()))
+                healthy.sendall(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                reader = Reader(healthy)
+                self.assertEqual(reader.response().body, b"ok")
+                reader.eof()
+            self.assertLess(time.monotonic(), health_deadline,
+                            "write deadline was restarted by trickled completions")
+            slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+            drain_deadline = time.monotonic() + 3
+            while not terminated:
+                remaining = drain_deadline - time.monotonic()
+                self.assertGreater(remaining, 0, "timed-out writer did not reach bounded termination")
+                slow.settimeout(remaining)
+                try:
+                    part = slow.recv(65536)
+                except ConnectionResetError:
+                    self.assertGreaterEqual(time.monotonic() - started, 2.9,
+                                            "writer reset before its absolute deadline")
+                    terminated = True
+                    break
+                if not part:
+                    terminated = True
+                    break
+                received.extend(part)
+                self.assertLess(len(received), 4 * response_size,
+                                "all response bodies completed despite the blocked write deadline")
+            # A deadline abort may end with FIN or RST. Parse all bytes that
+            # survived either termination without changing graceful EOF checks.
+            class CapturedEnd:
+                def recv(self, _size):
+                    return b""
+            reader = Reader(CapturedEnd())
+            reader.buffer = received
+            complete = 0
+            truncated = False
+            for _ in range(4):
+                try:
+                    response = reader.response()
+                except AssertionError as error:
+                    if str(error) == "premature EOF in body":
+                        self.assertEqual(reader.buffer, b"A" * len(reader.buffer))
+                    elif str(error) == "premature EOF before delimiter":
+                        prefix = bytes(reader.buffer)
+                        self.assertTrue(not prefix or b"HTTP/1.1 200 ".startswith(prefix) or
+                                        prefix.startswith(b"HTTP/1.1 200 "), "invalid partial response header")
+                    else:
+                        raise
+                    truncated = True
+                    break
+                self.assertEqual((response.status, response.body), (200, b"A" * response_size))
+                complete += 1
+            self.assertTrue(truncated, "write timeout did not truncate the blocked pipeline")
+            self.assertLess(complete, 4)
+
 
 class FoldPolicy(ServerCase, unittest.TestCase):
     mode = "fold"

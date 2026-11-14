@@ -2,7 +2,8 @@
 
 A Lean 4 TCP and HTTP library under development. TCP echo and cleartext HTTP use
 the native epoll/kqueue/IOCP reactor. HTTP/1.0 and HTTP/1.1 use a pure connection
-machine; the listener also preserves prior-knowledge HTTP/2 (h2c). The separate
+machine; a pure HTTP/2 action machine serves prior-knowledge HTTP/2 (h2c) and
+negotiated TLS connections. The separate
 `tls/` package uses dedicated native TLS workers connected to the reactor by
 bounded queues. TLS acceptance is tracked separately from the remaining HTTP/2
 and production gates.
@@ -13,7 +14,9 @@ all pending gates, including h2spec, sustained throughput, and the actual
 24-hour soak. The new native-reactor echo and its ownership model are described
 in [docs/reactor.md](docs/reactor.md). The HTTP machine, advanced handlers and
 transport boundaries are documented in [docs/http1-machine.md](docs/http1-machine.md).
-The full HTTP/2 migration and production conformance gates remain open.
+See [docs/http2-machine.md](docs/http2-machine.md) for HTTP/2 configuration,
+priority scheduling, push and draining. Phase 4 acceptance remains pending;
+static files and production hardening remain open in phases 5 and 6.
 
 ## Build and test
 
@@ -31,10 +34,14 @@ lake env lean --run test/HTTP1EncodingTest.lean
 lake env lean --run test/HTTP1MachineTest.lean
 lake env lean --run test/HTTP2PrefaceTest.lean
 lake env lean --run test/HTTP2FrameTest.lean
+lake env lean --run test/HTTP2FrameV2Test.lean
+lake env lean --run test/PriorityTest.lean
+lake env lean --run test/HTTP2MachineTest.lean
 lake env lean --run test/HPACKTest.lean
 lake env lean --run test/HTTP2RequestTest.lean
 lake env lean --run test/HTTP2StreamTest.lean
 lake env lean --run test/HTTP2ConnectionTest.lean
+lake env lean --run test/HTTP2ConnectionV2Test.lean
 python3 test/test_echo.py -v
 python3 test/test_http1_server.py -v
 .lake/build/bin/lean-net-event-ffi-test
@@ -60,6 +67,8 @@ The acceptance suite uses loopback sockets and checks descriptor counts using
 # In another terminal:
 # curl -v --http1.1 http://localhost:8080/
 # curl -v --http2-prior-knowledge http://localhost:8080/
+# Optional demo push (off by default; the peer must also permit it):
+# .lake/build/bin/lean-net-http1 --enable-push 8080
 ```
 
 The native reactor has additional ownership, concurrency and allocation checks:
@@ -127,7 +136,8 @@ and should not block. Responses have explicit framing and a per-worker cached
 Date header. The default router serves `/`.
 
 HTTP/2 supports request multiplexing, HPACK with static and dynamic tables
-and Huffman coding, and stream and connection flow control. It does not
+and Huffman coding, stream and connection flow control, RFC 9218 priorities,
+and optional push. It does not
 implement HTTP/1.1 Upgrade to h2c; use prior knowledge for cleartext. For
 TLS setup, certificate requirements, and verified-client tests, see
 [tls/README.md](tls/README.md).

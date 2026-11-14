@@ -46,6 +46,7 @@ class Peer:
         self.sock.connect(("127.0.0.1", port))
         self.sock.settimeout(3)
         self.buffer = b""
+        self.server_settings = {}
         payload = b"" if initial_window is None else struct.pack(">HI", 4, initial_window)
         self.sock.sendall(PREFACE + frame(4, payload=payload))
         settings = ack = False
@@ -57,6 +58,11 @@ class Peer:
                 if flags & 1:
                     ack = True
                 else:
+                    if len(payload) % 6:
+                        raise AssertionError("invalid server SETTINGS payload")
+                    for offset in range(0, len(payload), 6):
+                        key, value = struct.unpack(">HI", payload[offset:offset + 6])
+                        self.server_settings[key] = value
                     settings = True
                     self.sock.sendall(frame(4, 1))
 
@@ -170,21 +176,63 @@ class H2EndToEnd(ServerHarness):
 
     def test_large_binary_upload_and_response_flow_control(self):
         peer = self.peer()
-        payload = bytes(range(256)) * 600
+        payload = bytes(range(256)) * 4096
+        connection_credit = 65535
+        stream_credit = peer.server_settings.get(4, 65535)
+        self.assertLessEqual(stream_credit, 0x7fffffff)
         peer.sock.sendall(headers(1, b"/echo", b"POST", False))
-        for offset in range(0, len(payload), 8192):
-            chunk = payload[offset:offset + 8192]
-            end = offset + len(chunk) == len(payload)
-            peer.sock.sendall(frame(0, 1 if end else 0, 1, chunk))
-            credits = set()
-            while credits != {0, 1}:
-                kind, _, sid, data = peer.read()
+        offset = 0
+        while offset < len(payload):
+            # Consumed-byte updates can be batched and need not arrive in pairs.
+            # Spend existing credit before waiting, including a final short frame.
+            while min(connection_credit, stream_credit) <= 0:
+                kind, flags, sid, data = peer.read()
                 if kind == 7:
                     self.fail(f"unexpected GOAWAY {data.hex()}")
-                if kind == 8 and sid in (0, 1):
-                    self.assertEqual(int.from_bytes(data, "big"), len(chunk))
-                    credits.add(sid)
+                if kind == 3:
+                    self.fail(f"unexpected RST_STREAM {sid}: {data.hex()}")
+                if kind == 8:
+                    self.assertEqual(len(data), 4)
+                    increment = int.from_bytes(data, "big") & 0x7fffffff
+                    self.assertGreater(increment, 0)
+                    self.assertIn(sid, (0, 1))
+                    if sid == 0:
+                        connection_credit += increment
+                        self.assertLessEqual(connection_credit, 0x7fffffff)
+                    else:
+                        stream_credit += increment
+                        self.assertLessEqual(stream_credit, 0x7fffffff)
+                elif kind == 4:
+                    self.assertEqual(sid, 0)
+                    self.assertEqual(len(data) % 6, 0)
+                    if flags & 1:
+                        self.assertEqual(data, b"")
+                    else:
+                        for setting_offset in range(0, len(data), 6):
+                            key, value = struct.unpack(">HI", data[setting_offset:setting_offset + 6])
+                            if key == 4:
+                                self.assertLessEqual(value, 0x7fffffff)
+                                stream_credit += value - peer.server_settings.get(4, 65535)
+                            peer.server_settings[key] = value
+                        peer.sock.sendall(frame(4, 1))
+                elif kind == 6:
+                    self.assertEqual((sid, len(data)), (0, 8))
+                    if not flags & 1:
+                        peer.sock.sendall(frame(6, 1, payload=data))
+                elif kind in (0, 1, 9):
+                    self.fail("echo response arrived before upload END_STREAM")
+            size = min(8192, len(payload) - offset, connection_credit, stream_credit)
+            chunk = payload[offset:offset + size]
+            offset += size
+            connection_credit -= len(chunk)
+            stream_credit -= len(chunk)
+            peer.sock.sendall(frame(0, 1 if offset == len(payload) else 0, 1, chunk))
+        # END_STREAM can omit stream credit; receiving the complete binary echo
+        # and then another response is the progress and connection-health proof.
+        self.assertEqual(len(payload), 1024 * 1024)
         self.assertEqual(peer.response(1), payload)
+        peer.sock.sendall(headers(3))
+        self.assertEqual(peer.response(3), b"\x00\xff\r\nA")
 
     def test_zero_stream_window_blocks_data_but_not_ping_or_other_stream(self):
         peer = self.peer(initial_window=0)
@@ -357,9 +405,41 @@ class H2EndToEnd(ServerHarness):
 
     def test_sigint_closes_active_h2_connection(self):
         peer = self.peer()
+        # Ensure the peer's SETTINGS ACK has been processed before shutdown,
+        # so unread setup bytes cannot turn a graceful close into a TCP reset.
+        peer.sock.sendall(frame(6, payload=b"stopping"))
+        self.assertEqual(peer.read(), (6, 1, 0, b"stopping"))
+        deadline = time.monotonic() + 3
         self.server.send_signal(signal.SIGINT)
-        self.assertEqual(self.server.wait(timeout=3), 0)
-        self.assertEqual(peer.sock.recv(1), b"")
+        received = bytearray(peer.buffer)
+        peer.buffer = b""
+        while True:
+            remaining = deadline - time.monotonic()
+            self.assertGreater(remaining, 0, "shutdown did not reach bounded EOF")
+            peer.sock.settimeout(remaining)
+            data = peer.sock.recv(65536)
+            if not data:
+                break
+            received.extend(data)
+            self.assertLessEqual(len(received), 65536, "unbounded shutdown output")
+        offset = 0
+        goaways = 0
+        while offset < len(received):
+            self.assertGreaterEqual(len(received) - offset, 9, "truncated shutdown frame header")
+            header = received[offset:offset + 9]
+            length = int.from_bytes(header[:3], "big")
+            self.assertLessEqual(offset + 9 + length, len(received), "truncated shutdown frame payload")
+            data = received[offset + 9:offset + 9 + length]
+            self.assertEqual((header[3], header[4], int.from_bytes(header[5:9], "big") & 0x7fffffff), (7, 0, 0))
+            self.assertGreaterEqual(len(data), 8)
+            last_stream, code = struct.unpack(">II", data[:8])
+            self.assertEqual(last_stream & 0x7fffffff, 0)
+            self.assertEqual(code, 0, "shutdown GOAWAY was not NO_ERROR")
+            goaways += 1
+            offset += 9 + length
+        self.assertGreater(goaways, 0, "shutdown omitted GOAWAY")
+        self.assertEqual(offset, len(received))
+        self.assertEqual(self.server.wait(timeout=max(0.1, deadline - time.monotonic())), 0)
 
 
 class CurlH2EndToEnd(ServerHarness):

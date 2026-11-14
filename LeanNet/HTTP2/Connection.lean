@@ -424,7 +424,7 @@ private def receiveHeaders (connection : Connection) (frame : Frame) :
       let pending := connection.pendingPriorities.filter (fun p => p.1 >= id)
       let otherPriorities := pending.filter (fun p => p.1 != id)
       if activeRequests connection + otherPriorities.size >= connection.config.maxConcurrentStreams ||
-          connection.localGoAway.isSome || connection.inputEnded then reject := some .refusedStream
+          connection.localGoAway.isSome || connection.peerGoAway || connection.inputEnded then reject := some .refusedStream
       connection := { connection with highestStream := id, pendingPriorities := pending }
       let entry : Exchange := { stream, startedAt := connection.now }
       connection := { connection with streams := connection.streams.push entry }
@@ -837,8 +837,10 @@ def Connection.beginGoAway (connection : Connection) (code : ErrorCode := .noErr
 def Connection.draining (connection : Connection) : Bool :=
   connection.localGoAway.isSome || connection.peerGoAway || connection.inputEnded
 
+/-- A peer GOAWAY stops new work but keeps control traffic live until peer EOF,
+    idle timeout, or our own GOAWAY. Closing immediately can reset unread PINGs. -/
 def Connection.drainComplete (connection : Connection) : Bool :=
-  connection.draining && connection.streams.isEmpty
+  (connection.localGoAway.isSome || connection.inputEnded) && connection.streams.isEmpty
 
 def Connection.isClosed (connection : Connection) : Bool :=
   connection.failure.isSome || connection.drainComplete

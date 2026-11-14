@@ -173,9 +173,9 @@ private def Driver.syncWriteTimer (driver : Driver) (id : Reactor.SocketId) : IO
     return
   let state ← driver.state.get
   let some client := state.clients[id]? | return
-  let mut earliest : Option UInt64 := none
-  for output in client.outputs do
-    earliest := some (min (earliest.getD output.started) output.started)
+  -- Outputs are appended in monotonic start order. Only the queue head can
+  -- precede an in-flight write; walking every queued response adds no evidence.
+  let mut earliest := client.outputs.head?.map (·.started)
   for slot in state.slots do
     if let some flight := slot.flight then
       if flight.owner == id then
@@ -225,7 +225,9 @@ private def Driver.appendOutput (driver : Driver) (id : Reactor.SocketId)
   if parts.isEmpty then return
   let output : Output := { parts := parts.toList, id := outputId, barrier, started := ← driver.now }
   driver.put id { client with outputs := client.outputs ++ [output], outputBytes := client.outputBytes + bytes }
-  driver.syncWriteTimer id
+  -- Appending newer output cannot move an existing absolute deadline. Start
+  -- the timer only on the transition from no pending writes to pending writes.
+  if client.writeDeadline.isNone then driver.syncWriteTimer id
 
 private def Driver.beginDrain (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
   let some client ← driver.client? id | return
@@ -325,7 +327,8 @@ private def Driver.flushOne (driver : Driver) (id : Reactor.SocketId) : IO Bool 
       let some client ← driver.client? id | return true
       if let .http1 machine := client.protocol then
         driver.applyStep id (machine.outputAccepted outputId)
-  driver.syncWriteTimer id
+  -- The lease retains output.started until its completion. Moving bytes from
+  -- the queue to a lease therefore leaves the earliest deadline unchanged.
   if let some client ← driver.client? id then
     if client.closeWhenQueued && client.outputs.isEmpty then driver.beginDrain id
   return true
@@ -337,15 +340,46 @@ private def Driver.startRequest (driver : Driver) (id : Reactor.SocketId) (start
     client.socket.armTimer 1 value
     driver.put id { client with requestDeadline := some value }
 
-private partial def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
+-- Small control/header frames share a native 4 KiB lease. Keep larger owned
+-- payloads intact so this does not introduce a second full DATA-body copy.
+private def coalesceH2Output (parts : Array ByteArray) : Array ByteSlice := Id.run do
+  let mut result := #[]
+  let mut pending := ByteArray.empty
+  for part in parts do
+    if part.isEmpty then continue
+    if part.size >= 4096 then
+      if !pending.isEmpty then result := result.push (ByteSlice.full pending)
+      pending := ByteArray.empty
+      result := result.push (ByteSlice.full part)
+    else if pending.size + part.size <= 4096 then
+      pending := if pending.isEmpty then part else pending ++ part
+    else
+      result := result.push (ByteSlice.full pending)
+      pending := part
+  if !pending.isEmpty then result := result.push (ByteSlice.full pending)
+  return result
+
+private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
     (step : HTTP2.Machine.Step) : IO Unit := do
   let some client ← driver.client? id | return
   driver.put id { client with protocol := .http2 step.state, kick := true }
-  for action in step.actions do
+  let mut actions := step.actions
+  let mut output := #[]
+  let mut bytes := 0
+  let mut close := false
+  while !actions.isEmpty do
+    let action :: rest := actions | break
+    actions := rest
     let some client ← driver.client? id | return
     match action with
-    | .write parts => driver.appendOutput id (parts.map ByteSlice.full)
-    | .drainClose => driver.beginDrain id
+    | .write parts =>
+      let count := parts.foldl (fun total part => total + part.size) 0
+      if count > driver.config.maxOutputBytes - client.outputBytes - bytes then
+        driver.closeNow id
+        return
+      bytes := bytes + count
+      output := output ++ parts
+    | .drainClose => close := true
     | .request event =>
       let .http2 machine := client.protocol | return
       if !machine.canRespond event.streamId then continue
@@ -356,7 +390,15 @@ private partial def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
         else pure #[]
       let some current ← driver.client? id | return
       let .http2 machine := current.protocol | return
-      driver.applyH2Step id (machine.respond event.streamId (limitedReply driver.config reply) pushes)
+      let response := machine.respond event.streamId (limitedReply driver.config reply) pushes
+      driver.put id { current with protocol := .http2 response.state, kick := true }
+      actions := response.actions ++ actions
+  let parts := coalesceH2Output output
+  -- Preserve the generic queue's per-ticket part bound for custom large
+  -- configurations without changing wire order or HTTP/1 output barriers.
+  for start in [:parts.size:4096] do
+    driver.appendOutput id (parts.extract start (min parts.size (start + 4096)))
+  if close then driver.beginDrain id
 
 private def Driver.failH2 (driver : Driver) (id : Reactor.SocketId)
     (machine : HTTP2.Machine.State) (error : HTTP2.ProtocolError) : IO Unit :=

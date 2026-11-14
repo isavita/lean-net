@@ -321,6 +321,28 @@ class HTTP2Acceptance(ServerCase, unittest.TestCase):
         self.assertEqual(bytes(peer.bodies[3]), BINARY)
         self.assertFalse(peer.resets)
 
+    def test_peer_goaway_and_split_ping_keep_control_frames_live(self):
+        # Peer-only GOAWAY keeps connection-control frames live until EOF or
+        # local shutdown. Require the ACK even though h2spec also permits EOF.
+        for mode in ("split", "coalesced"):
+            for code in (0, 255):
+                for attempt in range(10):
+                    with self.subTest(mode=mode, code=code, attempt=attempt):
+                        peer = self.peer()
+                        try:
+                            goaway = frame(7, payload=struct.pack(">II", 0, code) + b"h2spec")
+                            ping = frame(6, payload=b"h2spec\0\0")
+                            if mode == "split":
+                                peer.send(goaway); peer.send(ping)
+                            else:
+                                peer.send(goaway + ping)
+                            peer.until(lambda: any(current.kind == 6 and current.flags & 1 and
+                                                   current.payload == b"h2spec\0\0" for current in peer.frames))
+                            peer.request(1); self.assert_rst(peer, 1, 7)
+                            peer.ping_barrier(b"afterrst")
+                        finally:
+                            peer.close()
+
     def test_connection_cycles_release_native_resources(self):
         for _ in range(8):
             peer = self.peer(); peer.request(1); peer.response(1); peer.close()
@@ -491,6 +513,25 @@ class FourWorkers(ServerCase, unittest.TestCase):
 
 
 class TLSMatrixAcceptance(tls_cases.ServerCase, unittest.TestCase):
+    def test_verified_tls_peer_goaway_keeps_control_frames_live(self):
+        for mode in ("split", "coalesced"):
+            for code in (0, 255):
+                with self.subTest(mode=mode, code=code):
+                    sock = self.connect(tls_context(self.certificates, ["h2"]))
+                    peer = H2Client(sock=sock, authority=NAMES[0].encode(), scheme=b"https")
+                    try:
+                        self.assertEqual(sock.selected_alpn_protocol(), "h2")
+                        goaway = frame(7, payload=struct.pack(">II", 0, code))
+                        ping = frame(6, payload=b"h2spec\0\0")
+                        if mode == "split":
+                            peer.send(goaway); peer.send(ping)
+                        else:
+                            peer.send(goaway + ping)
+                        peer.until(lambda: any(current.kind == 6 and current.flags & 1 and
+                                               current.payload == b"h2spec\0\0" for current in peer.frames))
+                    finally:
+                        peer.close()
+
     def test_verified_tls12_http2_required_cipher_and_p256(self):
         ctx = tls_context(self.certificates, ["h2"], version=ssl.TLSVersion.TLSv1_2)
         ctx.set_ciphers("ECDHE-RSA-AES128-GCM-SHA256")

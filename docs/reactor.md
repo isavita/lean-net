@@ -67,9 +67,11 @@ under `test/benchmarks`. This does not imply linear multicore throughput scaling
 
 The hashed timer wheel has eight timer kinds per connection and a configurable
 tick. Timers are one-shot completion events and do not allocate one kernel timer
-per connection. HTTP/1 uses this reactor through its pure action machine; TLS
-uses dedicated native workers and the same HTTP controller. The current HTTP/2
-adapter retains its previous pure connection machine pending phase four.
+per connection. HTTP/1 and HTTP/2 use this reactor through their pure action
+machines; TLS uses dedicated native workers and the same HTTP controller. The
+HTTP/2 driver handles bounded input and output, stream scheduling and GOAWAY
+draining; see [http2-machine.md](http2-machine.md). Phase 4 acceptance remains
+pending, and phases 5 and 6 remain open.
 
 Read batches preserve owner backpressure: POSIX yields after sixteen reads or
 64 KiB from a peer; IOCP returns a positive read before reposting that peer's
