@@ -13,13 +13,14 @@ The negotiated protocol selects its parser; an h2 connection must still send
 its HTTP/2 preface. The pure HTTP/2 machine is integrated with this transport;
 phase 4 passed acceptance, with static files and production hardening still open.
 
-Install OpenSSL development headers/libraries (1.1.1 or newer) and `pkg-config`.
-Windows builds use MinGW GCC and matching OpenSSL import libraries/DLLs. On
+Install OpenSSL development headers/libraries (1.1.1 or newer), zlib, Brotli and
+`pkg-config`. Windows builds use MinGW GCC and matching codec/OpenSSL import libraries/DLLs. On
 macOS, select the intended OpenSSL package explicitly:
 
 ```sh
-PKG_CONFIG_PATH=/opt/homebrew/opt/openssl@3/lib/pkgconfig \
-  lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture
+brew install openssl@3 zlib brotli pkgconf
+export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture
 python3 tls/test/test_tls.py -v
 python3 tls/test/test_tls_reactor.py -v
 ```
@@ -31,7 +32,16 @@ Serve the default route with a PEM chain and matching unencrypted PEM key:
 curl --cacert /path/to/ca.pem --http2 https://localhost:8443/
 # To enable the optional demo push when the peer permits it:
 # ./tls/.lake/build/bin/lean-net-tls /path/to/cert-chain.pem /path/to/private-key.pem --enable-push 8443
+# Or serve an immutable directory snapshot with an 8 MiB packed/resident budget:
+# ./tls/.lake/build/bin/lean-net-tls /path/to/cert-chain.pem /path/to/private-key.pem 8443 --static ./public --static-memory 8
 ```
+
+`ReactorServer.serveStaticRoot root tlsConfig catalogConfig httpConfig host port`
+provides the corresponding library API. Catalog preparation and compression
+finish before listening. TLS workers copy resident file bytes into OpenSSL
+off the reactor loop; Linux also uses a preallocated splice pipe. This path is
+not zero-copy TLS. The [static-file guide](../docs/static-files.md) explains
+locked-memory limits, ranges, validators, encodings and explicit ownership.
 
 The executable binds `127.0.0.1` and starts one HTTP reactor per available core.
 `Server.serveWithConfig` preserves single-worker ownership of a supplied Router.

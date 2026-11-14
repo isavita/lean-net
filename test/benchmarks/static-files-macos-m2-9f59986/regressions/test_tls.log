@@ -1,0 +1,33 @@
+test_certificate_and_hostname_verification_failures_do_not_kill_server (__main__.TLSAcceptance.test_certificate_and_hostname_verification_failures_do_not_kill_server) ... ok
+test_coalesced_tls_records_are_all_processed (__main__.TLSAcceptance.test_coalesced_tls_records_are_all_processed) ... ok
+test_curl_verified_http1_and_h2 (__main__.TLSAcceptance.test_curl_verified_http1_and_h2) ... ok
+test_fragmented_http1_inside_tls (__main__.TLSAcceptance.test_fragmented_http1_inside_tls) ... ok
+test_interruptible_io_cannot_bypass_installed_tls (__main__.TLSAcceptance.test_interruptible_io_cannot_bypass_installed_tls) ... ok
+test_invalid_certificate_and_key_fail_startup (__main__.TLSAcceptance.test_invalid_certificate_and_key_fail_startup) ... ok
+test_malformed_handshakes_do_not_leak_descriptors (__main__.TLSAcceptance.test_malformed_handshakes_do_not_leak_descriptors) ... ok
+test_many_pipelined_requests_across_tls_records (__main__.TLSAcceptance.test_many_pipelined_requests_across_tls_records) ... ok
+test_negotiated_protocol_is_not_silently_switched (__main__.TLSAcceptance.test_negotiated_protocol_is_not_silently_switched) ... ok
+test_no_alpn_overlap_is_fatal (__main__.TLSAcceptance.test_no_alpn_overlap_is_fatal) ... ok
+test_openssl_verified_alpn_h2 (__main__.TLSAcceptance.test_openssl_verified_alpn_h2) ... ok
+test_orderly_tls_close_notify (__main__.TLSAcceptance.test_orderly_tls_close_notify) ... ok
+test_partial_tls_record_waits_without_busy_spin (__main__.TLSAcceptance.test_partial_tls_record_waits_without_busy_spin) ... ok
+test_sigint_closes_multiple_active_connections (__main__.TLSAcceptance.test_sigint_closes_multiple_active_connections) ... ok
+test_slow_handshake_and_peer_abort_do_not_block_other_clients (__main__.TLSAcceptance.test_slow_handshake_and_peer_abort_do_not_block_other_clients) ... ok
+test_thousand_tls_connections_do_not_leak_descriptors (__main__.TLSAcceptance.test_thousand_tls_connections_do_not_leak_descriptors) ... ok
+test_tls12_with_verified_certificate (__main__.TLSAcceptance.test_tls12_with_verified_certificate) ... ok
+test_tls13_with_verified_certificate (__main__.TLSAcceptance.test_tls13_with_verified_certificate) ... ok
+test_tls_einval_with_peer_reset_is_isolated (__main__.TLSAcceptance.test_tls_einval_with_peer_reset_is_isolated) ... ok
+test_tls_unrelated_setup_error_with_peer_reset_is_fatal (__main__.TLSAcceptance.test_tls_unrelated_setup_error_with_peer_reset_is_fatal) ... ok
+test_verified_h2_and_http1_concurrently (__main__.TLSAcceptance.test_verified_h2_and_http1_concurrently) ... ok
+test_verified_tls_and_no_alpn_fallback (__main__.TLSAcceptance.test_verified_tls_and_no_alpn_fallback) ... ok
+test_binary_roundtrip_and_pipeline (__main__.TLSFixtureAcceptance.test_binary_roundtrip_and_pipeline) ... ok
+test_large_tls_h2_response_survives_partial_writes (__main__.TLSFixtureAcceptance.test_large_tls_h2_response_survives_partial_writes) ... ok
+test_sigint_while_tls_write_is_backpressured (__main__.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured) ... ok
+test_stalled_tls_writer_does_not_block_other_client (__main__.TLSFixtureAcceptance.test_stalled_tls_writer_does_not_block_other_client) ... ok
+test_clienthello_trickle_cannot_extend_absolute_handshake_deadline (__main__.TLSHandshakeDeadline.test_clienthello_trickle_cannot_extend_absolute_handshake_deadline) ... ok
+test_idle_handshake_times_out_and_releases_only_slot (__main__.TLSHandshakeDeadline.test_idle_handshake_times_out_and_releases_only_slot) ... ok
+
+----------------------------------------------------------------------
+Ran 28 tests in 13.010s
+
+OK

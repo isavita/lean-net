@@ -15,12 +15,23 @@ completed phase gates and the remaining static-file, hardening and actual
 in [docs/reactor.md](docs/reactor.md). The HTTP machine, advanced handlers and
 transport boundaries are documented in [docs/http1-machine.md](docs/http1-machine.md).
 See [docs/http2-machine.md](docs/http2-machine.md) for HTTP/2 configuration,
-priority scheduling, push and draining. Phases 1–4 passed acceptance;
+priority scheduling, push and draining, and [docs/static-files.md](docs/static-files.md)
+for immutable static catalogs, file transports and resource limits. Phases 1–4 passed acceptance;
 static files and production hardening remain open in phases 5 and 6.
 
 ## Build and test
 
-Install the Lean toolchain selected by `lean-toolchain`, then run:
+Install the Lean toolchain selected by `lean-toolchain`, `pkg-config`, and zlib
+and Brotli development libraries. Linux packages are `pkg-config zlib1g-dev
+libbrotli-dev`; Windows requires matching MinGW GCC, zlib and Brotli import
+libraries/DLLs. On macOS, select an installed zlib explicitly:
+
+```sh
+brew install zlib brotli pkgconf
+export PKG_CONFIG_PATH="$(brew --prefix zlib)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+```
+
+Then run:
 
 ```sh
 lake build
@@ -69,7 +80,14 @@ The acceptance suite uses loopback sockets and checks descriptor counts using
 # curl -v --http2-prior-knowledge http://localhost:8080/
 # Optional demo push (off by default; the peer must also permit it):
 # .lake/build/bin/lean-net-http1 --enable-push 8080
+# Serve a startup snapshot of a directory (8 MiB packed/resident budget):
+# .lake/build/bin/lean-net-http1 8080 --static ./public --static-memory 8
 ```
+
+Static preparation includes compressed variants and directory pages in the
+budget and requires enough OS locked-memory capacity. Originals can change
+after startup without changing the served snapshot. See the
+[static-file guide](docs/static-files.md) for library APIs and failure policies.
 
 The native reactor has additional ownership, concurrency and allocation checks:
 

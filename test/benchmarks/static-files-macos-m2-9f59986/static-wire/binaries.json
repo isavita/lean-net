@@ -1,0 +1,22 @@
+{
+  "LEAN_NET_STATIC_BIN": {
+    "source": ".lake/build/bin/lean-net-static-fixture",
+    "immutable": "/tmp/lean-net-phase5-static-wire-bounded-final/lean-net-static-fixture",
+    "sha256": "a68c491424397ade382196cdd7cf4c84639482cd7a2cbcb54d10244819ac7810"
+  },
+  "LEAN_NET_TLS_STATIC_BIN": {
+    "source": "tls/.lake/build/bin/lean-net-tls-static-fixture",
+    "immutable": "/tmp/lean-net-phase5-static-wire-bounded-final/lean-net-tls-static-fixture",
+    "sha256": "d586d5a2a1efe198074c3a1ac47139314d46094b8f893ee89eb5664187130340"
+  },
+  "LEAN_NET_STATIC_HTTP_BIN": {
+    "source": ".lake/build/bin/lean-net-http1",
+    "immutable": "/tmp/lean-net-phase5-static-wire-bounded-final/lean-net-http1",
+    "sha256": "25b33931f4b15b58fee5380a5c6e19117771655a2e19b94bc9912a303badbdb0"
+  },
+  "LEAN_NET_STATIC_HTTPS_BIN": {
+    "source": "tls/.lake/build/bin/lean-net-tls",
+    "immutable": "/tmp/lean-net-phase5-static-wire-bounded-final/lean-net-tls",
+    "sha256": "4e10fe61ad83e99ac0c8eb5c91f683e6da6d29d7cb1266301cc0003e6c4d73f0"
+  }
+}

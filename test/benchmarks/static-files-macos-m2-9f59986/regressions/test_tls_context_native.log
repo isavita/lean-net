@@ -1,0 +1,6 @@
+test_borrowed_tables_and_context_policy (__main__.TLSContextNative.test_borrowed_tables_and_context_policy) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 2.301s
+
+OK

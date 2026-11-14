@@ -27,7 +27,19 @@ package «lean-net» where
       unless ← candidate.pathExists do
         throw <| IO.userError "Select an installed zlib with PKG_CONFIG_PATH; on macOS use Homebrew zlib's lib/pkgconfig directory"
       return flags.map (fun flag => if flag == "-lz" then candidate.toString else flag) ++ #["-pthread"]
-    return flags ++ #["-pthread"]
+    -- pkg-config omits system -L flags; Lean's bundled linker does not know
+    -- the distribution's multiarch directories. Select codec libraries directly.
+    let mut libraries := #["-pthread"]
+    for (packageName, libraryName) in #[
+        ("zlib", "libz.so"), ("libbrotlienc", "libbrotlienc.so"),
+        ("libbrotlicommon", "libbrotlicommon.so")] do
+      let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", packageName] }
+      if location.exitCode != 0 then throw <| IO.userError s!"cannot locate {packageName} library"
+      let path := System.FilePath.mk location.stdout.trimAscii.toString / libraryName
+      unless ← path.pathExists do throw <| IO.userError s!"missing codec library: {path}"
+      libraries := libraries.push path.toString
+    return libraries ++ flags.filter (fun flag =>
+      flag != "-lz" && flag != "-lbrotlienc" && flag != "-lbrotlicommon")
 
 @[default_target]
 lean_lib LeanNet

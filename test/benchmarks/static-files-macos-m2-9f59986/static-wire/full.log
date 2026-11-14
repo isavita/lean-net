@@ -1,0 +1,37 @@
+test_curl_four_protocols_serve_the_same_binary_asset (__main__.PublicStaticCLI.test_curl_four_protocols_serve_the_same_binary_asset) ... ok
+test_invalid_roots_and_budgets_fail_before_listening (__main__.PublicStaticCLI.test_invalid_roots_and_budgets_fail_before_listening) ... ok
+test_directory_index_redirect_listing_and_path_boundaries (__main__.StaticPlain.test_directory_index_redirect_listing_and_path_boundaries) ... ok
+test_empty_file_keeps_length_and_pipeline_boundaries (__main__.StaticPlain.test_empty_file_keeps_length_and_pipeline_boundaries) ... ok
+test_h2_cancel_after_data_header_preserves_following_frames (__main__.StaticPlain.test_h2_cancel_after_data_header_preserves_following_frames) ... ok
+test_h2_file_metadata_flow_control_and_urgency (__main__.StaticPlain.test_h2_file_metadata_flow_control_and_urgency) ... ok
+test_h2_priority_update_reorders_files_when_credit_arrives (__main__.StaticPlain.test_h2_priority_update_reorders_files_when_credit_arrives) ... ok
+test_h2_ranges_compressed_variants_and_not_modified (__main__.StaticPlain.test_h2_ranges_compressed_variants_and_not_modified) ... ok
+test_head_preconditions_and_representation_matching (__main__.StaticPlain.test_head_preconditions_and_representation_matching) ... ok
+test_identity_gzip_brotli_negotiation_and_variant_validators (__main__.StaticPlain.test_identity_gzip_brotli_negotiation_and_variant_validators) ... ok
+test_large_file_slow_reader_allows_same_worker_progress (__main__.StaticPlain.test_large_file_slow_reader_allows_same_worker_progress) ... ok
+test_pipelined_file_ranges_and_binary_tails (__main__.StaticPlain.test_pipelined_file_ranges_and_binary_tails) ... ok
+test_representation_hashes_and_bytes_survive_catalog_rebuild (__main__.StaticPlain.test_representation_hashes_and_bytes_survive_catalog_rebuild) ... ok
+test_shutdown_bounds_active_file_and_partial_requests (__main__.StaticPlain.test_shutdown_bounds_active_file_and_partial_requests) ... ok
+test_single_ranges_and_if_range_dates (__main__.StaticPlain.test_single_ranges_and_if_range_dates) ... ok
+test_snapshot_survives_original_truncation_deletion_and_new_files (__main__.StaticPlain.test_snapshot_survives_original_truncation_deletion_and_new_files) ... ok
+test_thousand_file_cycles_keep_native_resources_flat (__main__.StaticPlain.test_thousand_file_cycles_keep_native_resources_flat) ... ok
+test_directory_index_redirect_listing_and_path_boundaries (__main__.StaticTLS.test_directory_index_redirect_listing_and_path_boundaries) ... ok
+test_empty_file_keeps_length_and_pipeline_boundaries (__main__.StaticTLS.test_empty_file_keeps_length_and_pipeline_boundaries) ... ok
+test_h2_cancel_after_data_header_preserves_following_frames (__main__.StaticTLS.test_h2_cancel_after_data_header_preserves_following_frames) ... ok
+test_h2_file_metadata_flow_control_and_urgency (__main__.StaticTLS.test_h2_file_metadata_flow_control_and_urgency) ... ok
+test_h2_priority_update_reorders_files_when_credit_arrives (__main__.StaticTLS.test_h2_priority_update_reorders_files_when_credit_arrives) ... ok
+test_h2_ranges_compressed_variants_and_not_modified (__main__.StaticTLS.test_h2_ranges_compressed_variants_and_not_modified) ... ok
+test_head_preconditions_and_representation_matching (__main__.StaticTLS.test_head_preconditions_and_representation_matching) ... ok
+test_identity_gzip_brotli_negotiation_and_variant_validators (__main__.StaticTLS.test_identity_gzip_brotli_negotiation_and_variant_validators) ... ok
+test_large_file_slow_reader_allows_same_worker_progress (__main__.StaticTLS.test_large_file_slow_reader_allows_same_worker_progress) ... ok
+test_pipelined_file_ranges_and_binary_tails (__main__.StaticTLS.test_pipelined_file_ranges_and_binary_tails) ... ok
+test_representation_hashes_and_bytes_survive_catalog_rebuild (__main__.StaticTLS.test_representation_hashes_and_bytes_survive_catalog_rebuild) ... ok
+test_shutdown_bounds_active_file_and_partial_requests (__main__.StaticTLS.test_shutdown_bounds_active_file_and_partial_requests) ... ok
+test_single_ranges_and_if_range_dates (__main__.StaticTLS.test_single_ranges_and_if_range_dates) ... ok
+test_snapshot_survives_original_truncation_deletion_and_new_files (__main__.StaticTLS.test_snapshot_survives_original_truncation_deletion_and_new_files) ... ok
+test_thousand_file_cycles_keep_native_resources_flat (__main__.StaticTLS.test_thousand_file_cycles_keep_native_resources_flat) ... ok
+
+----------------------------------------------------------------------
+Ran 32 tests in 11.606s
+
+OK

@@ -1,0 +1,65 @@
+[
+  {
+    "command": [
+      "python3",
+      "test/test_http1_reactor.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "seconds": 6.780782457994064
+  },
+  {
+    "command": [
+      "python3",
+      "tls/test/test_tls_reactor.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "seconds": 11.31825116701657
+  },
+  {
+    "command": [
+      "python3",
+      "tls/test/test_tls.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "seconds": 13.109200583014172
+  },
+  {
+    "command": [
+      "python3",
+      "test/test_http2_e2e.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "seconds": 8.21428279200336
+  },
+  {
+    "command": [
+      "python3",
+      "tls/test/test_tls_context_native.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "seconds": 2.400873042002786
+  },
+  {
+    "command": [
+      "python3",
+      "tls/test/test_tls_worker_native.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "seconds": 2.6155159170157276
+  },
+  {
+    "command": [
+      "/tmp/lean-net-tools/http2-python-4.2.0/bin/python",
+      "test/test_http2_cli.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "seconds": 0.5851625000068452
+  }
+]

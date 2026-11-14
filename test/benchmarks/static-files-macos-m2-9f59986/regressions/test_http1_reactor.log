@@ -1,0 +1,45 @@
+test_absolute_write_deadline_survives_trickled_completions (__main__.Deadlines.test_absolute_write_deadline_survives_trickled_completions) ... ok
+test_idle_and_absolute_request_deadlines (__main__.Deadlines.test_idle_and_absolute_request_deadlines) ... ok
+test_configured_obs_fold (__main__.FoldPolicy.test_configured_obs_fold) ... ok
+test_blocked_reader_and_reset_do_not_stall_other_clients (__main__.FourWorkers.test_blocked_reader_and_reset_do_not_stall_other_clients) ... ok
+test_connection_cycles_restore_descriptors (__main__.FourWorkers.test_connection_cycles_restore_descriptors) ... ok
+test_continue_and_body_supplied_with_head (__main__.FourWorkers.test_continue_and_body_supplied_with_head) ... ok
+test_date_input_and_observable_second_cache (__main__.FourWorkers.test_date_input_and_observable_second_cache) ... ok
+test_explicit_legacy_eof_body_and_close_framing (__main__.FourWorkers.test_explicit_legacy_eof_body_and_close_framing) ... ok
+test_h2c_prior_knowledge_preserves_shared_route (__main__.FourWorkers.test_h2c_prior_knowledge_preserves_shared_route) ... ok
+test_head_204_304_and_custom_reason (__main__.FourWorkers.test_head_204_304_and_custom_reason) ... ok
+test_http10_and_http11_persistence (__main__.FourWorkers.test_http10_and_http11_persistence) ... ok
+test_informational_and_invalid_application_metadata (__main__.FourWorkers.test_informational_and_invalid_application_metadata) ... ok
+test_malformed_and_truncated_requests (__main__.FourWorkers.test_malformed_and_truncated_requests) ... ok
+test_refusal_leaves_already_supplied_body_unhandled (__main__.FourWorkers.test_refusal_leaves_already_supplied_body_unhandled) ... ok
+test_request_and_response_chunked_trailers (__main__.FourWorkers.test_request_and_response_chunked_trailers) ... ok
+test_ten_pipeline_requests_then_half_close (__main__.FourWorkers.test_ten_pipeline_requests_then_half_close) ... ok
+test_upgrade_fin_before_101_calls_raw_eof_once (__main__.FourWorkers.test_upgrade_fin_before_101_calls_raw_eof_once) ... ok
+test_upgrade_raw_tail_arrives_with_head (__main__.FourWorkers.test_upgrade_raw_tail_arrives_with_head) ... ok
+test_worker_ownership_distribution (__main__.FourWorkers.test_worker_ownership_distribution) ... HTTP worker counts: {0: 8, 1: 8, 2: 8, 3: 8}
+ok
+test_blocked_reader_and_reset_do_not_stall_other_clients (__main__.OneWorker.test_blocked_reader_and_reset_do_not_stall_other_clients) ... ok
+test_connection_cycles_restore_descriptors (__main__.OneWorker.test_connection_cycles_restore_descriptors) ... ok
+test_continue_and_body_supplied_with_head (__main__.OneWorker.test_continue_and_body_supplied_with_head) ... ok
+test_date_input_and_observable_second_cache (__main__.OneWorker.test_date_input_and_observable_second_cache) ... ok
+test_explicit_legacy_eof_body_and_close_framing (__main__.OneWorker.test_explicit_legacy_eof_body_and_close_framing) ... ok
+test_h2c_prior_knowledge_preserves_shared_route (__main__.OneWorker.test_h2c_prior_knowledge_preserves_shared_route) ... ok
+test_head_204_304_and_custom_reason (__main__.OneWorker.test_head_204_304_and_custom_reason) ... ok
+test_http10_and_http11_persistence (__main__.OneWorker.test_http10_and_http11_persistence) ... ok
+test_informational_and_invalid_application_metadata (__main__.OneWorker.test_informational_and_invalid_application_metadata) ... ok
+test_malformed_and_truncated_requests (__main__.OneWorker.test_malformed_and_truncated_requests) ... ok
+test_refusal_leaves_already_supplied_body_unhandled (__main__.OneWorker.test_refusal_leaves_already_supplied_body_unhandled) ... ok
+test_request_and_response_chunked_trailers (__main__.OneWorker.test_request_and_response_chunked_trailers) ... ok
+test_ten_pipeline_requests_then_half_close (__main__.OneWorker.test_ten_pipeline_requests_then_half_close) ... ok
+test_upgrade_fin_before_101_calls_raw_eof_once (__main__.OneWorker.test_upgrade_fin_before_101_calls_raw_eof_once) ... ok
+test_upgrade_raw_tail_arrives_with_head (__main__.OneWorker.test_upgrade_raw_tail_arrives_with_head) ... ok
+test_worker_ownership_distribution (__main__.OneWorker.test_worker_ownership_distribution) ... HTTP worker counts: {0: 32}
+ok
+test_output_credits_cover_admission_and_failure_releases_endpoint (__main__.StartupContract.test_output_credits_cover_admission_and_failure_releases_endpoint) ... ok
+test_large_binary_body_and_large_response_with_two_pool_cells (__main__.TinyPool.test_large_binary_body_and_large_response_with_two_pool_cells) ... ok
+test_partial_request_pause_does_not_discard_input (__main__.TinyPool.test_partial_request_pause_does_not_discard_input) ... ok
+
+----------------------------------------------------------------------
+Ran 38 tests in 6.665s
+
+OK

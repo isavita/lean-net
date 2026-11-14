@@ -1,0 +1,5 @@
+[
+  "/tmp/lean-net-tools/http2-python-4.2.0/bin/python",
+  "test/test_static_files.py",
+  "-v"
+]

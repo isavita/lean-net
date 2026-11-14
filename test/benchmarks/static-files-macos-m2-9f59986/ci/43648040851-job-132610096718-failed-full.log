@@ -1,0 +1,473 @@
+﻿2026-11-14T22:25:46.1706922Z Current runner version: '2.338.2'
+2026-11-14T22:25:46.1744277Z ##[group]Runner Image Provisioner
+2026-11-14T22:25:46.1745792Z Hosted Compute Agent
+2026-11-14T22:25:46.1746788Z Version: 20261103.629
+2026-11-14T22:25:46.1748136Z Commit: 15dbd9ccb5dbf34fae002b6ed1a2670f52df37bc
+2026-11-14T22:25:46.1749497Z Build Date: 2026-11-03T17:26:59Z
+2026-11-14T22:25:46.1750786Z Worker ID: {8e76c6fa-f5c6-47ab-9e2a-e14d25715962}
+2026-11-14T22:25:46.1752065Z Region: eastus
+2026-11-14T22:25:46.1752983Z Cloud: Azure
+2026-11-14T22:25:46.1754036Z ##[endgroup]
+2026-11-14T22:25:46.1756575Z ##[group]Operating System
+2026-11-14T22:25:46.1757991Z Ubuntu
+2026-11-14T22:25:46.1758963Z 26.04.1
+2026-11-14T22:25:46.1759981Z LTS
+2026-11-14T22:25:46.1760869Z ##[endgroup]
+2026-11-14T22:25:46.1761849Z ##[group]Runner Image
+2026-11-14T22:25:46.1762996Z Image: ubuntu-26.04
+2026-11-14T22:25:46.1764032Z Version: 20261111.196.1
+2026-11-14T22:25:46.1766348Z Included Software: https://github.com/actions/runner-images/blob/ubuntu26/20261111.196/images/ubuntu/Ubuntu2604-Readme.md
+2026-11-14T22:25:46.1769651Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu26%2F20261111.196
+2026-11-14T22:25:46.1771410Z ##[endgroup]
+2026-11-14T22:25:46.1773615Z ##[group]GITHUB_TOKEN Permissions
+2026-11-14T22:25:46.1776343Z Contents: read
+2026-11-14T22:25:46.1777704Z Metadata: read
+2026-11-14T22:25:46.1778682Z Packages: read
+2026-11-14T22:25:46.1779564Z ##[endgroup]
+2026-11-14T22:25:46.1782896Z Secret source: Actions
+2026-11-14T22:25:46.1784409Z Cache mode: write
+2026-11-14T22:25:46.1785716Z Prepare workflow directory
+2026-11-14T22:25:46.2393211Z Prepare all required actions
+2026-11-14T22:25:46.2467810Z Getting action download info
+2026-11-14T22:25:46.4496886Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-11-14T22:25:46.5692794Z Download action repository 'msys2/setup-msys2@v2' (SHA:ec48f7c5447b3140e2b088413ae3a55687bccb6e)
+2026-11-14T22:25:46.6964722Z Download action repository 'leanprover/lean-action@v1' (SHA:ba3fdfe5c4476c925da13bf11a005ddb47e47aee)
+2026-11-14T22:25:46.8994328Z Getting action download info
+2026-11-14T22:25:46.9678016Z Download action repository 'actions/cache@caa296126883cff596d87d8935842f9db880ef25' (SHA:caa296126883cff596d87d8935842f9db880ef25)
+2026-11-14T22:25:47.0942245Z Complete job name: native (ubuntu-latest)
+2026-11-14T22:25:47.2034686Z ##[group]Run actions/checkout@v7
+2026-11-14T22:25:47.2035632Z with:
+2026-11-14T22:25:47.2036116Z   repository: isavita/lean-net
+2026-11-14T22:25:47.2040177Z   token: ***
+2026-11-14T22:25:47.2040644Z   ssh-strict: true
+2026-11-14T22:25:47.2041118Z   ssh-user: git
+2026-11-14T22:25:47.2041603Z   persist-credentials: true
+2026-11-14T22:25:47.2042118Z   clean: true
+2026-11-14T22:25:47.2042597Z   sparse-checkout-cone-mode: true
+2026-11-14T22:25:47.2043155Z   fetch-depth: 1
+2026-11-14T22:25:47.2043613Z   fetch-tags: false
+2026-11-14T22:25:47.2044093Z   show-progress: true
+2026-11-14T22:25:47.2044568Z   lfs: false
+2026-11-14T22:25:47.2045018Z   submodules: false
+2026-11-14T22:25:47.2045529Z   set-safe-directory: true
+2026-11-14T22:25:47.2046067Z   allow-unsafe-pr-checkout: false
+2026-11-14T22:25:47.2046889Z ##[endgroup]
+2026-11-14T22:25:47.4825786Z Syncing repository: isavita/lean-net
+2026-11-14T22:25:47.4830029Z ##[group]Getting Git version info
+2026-11-14T22:25:47.4831988Z Working directory is '/home/runner/work/lean-net/lean-net'
+2026-11-14T22:25:47.4834731Z [command]/usr/bin/git version
+2026-11-14T22:25:47.4854809Z git version 2.56.1
+2026-11-14T22:25:47.4881886Z ##[endgroup]
+2026-11-14T22:25:47.4894770Z Temporarily overriding HOME='/home/runner/work/_temp/be490812-7e97-455e-ae9e-5ee7f1c476bb' before making global git config changes
+2026-11-14T22:25:47.4899525Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-14T22:25:47.4903771Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/lean-net/lean-net
+2026-11-14T22:25:47.4984696Z Deleting the contents of '/home/runner/work/lean-net/lean-net'
+2026-11-14T22:25:47.4989197Z ##[group]Determining repository object format
+2026-11-14T22:25:47.4992610Z ##[endgroup]
+2026-11-14T22:25:47.4995765Z ##[group]Initializing the repository
+2026-11-14T22:25:47.4998918Z [command]/usr/bin/git init /home/runner/work/lean-net/lean-net
+2026-11-14T22:25:47.5079474Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-14T22:25:47.5082559Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-14T22:25:47.5084828Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-14T22:25:47.5086662Z hint: call:
+2026-11-14T22:25:47.5088000Z hint:
+2026-11-14T22:25:47.5089558Z hint: 	git config --global init.defaultBranch <name>
+2026-11-14T22:25:47.5091659Z hint:
+2026-11-14T22:25:47.5093978Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-14T22:25:47.5098001Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-14T22:25:47.5101000Z hint:
+2026-11-14T22:25:47.5102549Z hint: 	git branch -m <name>
+2026-11-14T22:25:47.5104421Z hint:
+2026-11-14T22:25:47.5106891Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-14T22:25:47.5110952Z Initialized empty Git repository in /home/runner/work/lean-net/lean-net/.git/
+2026-11-14T22:25:47.5116976Z [command]/usr/bin/git remote add origin https://github.com/isavita/lean-net
+2026-11-14T22:25:47.5167556Z ##[endgroup]
+2026-11-14T22:25:47.5170446Z ##[group]Disabling automatic garbage collection
+2026-11-14T22:25:47.5172930Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-14T22:25:47.5211095Z ##[endgroup]
+2026-11-14T22:25:47.5214476Z ##[group]Setting up auth
+2026-11-14T22:25:47.5216878Z Removing SSH command configuration
+2026-11-14T22:25:47.5220503Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-14T22:25:47.5257501Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-14T22:25:47.5721680Z Removing HTTP extra header
+2026-11-14T22:25:47.5726670Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-14T22:25:47.5762832Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-14T22:25:47.6029700Z Removing includeIf entries pointing to credentials config files
+2026-11-14T22:25:47.6033909Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-14T22:25:47.6068861Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-14T22:25:47.6343606Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-6620fcac-91bb-420f-92a4-066aa730ccfc.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-14T22:25:47.6384413Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/lean-net/lean-net/.git.path /home/runner/work/_temp/git-credentials-6620fcac-91bb-420f-92a4-066aa730ccfc.config
+2026-11-14T22:25:47.6418220Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/lean-net/lean-net/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-6620fcac-91bb-420f-92a4-066aa730ccfc.config
+2026-11-14T22:25:47.6458370Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-6620fcac-91bb-420f-92a4-066aa730ccfc.config
+2026-11-14T22:25:47.6492970Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-6620fcac-91bb-420f-92a4-066aa730ccfc.config
+2026-11-14T22:25:47.6523587Z ##[endgroup]
+2026-11-14T22:25:47.6525308Z ##[group]Fetching the repository
+2026-11-14T22:25:47.6530201Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9f59986f8773b1e4193d717418eec4c7199013cf:refs/remotes/origin/codex/static-files
+2026-11-14T22:25:47.9854705Z From https://github.com/isavita/lean-net
+2026-11-14T22:25:47.9858176Z  * [new ref]         9f59986f8773b1e4193d717418eec4c7199013cf -> origin/codex/static-files
+2026-11-14T22:25:47.9866208Z [command]/usr/bin/git branch --list --remote origin/codex/static-files
+2026-11-14T22:25:47.9894109Z   origin/codex/static-files
+2026-11-14T22:25:47.9904585Z [command]/usr/bin/git rev-parse refs/remotes/origin/codex/static-files
+2026-11-14T22:25:47.9929260Z 9f59986f8773b1e4193d717418eec4c7199013cf
+2026-11-14T22:25:47.9935646Z ##[endgroup]
+2026-11-14T22:25:47.9938277Z ##[group]Determining the checkout info
+2026-11-14T22:25:47.9940637Z ##[endgroup]
+2026-11-14T22:25:47.9941846Z [command]/usr/bin/git sparse-checkout disable
+2026-11-14T22:25:47.9998348Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-14T22:25:48.0030489Z ##[group]Checking out the ref
+2026-11-14T22:25:48.0034430Z [command]/usr/bin/git checkout --progress --force -B codex/static-files refs/remotes/origin/codex/static-files
+2026-11-14T22:25:48.0291832Z Switched to a new branch 'codex/static-files'
+2026-11-14T22:25:48.0298418Z branch 'codex/static-files' set up to track 'origin/codex/static-files'.
+2026-11-14T22:25:48.0305899Z ##[endgroup]
+2026-11-14T22:25:48.0354355Z [command]/usr/bin/git log -1 --format=%H
+2026-11-14T22:25:48.0381283Z 9f59986f8773b1e4193d717418eec4c7199013cf
+2026-11-14T22:25:48.0668559Z ##[group]Run sudo apt-get update && sudo apt-get install -y zlib1g-dev libbrotli-dev pkg-config
+2026-11-14T22:25:48.0671396Z [36;1msudo apt-get update && sudo apt-get install -y zlib1g-dev libbrotli-dev pkg-config[0m
+2026-11-14T22:25:48.0732078Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:25:48.0733597Z ##[endgroup]
+2026-11-14T22:25:48.1559465Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-11-14T22:25:48.1821303Z Get:6 https://packages.microsoft.com/ubuntu/26.04/prod resolute InRelease [3964 B]
+2026-11-14T22:25:48.1960686Z Hit:2 http://azure.archive.ubuntu.com/ubuntu resolute InRelease
+2026-11-14T22:25:48.1998362Z Get:3 http://azure.archive.ubuntu.com/ubuntu resolute-updates InRelease [137 kB]
+2026-11-14T22:25:48.2046187Z Get:4 http://azure.archive.ubuntu.com/ubuntu resolute-backports InRelease [137 kB]
+2026-11-14T22:25:48.2115584Z Get:5 http://azure.archive.ubuntu.com/ubuntu resolute-security InRelease [137 kB]
+2026-11-14T22:25:48.2250048Z Get:7 https://packages.microsoft.com/ubuntu/26.04/prod resolute/main arm64 Packages [143 kB]
+2026-11-14T22:25:48.2524905Z Get:8 https://packages.microsoft.com/ubuntu/26.04/prod resolute/main amd64 Packages [158 kB]
+2026-11-14T22:25:48.2744965Z Get:9 http://azure.archive.ubuntu.com/ubuntu resolute-updates/main amd64v3 Packages [869 kB]
+2026-11-14T22:25:48.2912228Z Get:10 http://azure.archive.ubuntu.com/ubuntu resolute-updates/main Translation-en [195 kB]
+2026-11-14T22:25:48.2923184Z Get:11 http://azure.archive.ubuntu.com/ubuntu resolute-updates/universe amd64v3 Packages [390 kB]
+2026-11-14T22:25:48.3040224Z Get:12 http://azure.archive.ubuntu.com/ubuntu resolute-updates/universe Translation-en [122 kB]
+2026-11-14T22:25:48.3219848Z Get:13 http://azure.archive.ubuntu.com/ubuntu resolute-security/main amd64v3 Packages [718 kB]
+2026-11-14T22:25:48.3263631Z Get:14 http://azure.archive.ubuntu.com/ubuntu resolute-security/main Translation-en [157 kB]
+2026-11-14T22:25:48.3282391Z Get:15 http://azure.archive.ubuntu.com/ubuntu resolute-security/universe amd64v3 Packages [220 kB]
+2026-11-14T22:25:48.3304994Z Get:16 http://azure.archive.ubuntu.com/ubuntu resolute-security/universe Translation-en [72.5 kB]
+2026-11-14T22:25:48.3319259Z Get:17 http://azure.archive.ubuntu.com/ubuntu resolute-security/restricted amd64v3 Packages [590 kB]
+2026-11-14T22:25:48.3360381Z Get:18 http://azure.archive.ubuntu.com/ubuntu resolute-security/restricted Translation-en [122 kB]
+2026-11-14T22:25:50.4357418Z Fetched 4172 kB in 0s (10.9 MB/s)
+2026-11-14T22:25:51.1158375Z Reading package lists...
+2026-11-14T22:25:51.1507439Z Reading package lists...
+2026-11-14T22:25:51.2999115Z Building dependency tree...
+2026-11-14T22:25:51.3006039Z Reading state information...
+2026-11-14T22:25:51.3311102Z zlib1g-dev is already the newest version (1:1.3.dfsg+really1.3.1-1ubuntu3.2).
+2026-11-14T22:25:51.3866930Z pkg-config is already the newest version (2.5.1-4).
+2026-11-14T22:25:51.3867925Z Solving dependencies...
+2026-11-14T22:25:51.4898441Z The following NEW packages will be installed:
+2026-11-14T22:25:51.4903739Z   libbrotli-dev
+2026-11-14T22:25:51.5129775Z 0 upgraded, 1 newly installed, 0 to remove and 24 not upgraded.
+2026-11-14T22:25:51.5130504Z Need to get 371 kB of archives.
+2026-11-14T22:25:51.5131107Z After this operation, 1061 kB of additional disk space will be used.
+2026-11-14T22:25:51.5131858Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-11-14T22:25:51.6343695Z Get:2 http://azure.archive.ubuntu.com/ubuntu resolute-updates/main amd64v3 libbrotli-dev amd64 1.2.0-3ubuntu0.1 [371 kB]
+2026-11-14T22:25:51.9586863Z Fetched 371 kB in 0s (2688 kB/s)
+2026-11-14T22:25:51.9814767Z Selecting previously unselected package libbrotli-dev:amd64.
+2026-11-14T22:25:52.0145260Z (Reading database ... 
+2026-11-14T22:25:52.0146083Z (Reading database ... 5%
+2026-11-14T22:25:52.0146841Z (Reading database ... 10%
+2026-11-14T22:25:52.0147662Z (Reading database ... 15%
+2026-11-14T22:25:52.0148090Z (Reading database ... 20%
+2026-11-14T22:25:52.0148936Z (Reading database ... 25%
+2026-11-14T22:25:52.0149416Z (Reading database ... 30%
+2026-11-14T22:25:52.0149824Z (Reading database ... 35%
+2026-11-14T22:25:52.0150228Z (Reading database ... 40%
+2026-11-14T22:25:52.0150645Z (Reading database ... 45%
+2026-11-14T22:25:52.0151037Z (Reading database ... 50%
+2026-11-14T22:25:52.0994734Z (Reading database ... 55%
+2026-11-14T22:25:52.2826910Z (Reading database ... 60%
+2026-11-14T22:25:52.4374599Z (Reading database ... 65%
+2026-11-14T22:25:52.5829040Z (Reading database ... 70%
+2026-11-14T22:25:52.7451408Z (Reading database ... 75%
+2026-11-14T22:25:52.9244529Z (Reading database ... 80%
+2026-11-14T22:25:53.0894749Z (Reading database ... 85%
+2026-11-14T22:25:53.2890698Z (Reading database ... 90%
+2026-11-14T22:25:53.4329040Z (Reading database ... 95%
+2026-11-14T22:25:53.4329813Z (Reading database ... 100%
+2026-11-14T22:25:53.4330553Z (Reading database ... 213946 files and directories currently installed.)
+2026-11-14T22:25:53.4374890Z Preparing to unpack .../libbrotli-dev_1.2.0-3ubuntu0.1_amd64v3.deb ...
+2026-11-14T22:25:53.4402267Z Unpacking libbrotli-dev:amd64 (1.2.0-3ubuntu0.1) ...
+2026-11-14T22:25:53.4939664Z Setting up libbrotli-dev:amd64 (1.2.0-3ubuntu0.1) ...
+2026-11-14T22:25:54.1322513Z 
+2026-11-14T22:25:54.1323153Z Running kernel seems to be up-to-date.
+2026-11-14T22:25:54.1323592Z 
+2026-11-14T22:25:54.1323777Z Restarting services...
+2026-11-14T22:25:54.1446449Z 
+2026-11-14T22:25:54.1446850Z Service restarts being deferred:
+2026-11-14T22:25:54.1450814Z  systemctl restart hosted-compute-agent.service
+2026-11-14T22:25:54.1451269Z 
+2026-11-14T22:25:54.1455169Z No containers need to be restarted.
+2026-11-14T22:25:54.1455530Z 
+2026-11-14T22:25:54.1455760Z No user sessions are running outdated binaries.
+2026-11-14T22:25:54.1456145Z 
+2026-11-14T22:25:54.1456496Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+2026-11-14T22:25:55.0447537Z ##[group]Run leanprover/lean-action@v1
+2026-11-14T22:25:55.0447853Z with:
+2026-11-14T22:25:55.0448049Z   auto-config: false
+2026-11-14T22:25:55.0448271Z   build: false
+2026-11-14T22:25:55.0448463Z   test: false
+2026-11-14T22:25:55.0448651Z   lint: false
+2026-11-14T22:25:55.0448842Z   mk_all-check: false
+2026-11-14T22:25:55.0449064Z   use-mathlib-cache: auto
+2026-11-14T22:25:55.0449357Z   check-reservoir-eligibility: false
+2026-11-14T22:25:55.0449626Z   leanchecker: false
+2026-11-14T22:25:55.0475460Z   lean4checker: false
+2026-11-14T22:25:55.0475844Z   nanoda: false
+2026-11-14T22:25:55.0476463Z   nanoda-allow-sorry: true
+2026-11-14T22:25:55.0476875Z   axiom-audit: false
+2026-11-14T22:25:55.0477610Z   axiom-audit-allow: propext,Classical.choice,Quot.sound
+2026-11-14T22:25:55.0478230Z   use-github-cache: true
+2026-11-14T22:25:55.0478649Z   lake-package-directory: .
+2026-11-14T22:25:55.0479099Z   reinstall-transient-toolchain: false
+2026-11-14T22:25:55.0479575Z ##[endgroup]
+2026-11-14T22:25:55.0546716Z ##[start-action display=install elan;id=__leanprover_lean-action.__run]
+2026-11-14T22:25:55.0576720Z ##[group]Run : Install Elan
+2026-11-14T22:25:55.0577012Z [36;1m: Install Elan[0m
+2026-11-14T22:25:55.0577546Z [36;1m${GITHUB_ACTION_PATH}/scripts/install_elan.sh[0m
+2026-11-14T22:25:55.0626087Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:25:55.0626447Z ##[endgroup]
+2026-11-14T22:25:55.0736686Z ##[group]Elan Installation Output
+2026-11-14T22:25:55.1166306Z info: downloading installer
+2026-11-14T22:25:55.6940768Z info: downloading https://releases.lean-lang.org/lean4/v4.35.0/lean-4.35.0-linux.tar.zst
+2026-11-14T22:25:59.5942920Z info: installing /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0
+2026-11-14T22:26:06.8064162Z Lean (version 4.35.0, x86_64-unknown-linux-gnu, commit eb6cafb7290e8bd5f2937522d8d804f58f02bafc, Release)
+2026-11-14T22:26:06.8558367Z Lake version 5.0.0-src+eb6cafb (Lean version 4.35.0)
+2026-11-14T22:26:06.8597823Z ##[endgroup]
+2026-11-14T22:26:06.8597997Z 
+2026-11-14T22:26:06.8620677Z ##[end-action id=__leanprover_lean-action.__run;outcome=success;conclusion=success;duration_ms=11807]
+2026-11-14T22:26:06.8623730Z ##[start-action display=Run actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25;id=__leanprover_lean-action.cache-restore]
+2026-11-14T22:26:07.2146890Z ##[group]Run actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+2026-11-14T22:26:07.2147767Z with:
+2026-11-14T22:26:07.2148001Z   path: ./.lake
+2026-11-14T22:26:07.2149000Z   key: lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef-9f59986f8773b1e4193d717418eec4c7199013cf
+2026-11-14T22:26:07.2150730Z   restore-keys: lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef
+2026-11-14T22:26:07.2151643Z   enableCrossOsArchive: false
+2026-11-14T22:26:07.2151938Z   fail-on-cache-miss: false
+2026-11-14T22:26:07.2152200Z   lookup-only: false
+2026-11-14T22:26:07.2152436Z ##[endgroup]
+2026-11-14T22:26:07.6584015Z Cache hit for restore-key: lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef-c618015daca1901a39eba6d5bb00a3c1899185c3
+2026-11-14T22:26:08.1099342Z Received 7064543 of 7064543 (100.0%), 40.3 MBs/sec
+2026-11-14T22:26:08.1099968Z Cache Size: ~7 MB (7064543 B)
+2026-11-14T22:26:08.1130982Z [command]/usr/bin/tar -xf /home/runner/work/_temp/8a2343bb-8d33-4a7c-a462-4f0ea6f7d9d9/cache.tzst -P -C /home/runner/work/lean-net/lean-net --use-compress-program unzstd
+2026-11-14T22:26:08.1796597Z Cache restored successfully
+2026-11-14T22:26:08.1981421Z Cache restored from key: lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef-c618015daca1901a39eba6d5bb00a3c1899185c3
+2026-11-14T22:26:08.2088012Z ##[end-action id=__leanprover_lean-action.cache-restore;outcome=success;conclusion=success;duration_ms=1346]
+2026-11-14T22:26:08.2092193Z ##[start-action display=configure `lean-action`;id=__leanprover_lean-action.config]
+2026-11-14T22:26:08.2112390Z ##[group]Run : Configure Lean Action
+2026-11-14T22:26:08.2112716Z [36;1m: Configure Lean Action[0m
+2026-11-14T22:26:08.2113025Z [36;1m${GITHUB_ACTION_PATH}/scripts/config.sh[0m
+2026-11-14T22:26:08.2162538Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:26:08.2162908Z env:
+2026-11-14T22:26:08.2163109Z   AUTO_CONFIG: false
+2026-11-14T22:26:08.2163530Z   BUILD: false
+2026-11-14T22:26:08.2163738Z   TEST: false
+2026-11-14T22:26:08.2163936Z   LINT: false
+2026-11-14T22:26:08.2164136Z ##[endgroup]
+2026-11-14T22:26:08.2277525Z ##[group]Configure lean-action
+2026-11-14T22:26:08.2349220Z ##[end-action id=__leanprover_lean-action.config;outcome=success;conclusion=success;duration_ms=25]
+2026-11-14T22:26:08.2351597Z ##[start-action display=reinstall transient toolchain;id=__leanprover_lean-action.__run_2]
+2026-11-14T22:26:08.2357554Z ##[end-action id=__leanprover_lean-action.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:26:08.2360277Z ##[start-action display=ensure all files are imported;id=__leanprover_lean-action.mk_all]
+2026-11-14T22:26:08.2363727Z ##[end-action id=__leanprover_lean-action.mk_all;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:26:08.2365537Z ##[start-action display=detect mathlib;id=__leanprover_lean-action.detect-mathlib]
+2026-11-14T22:26:08.2383817Z ##[group]Run : Detect Mathlib
+2026-11-14T22:26:08.2384110Z [36;1m: Detect Mathlib[0m
+2026-11-14T22:26:08.2384402Z [36;1m${GITHUB_ACTION_PATH}/scripts/detect_mathlib.sh[0m
+2026-11-14T22:26:08.2432251Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:26:08.2432630Z ##[endgroup]
+2026-11-14T22:26:08.2539827Z ##[group]Detect Mathlib Output
+2026-11-14T22:26:08.2540456Z Trying to detect if project is downstream of Mathlib.
+2026-11-14T22:26:08.2555739Z Project is not downstream of Mathlib. Skipping Mathlib cache.
+2026-11-14T22:26:08.2556747Z ##[endgroup]
+2026-11-14T22:26:08.2556962Z 
+2026-11-14T22:26:08.2566524Z ##[end-action id=__leanprover_lean-action.detect-mathlib;outcome=success;conclusion=success;duration_ms=20]
+2026-11-14T22:26:08.2569235Z ##[start-action display=get mathlib cache;id=__leanprover_lean-action.__run_3]
+2026-11-14T22:26:08.2583722Z ##[end-action id=__leanprover_lean-action.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:26:08.2594509Z ##[start-action display=build isavita/lean-net;id=__leanprover_lean-action.build]
+2026-11-14T22:26:08.2599263Z ##[end-action id=__leanprover_lean-action.build;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:26:08.2602450Z ##[start-action display=test isavita/lean-net;id=__leanprover_lean-action.test]
+2026-11-14T22:26:08.2606752Z ##[end-action id=__leanprover_lean-action.test;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:26:08.2609998Z ##[start-action display=lint isavita/lean-net;id=__leanprover_lean-action.lint]
+2026-11-14T22:26:08.2614250Z ##[end-action id=__leanprover_lean-action.lint;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:26:08.2616382Z ##[start-action display=Run actions/cache/save@caa296126883cff596d87d8935842f9db880ef25;id=__leanprover_lean-action.__actions_cache]
+2026-11-14T22:26:08.3823638Z ##[group]Run actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+2026-11-14T22:26:08.3824304Z with:
+2026-11-14T22:26:08.3824731Z   path: ./.lake
+2026-11-14T22:26:08.3826150Z   key: lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef-9f59986f8773b1e4193d717418eec4c7199013cf
+2026-11-14T22:26:08.3828449Z   enableCrossOsArchive: false
+2026-11-14T22:26:08.3828928Z ##[endgroup]
+2026-11-14T22:26:08.5356646Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/lean-net/lean-net --files-from manifest.txt --use-compress-program zstdmt
+2026-11-14T22:26:08.7422699Z Failed to save: Unable to reserve cache with key lake-Linux-X64-4aaebf30ba9ac013c0c8d1ccc97c59cbb1914eb62107eed7805a02da8a0a6902-958ab41cb93045d0fdf923247f4a59ade7c6996738b2bc45afcc850ec5651bef-9f59986f8773b1e4193d717418eec4c7199013cf, another job may be creating this cache.
+2026-11-14T22:26:08.7502103Z ##[end-action id=__leanprover_lean-action.__actions_cache;outcome=success;conclusion=success;duration_ms=488]
+2026-11-14T22:26:08.7505186Z ##[start-action display=check reservoir eligibility;id=__leanprover_lean-action.__run_4]
+2026-11-14T22:26:08.7510589Z ##[end-action id=__leanprover_lean-action.__run_4;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:26:08.7513268Z ##[start-action display=check environment with leanchecker;id=__leanprover_lean-action.__run_5]
+2026-11-14T22:26:08.7518266Z ##[end-action id=__leanprover_lean-action.__run_5;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:26:08.7520548Z ##[start-action display=check environment with nanoda;id=__leanprover_lean-action.nanoda]
+2026-11-14T22:26:08.7523745Z ##[end-action id=__leanprover_lean-action.nanoda;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:26:08.7525945Z ##[start-action display=audit axioms with axiom-audit;id=__leanprover_lean-action.axiom-audit]
+2026-11-14T22:26:08.7529579Z ##[end-action id=__leanprover_lean-action.axiom-audit;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-14T22:26:08.7577775Z ##[group]Run lake build lean-net-echo lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture
+2026-11-14T22:26:08.7579012Z [36;1mlake build lean-net-echo lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture[0m
+2026-11-14T22:26:08.7628802Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-14T22:26:08.7629176Z ##[endgroup]
+2026-11-14T22:26:11.5361108Z ✔ [2/10] Built LeanNet.Bytes (384ms)
+2026-11-14T22:26:11.7360804Z ✔ [3/19] Built LeanNet.Socket.State (501ms)
+2026-11-14T22:26:11.7362801Z ✔ [4/19] Built LeanNet.FFI.Reactor (517ms)
+2026-11-14T22:26:11.8387514Z ✔ [6/21] Built LeanNet.FFI.Errno (596ms)
+2026-11-14T22:26:12.0408744Z ✔ [8/22] Built LeanNet.FFI.Static (367ms)
+2026-11-14T22:26:12.1378382Z ✔ [10/23] Built LeanNet.FileRegion (574ms)
+2026-11-14T22:26:12.6459078Z ✔ [11/24] Built LeanNet.HTTP1.Config (537ms)
+2026-11-14T22:26:12.8437607Z ✔ [12/26] Built LeanNet.HTTP1.Protocol (1.1s)
+2026-11-14T22:26:13.2431287Z ✔ [13/26] Built LeanNet.FileSource (1.2s)
+2026-11-14T22:26:13.4468552Z ✔ [14/26] Built LeanNet.Socket.Handle (1.7s)
+2026-11-14T22:26:13.4469723Z ✔ [15/26] Built LeanNet.HTTP1.Router (721ms)
+2026-11-14T22:26:13.9588669Z ✔ [16/26] Built LeanNet.HTTP2.Push (504ms)
+2026-11-14T22:26:14.4562962Z ✔ [17/26] Built LeanNet.TCP.Connection (534ms)
+2026-11-14T22:26:14.5598077Z ✔ [18/28] Built LeanNet.HTTP1.Encoding (1.7s)
+2026-11-14T22:26:14.9569770Z ✔ [19/30] Built LeanNet.TCP.Listener (490ms)
+2026-11-14T22:26:15.4588552Z ✔ [20/34] Built LeanNet.Reactor.Basic (1.0s)
+2026-11-14T22:26:15.9628570Z ✔ [21/36] Built LeanNet.HTTP2.Frame (1.4s)
+2026-11-14T22:26:16.1583769Z ✔ [22/36] Built LeanNet.Echo.ReactorServer (705ms)
+2026-11-14T22:26:16.3628833Z ✔ [23/36] Built LeanNet.HTTP1.Parser (3.1s)
+2026-11-14T22:26:16.8631331Z ✔ [24/38] Built LeanNet.HTTP.WorkerPool (923ms)
+2026-11-14T22:26:17.0678556Z ✔ [25/39] Built LeanNet.HTTP2.HPACK (2.2s)
+2026-11-14T22:26:17.4708787Z ✔ [26/39] Built LeanNet.HTTP2.Priority (1.3s)
+2026-11-14T22:26:17.5728703Z ✔ [27/94] Built LeanNet.Echo.Server (458ms)
+2026-11-14T22:26:17.5758385Z ✔ [28/94] Built LeanNet.HTTP.Transport (690ms)
+2026-11-14T22:26:17.7753584Z ✔ [30/94] Built LeanNet.HTTP2.Stream (1.5s)
+2026-11-14T22:26:17.9756743Z ✔ [31/94] Built LeanNet.Bytes:c.o (197ms)
+2026-11-14T22:26:18.4829971Z ✔ [33/94] Built LeanNet.FFI.Errno:c.o (504ms)
+2026-11-14T22:26:18.5832073Z ✔ [34/94] Built LeanNet.HTTP.Static.Date (1.0s)
+2026-11-14T22:26:18.6836177Z ✔ [35/94] Built LeanNet.HTTP1.Machine (1.2s)
+2026-11-14T22:26:18.7848744Z ✔ [38/94] Built LeanNet.HTTP2.Request (1.2s)
+2026-11-14T22:26:18.7868143Z ✔ [39/94] Built LeanNet.Socket.State:c.o (240ms)
+2026-11-14T22:26:18.8883373Z ✔ [40/94] Built LeanNet.FFI.Static:c.o (165ms)
+2026-11-14T22:26:18.9898596Z ✔ [41/94] Built LeanNet.FFI.Reactor:c.o (301ms)
+2026-11-14T22:26:18.9928381Z ✔ [42/94] Built LeanNet.FileRegion:c.o (244ms)
+2026-11-14T22:26:19.5888707Z ✔ [43/94] Built LeanNet.Echo.ReactorServer:c.o (629ms)
+2026-11-14T22:26:19.6898697Z ✔ [44/94] Built LeanNet.Echo.Server:c.o (130ms)
+2026-11-14T22:26:19.9008756Z ✔ [46/94] Built LeanNet.FileSource:c.o (929ms)
+2026-11-14T22:26:20.3008807Z ✔ [47/94] Built LeanNet.Socket.Handle:c.o (1.7s)
+2026-11-14T22:26:20.3018246Z ✔ [48/94] Built LeanNet.HTTP1.Protocol:c.o (557ms)
+2026-11-14T22:26:20.4989001Z ✔ [51/94] Built LeanNet.HTTP1.Config:c.o (191ms)
+2026-11-14T22:26:20.8008773Z ✔ [52/94] Built LeanNet.HTTP1.Router:c.o (298ms)
+2026-11-14T22:26:20.9018567Z ✔ [53/94] Built LeanNet.HTTP2.Push:c.o (128ms)
+2026-11-14T22:26:21.1008775Z ✔ [54/94] Built LeanNet.Reactor.Basic:c.o (2.2s)
+2026-11-14T22:26:21.5038814Z ✔ [55/94] Built LeanNet.HTTP1.Encoding:c.o (1.3s)
+2026-11-14T22:26:22.1020302Z ✔ [56/94] Built LeanNet.HTTP2.Frame:c.o (1.2s)
+2026-11-14T22:26:22.7055475Z ✔ [57/94] Built LeanNet.HTTP2.Priority:c.o (1.2s)
+2026-11-14T22:26:22.9061511Z ✔ [58/97] Built LeanNet.HTTP.WorkerPool:c.o (734ms)
+2026-11-14T22:26:23.0068764Z ✔ [60/97] Built LeanNet.HTTP.Transport:c.o (327ms)
+2026-11-14T22:26:23.4098700Z ✔ [61/97] Built LeanNet.HTTP1.Parser:c.o (3.6s)
+2026-11-14T22:26:23.8113345Z ✔ [62/97] Built LeanNet.HTTP.Static.Path (790ms)
+2026-11-14T22:26:23.9138825Z ✔ [63/97] Built LeanNet.HTTP2.HPACK:c.o (2.8s)
+2026-11-14T22:26:24.0138607Z ✔ [64/100] Built LeanNet.HTTP2.Stream:c.o (1.1s)
+2026-11-14T22:26:24.4151374Z ✔ [65/100] Built LeanNet.HTTP.Static.Date:c.o (928ms)
+2026-11-14T22:26:24.6171231Z ✔ [66/100] Built LeanNet.HTTP.Static.Path:c.o (646ms)
+2026-11-14T22:26:24.9188815Z ✔ [67/100] Built LeanNet.HTTP1.Handlers (510ms)
+2026-11-14T22:26:25.0229707Z ✔ [68/103] Built LeanNet.HTTP1.Machine:c.o (1.2s)
+2026-11-14T22:26:25.3237029Z ✔ [69/103] Built LeanNet.HTTP2.Request:c.o (1.4s)
+2026-11-14T22:26:25.5238769Z ✔ [70/103] Built LeanNet.HTTP1.Handlers:c.o (234ms)
+2026-11-14T22:26:26.0238754Z ✔ [72/106] Built test.ReactorNativeTest (1.1s)
+2026-11-14T22:26:26.5236653Z ✔ [73/106] Built LeanNet.HTTP.Static.Selection (1.5s)
+2026-11-14T22:26:27.8298581Z ✔ [74/106] Built test.ReactorNativeTest:c.o (1.9s)
+2026-11-14T22:26:28.1288973Z ✔ [75/106] Built «lean-net»/socket_shim.static (2.9s)
+2026-11-14T22:26:28.2289227Z ✖ [77/106] Building «lean-net-reactor-native-test»:exe (79ms)
+2026-11-14T22:26:28.2291874Z trace: .> /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang -o /home/runner/work/lean-net/lean-net/.lake/build/bin/lean-net-reactor-native-test @/home/runner/work/lean-net/lean-net/.lake/build/bin/lean-net-reactor-native-test.rsp
+2026-11-14T22:26:28.2294270Z info: stderr:
+2026-11-14T22:26:28.2295010Z ld.lld: error: unable to find library -lbrotlienc
+2026-11-14T22:26:28.2295956Z ld.lld: error: unable to find library -lbrotlicommon
+2026-11-14T22:26:28.2297174Z clang: error: linker command failed with exit code 1 (use -v to see invocation)
+2026-11-14T22:26:28.2298967Z error: external command '/home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang' exited with code 1
+2026-11-14T22:26:28.3308704Z ✔ [78/106] Built LeanNet.HTTP2.Connection (3.6s)
+2026-11-14T22:26:28.6289460Z ✔ [79/106] Built LeanNet.HTTP.Static.Selection:c.o (1.7s)
+2026-11-14T22:26:29.1308785Z ✔ [80/106] Built LeanNet.HTTP2.Machine (806ms)
+2026-11-14T22:26:29.3328886Z ✔ [81/106] Built LeanNet.HTTP.Static.Catalog (1.5s)
+2026-11-14T22:26:29.8338549Z ✔ [82/106] Built LeanNet.HTTP2.Machine:c.o (785ms)
+2026-11-14T22:26:31.1352936Z ✔ [83/106] Built LeanNet.HTTP.Static.Catalog:c.o (1.8s)
+2026-11-14T22:26:31.7413159Z ✔ [84/106] Built LeanNet.HTTP.ReactorServer (2.7s)
+2026-11-14T22:26:32.4458549Z ✔ [85/106] Built LeanNet.HTTP.Static (641ms)
+2026-11-14T22:26:32.6458666Z ✔ [86/106] Built test.HTTP2ReactorFixture (903ms)
+2026-11-14T22:26:32.8479829Z ✔ [87/106] Built LeanNet.HTTP.Static:c.o (164ms)
+2026-11-14T22:26:33.2498516Z ✔ [88/106] Built test.HTTP1ReactorFixture (842ms)
+2026-11-14T22:26:33.8518898Z ✔ [89/106] Built test.HTTP2ReactorFixture:c.o (577ms)
+2026-11-14T22:26:34.6610371Z ✔ [90/106] Built test.StaticReactorFixture (855ms)
+2026-11-14T22:26:35.2648776Z ✔ [91/106] Built LeanNet.HTTP1.Server (2.4s)
+2026-11-14T22:26:35.3658855Z ✔ [92/106] Built test.HTTP1ReactorFixture:c.o (646ms)
+2026-11-14T22:26:35.4648586Z ✔ [93/106] Built test.StaticReactorFixture:c.o (196ms)
+2026-11-14T22:26:36.0658568Z ✔ [94/106] Built LeanNet.HTTP2.Server (604ms)
+2026-11-14T22:26:36.2678593Z ✔ [95/106] Built LeanNet.HTTP2.Server:c.o (196ms)
+2026-11-14T22:26:36.7691841Z ✔ [96/106] Built LeanNet (517ms)
+2026-11-14T22:26:36.9694613Z ✔ [97/106] Built LeanNet:c.o (129ms)
+2026-11-14T22:26:37.4723176Z ✔ [98/106] Built LeanNet.HTTP2.Connection:c.o (9.2s)
+2026-11-14T22:26:37.5723752Z ✔ [99/106] Built Main (626ms)
+2026-11-14T22:26:37.7728743Z ✔ [100/106] Built Main:c.o (223ms)
+2026-11-14T22:26:38.0724390Z ✔ [101/106] Built LeanNet.HTTP1.Server:c.o (2.7s)
+2026-11-14T22:26:38.6749376Z ✔ [102/106] Built LeanNet.HTTP.ReactorServer:c.o (6.9s)
+2026-11-14T22:26:38.7741428Z ✖ [103/106] Building «lean-net-echo»:exe (89ms)
+2026-11-14T22:26:38.7744738Z trace: .> /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang -o /home/runner/work/lean-net/lean-net/.lake/build/bin/lean-net-echo @/home/runner/work/lean-net/lean-net/.lake/build/bin/lean-net-echo.rsp
+2026-11-14T22:26:38.7746604Z info: stderr:
+2026-11-14T22:26:38.7746939Z ld.lld: error: unable to find library -lbrotlienc
+2026-11-14T22:26:38.7747746Z ld.lld: error: unable to find library -lbrotlicommon
+2026-11-14T22:26:38.7748666Z clang: error: linker command failed with exit code 1 (use -v to see invocation)
+2026-11-14T22:26:38.7749561Z error: external command '/home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang' exited with code 1
+2026-11-14T22:26:38.7750546Z ✖ [104/106] Building «lean-net-http1-reactor-fixture»:exe (82ms)
+2026-11-14T22:26:38.7752088Z trace: .> /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang -o /home/runner/work/lean-net/lean-net/.lake/build/bin/lean-net-http1-reactor-fixture @/home/runner/work/lean-net/lean-net/.lake/build/bin/lean-net-http1-reactor-fixture.rsp
+2026-11-14T22:26:38.7753473Z info: stderr:
+2026-11-14T22:26:38.7753799Z ld.lld: error: unable to find library -lbrotlienc
+2026-11-14T22:26:38.7754264Z ld.lld: error: unable to find library -lbrotlicommon
+2026-11-14T22:26:38.7754743Z clang: error: linker command failed with exit code 1 (use -v to see invocation)
+2026-11-14T22:26:38.7755432Z error: external command '/home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang' exited with code 1
+2026-11-14T22:26:38.7756127Z ✖ [105/106] Building «lean-net-http2-reactor-fixture»:exe (71ms)
+2026-11-14T22:26:38.7757443Z trace: .> /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang -o /home/runner/work/lean-net/lean-net/.lake/build/bin/lean-net-http2-reactor-fixture @/home/runner/work/lean-net/lean-net/.lake/build/bin/lean-net-http2-reactor-fixture.rsp
+2026-11-14T22:26:38.7758492Z info: stderr:
+2026-11-14T22:26:38.7758733Z ld.lld: error: unable to find library -lbrotlienc
+2026-11-14T22:26:38.7759079Z ld.lld: error: unable to find library -lbrotlicommon
+2026-11-14T22:26:38.7759520Z clang: error: linker command failed with exit code 1 (use -v to see invocation)
+2026-11-14T22:26:38.7760176Z error: external command '/home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang' exited with code 1
+2026-11-14T22:26:38.7760828Z ✖ [106/106] Building «lean-net-static-fixture»:exe (70ms)
+2026-11-14T22:26:38.7761843Z trace: .> /home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang -o /home/runner/work/lean-net/lean-net/.lake/build/bin/lean-net-static-fixture @/home/runner/work/lean-net/lean-net/.lake/build/bin/lean-net-static-fixture.rsp
+2026-11-14T22:26:38.7762789Z info: stderr:
+2026-11-14T22:26:38.7763028Z ld.lld: error: unable to find library -lbrotlienc
+2026-11-14T22:26:38.7763377Z ld.lld: error: unable to find library -lbrotlicommon
+2026-11-14T22:26:38.7763811Z clang: error: linker command failed with exit code 1 (use -v to see invocation)
+2026-11-14T22:26:38.7764475Z error: external command '/home/runner/.elan/toolchains/leanprover--lean4---v4.35.0/bin/clang' exited with code 1
+2026-11-14T22:26:38.7765019Z Some required targets logged failures:
+2026-11-14T22:26:38.7765350Z - «lean-net-reactor-native-test»:exe
+2026-11-14T22:26:38.7765661Z - «lean-net-echo»:exe
+2026-11-14T22:26:38.7766172Z - «lean-net-http1-reactor-fixture»:exe
+2026-11-14T22:26:38.7766507Z - «lean-net-http2-reactor-fixture»:exe
+2026-11-14T22:26:38.7766821Z - «lean-net-static-fixture»:exe
+2026-11-14T22:26:38.7839117Z error: build failed
+2026-11-14T22:26:38.8336856Z ##[error]Process completed with exit code 1.
+2026-11-14T22:26:38.8504060Z Post job cleanup.
+2026-11-14T22:26:38.9422901Z [command]/usr/bin/git version
+2026-11-14T22:26:38.9482312Z git version 2.56.1
+2026-11-14T22:26:38.9525544Z Temporarily overriding HOME='/home/runner/work/_temp/a95aadc7-7fa6-4b08-b785-458323bd9204' before making global git config changes
+2026-11-14T22:26:38.9526615Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-14T22:26:38.9531333Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/lean-net/lean-net
+2026-11-14T22:26:38.9570088Z Removing SSH command configuration
+2026-11-14T22:26:38.9577919Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-14T22:26:38.9621629Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-14T22:26:38.9962718Z Removing HTTP extra header
+2026-11-14T22:26:38.9968809Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-14T22:26:39.0009899Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-14T22:26:39.0326442Z Removing includeIf entries pointing to credentials config files
+2026-11-14T22:26:39.0333637Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-14T22:26:39.0393945Z includeif.gitdir:/home/runner/work/lean-net/lean-net/.git.path
+2026-11-14T22:26:39.0394868Z includeif.gitdir:/home/runner/work/lean-net/lean-net/.git/worktrees/*.path
+2026-11-14T22:26:39.0395417Z includeif.gitdir:/github/workspace/.git.path
+2026-11-14T22:26:39.0395883Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-11-14T22:26:39.0403414Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/lean-net/lean-net/.git.path
+2026-11-14T22:26:39.0427803Z /home/runner/work/_temp/git-credentials-6620fcac-91bb-420f-92a4-066aa730ccfc.config
+2026-11-14T22:26:39.0437874Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/lean-net/lean-net/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-6620fcac\-91bb\-420f\-92a4\-066aa730ccfc\.config
+2026-11-14T22:26:39.0472867Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/lean-net/lean-net/.git/worktrees/*.path
+2026-11-14T22:26:39.0501103Z /home/runner/work/_temp/git-credentials-6620fcac-91bb-420f-92a4-066aa730ccfc.config
+2026-11-14T22:26:39.0508577Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/lean-net/lean-net/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-6620fcac\-91bb\-420f\-92a4\-066aa730ccfc\.config
+2026-11-14T22:26:39.0543128Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-11-14T22:26:39.0566759Z /github/runner_temp/git-credentials-6620fcac-91bb-420f-92a4-066aa730ccfc.config
+2026-11-14T22:26:39.0574881Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-6620fcac\-91bb\-420f\-92a4\-066aa730ccfc\.config
+2026-11-14T22:26:39.0608815Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-11-14T22:26:39.0632033Z /github/runner_temp/git-credentials-6620fcac-91bb-420f-92a4-066aa730ccfc.config
+2026-11-14T22:26:39.0640158Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-6620fcac\-91bb\-420f\-92a4\-066aa730ccfc\.config
+2026-11-14T22:26:39.0673993Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-14T22:26:39.0969880Z Removing credentials config '/home/runner/work/_temp/git-credentials-6620fcac-91bb-420f-92a4-066aa730ccfc.config'
+2026-11-14T22:26:39.1156854Z Cleaning up orphan processes

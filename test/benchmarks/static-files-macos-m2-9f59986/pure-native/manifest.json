@@ -1,0 +1,126 @@
+{
+  "started": "2026-11-14T22:24:04.835919+00:00",
+  "head": "c618015daca1901a39eba6d5bb00a3c1899185c3",
+  "platform": "macOS-27.2.1-arm64-arm-64bit",
+  "tests": [
+    {
+      "test": "test/HTTP1ParserV2Test.lean",
+      "exit_code": 0,
+      "seconds": 13.509,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP1ParserV2Test.log"
+    },
+    {
+      "test": "test/HTTP1EncodingTest.lean",
+      "exit_code": 0,
+      "seconds": 1.178,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP1EncodingTest.log"
+    },
+    {
+      "test": "test/HTTP1MachineTest.lean",
+      "exit_code": 0,
+      "seconds": 1.189,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP1MachineTest.log"
+    },
+    {
+      "test": "test/HTTP1FileTest.lean",
+      "exit_code": 0,
+      "seconds": 0.788,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP1FileTest.log"
+    },
+    {
+      "test": "test/HTTP2FrameTest.lean",
+      "exit_code": 0,
+      "seconds": 0.736,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP2FrameTest.log"
+    },
+    {
+      "test": "test/HTTP2FrameV2Test.lean",
+      "exit_code": 0,
+      "seconds": 0.84,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP2FrameV2Test.log"
+    },
+    {
+      "test": "test/HPACKTest.lean",
+      "exit_code": 0,
+      "seconds": 0.854,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HPACKTest.log"
+    },
+    {
+      "test": "test/HTTP2RequestTest.lean",
+      "exit_code": 0,
+      "seconds": 0.79,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP2RequestTest.log"
+    },
+    {
+      "test": "test/HTTP2StreamTest.lean",
+      "exit_code": 0,
+      "seconds": 0.981,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP2StreamTest.log"
+    },
+    {
+      "test": "test/HTTP2ConnectionTest.lean",
+      "exit_code": 0,
+      "seconds": 1.75,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP2ConnectionTest.log"
+    },
+    {
+      "test": "test/HTTP2ConnectionV2Test.lean",
+      "exit_code": 0,
+      "seconds": 1.434,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP2ConnectionV2Test.log"
+    },
+    {
+      "test": "test/PriorityTest.lean",
+      "exit_code": 0,
+      "seconds": 0.716,
+      "log": "/tmp/lean-net-phase5-final-pure-native/PriorityTest.log"
+    },
+    {
+      "test": "test/HTTP2MachineTest.lean",
+      "exit_code": 0,
+      "seconds": 0.77,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP2MachineTest.log"
+    },
+    {
+      "test": "test/HTTP2FileTest.lean",
+      "exit_code": 0,
+      "seconds": 0.92,
+      "log": "/tmp/lean-net-phase5-final-pure-native/HTTP2FileTest.log"
+    },
+    {
+      "test": "test/StaticSelectionTest.lean",
+      "exit_code": 0,
+      "seconds": 0.88,
+      "log": "/tmp/lean-net-phase5-final-pure-native/StaticSelectionTest.log"
+    },
+    {
+      "test": "test/test_reactor_posix.py",
+      "exit_code": 0,
+      "seconds": 2.794,
+      "log": "/tmp/lean-net-phase5-final-pure-native/test_reactor_posix.log"
+    },
+    {
+      "test": "test/test_reactor_file.py",
+      "exit_code": 0,
+      "seconds": 1.854,
+      "log": "/tmp/lean-net-phase5-final-pure-native/test_reactor_file.log"
+    },
+    {
+      "test": "test/test_static_catalog.py",
+      "exit_code": 0,
+      "seconds": 0.889,
+      "log": "/tmp/lean-net-phase5-final-pure-native/test_static_catalog.log"
+    }
+  ],
+  "finished": "2026-11-14T22:24:37.757826+00:00",
+  "passed": 18,
+  "failed": 0,
+  "source_scope": "Current uncommitted Phase 5 working tree; head is parent base, not a committed Phase 5 artifact.",
+  "sanitizers": {
+    "address": true,
+    "undefined": true,
+    "RN_POSIX_SANITIZERS": "1",
+    "RN_FILE_SANITIZERS": "1",
+    "platform_note": "Apple ASan does not provide LeakSanitizer; static catalog fixture disables leak detection on macOS."
+  }
+}
