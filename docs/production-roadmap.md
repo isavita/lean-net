@@ -56,14 +56,16 @@ coverage, not evidence that the new architecture or performance gates pass.
   the latest acceptance repetition is recorded below.
 - The original blocking echo baseline at concurrency100 was approximately
   17.3k RPS and only one client progressed in the first second.
-- Native reactor CI on Linux epoll and macOS kqueue passed on d0d0a83,
-  including lifecycle/allocation sanitizers and echo acceptance. The previous
-  HTTP/1.1/h2c/TLS regression workflow also passed on that revision.
+- Native reactor CI passed on Linux epoll, macOS kqueue, and Windows IOCP on
+  dd4ec64. Unix coverage includes lifecycle/allocation sanitizers and echo
+  acceptance; Windows coverage includes actual overlapped I/O cancellation,
+  buffer ownership, and console wakeup tests. The existing HTTP/1.1/h2c/TLS
+  regression workflow also passed on that revision.
 - Latest local completion-history echo gate: 191,923 verified RPS at
   concurrency100 with eight workers, 200,000 requests, all clients progressing;
   report: test/benchmarks/echo-reactor-completion-gate-macos-m2.json.
-- Windows IOCP runtime CI and the Windows multi-core acceptor design remain
-  open. Windows echo currently requires an explicit single worker.
+- The approved Windows multi-core acceptor transfer path remains to be
+  implemented. Windows echo currently requires an explicit single worker.
 - macOS listener tracing found all connections assigned to the last-created
   SO_REUSEPORT listener, including with four independent load processes and
   1,000 concurrent connections. Multi-core scaling remains unproven; the raw

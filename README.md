@@ -1,8 +1,8 @@
 # lean-net
 
-A Lean 4 TCP and HTTP library under development. The first milestone is a
-single-threaded TCP echo and HTTP/1.1 servers with an incremental request parser.
-The HTTP server uses a non-blocking poll loop and supports HTTP/1.1 and
+A Lean 4 TCP and HTTP library under development. The TCP echo server uses a
+native epoll/kqueue/IOCP reactor. The HTTP server currently uses a non-blocking
+poll loop and supports HTTP/1.1 and
 prior-knowledge HTTP/2 over cleartext (h2c) on the same listener. The
 separate `tls/` package adds OpenSSL TLS and ALPN for HTTP/2 and HTTP/1.1.
 
