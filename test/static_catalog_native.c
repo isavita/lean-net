@@ -65,22 +65,28 @@ static DWORD create_before[16], create_after[16], security_before, security_afte
 static HANDLE WINAPI tested_create_file(LPCWSTR path, DWORD access, DWORD sharing,
                                         LPSECURITY_ATTRIBUTES security, DWORD disposition,
                                         DWORD flags, HANDLE template) {
+  DWORD incoming_error = GetLastError();
   DWORD before = 0, after = 0;
   if (capture_owned_handles)
     REQUIRE(GetProcessHandleCount(GetCurrentProcess(), &before));
+  SetLastError(incoming_error);
   HANDLE handle = CreateFileW(path, access, sharing, security, disposition, flags, template);
+  DWORD last_error = GetLastError();
   if (capture_owned_handles && handle != INVALID_HANDLE_VALUE) {
     REQUIRE(GetProcessHandleCount(GetCurrentProcess(), &after));
     REQUIRE(owned_count < sizeof(owned_handles) / sizeof(*owned_handles));
+    REQUIRE(owned_created < sizeof(create_before) / sizeof(*create_before));
     create_before[owned_created] = before;
     create_after[owned_created] = after;
     owned_handles[owned_count++] = handle;
     ++owned_created;
   }
+  SetLastError(last_error);
   return handle;
 }
 static BOOL WINAPI tested_close_handle(HANDLE handle) {
   BOOL result = CloseHandle(handle);
+  DWORD last_error = GetLastError();
   if (capture_owned_handles && result) {
     for (unsigned i = 0; i < owned_count; ++i)
       if (owned_handles[i] == handle) {
@@ -89,16 +95,21 @@ static BOOL WINAPI tested_close_handle(HANDLE handle) {
         break;
       }
   }
+  SetLastError(last_error);
   return result;
 }
 static BOOL WINAPI tested_security(LPCWSTR text, DWORD revision, PSECURITY_DESCRIPTOR *descriptor,
                                    PULONG size) {
+  DWORD incoming_error = GetLastError();
   if (capture_owned_handles)
     REQUIRE(GetProcessHandleCount(GetCurrentProcess(), &security_before));
+  SetLastError(incoming_error);
   BOOL result =
       ConvertStringSecurityDescriptorToSecurityDescriptorW(text, revision, descriptor, size);
+  DWORD last_error = GetLastError();
   if (capture_owned_handles)
     REQUIRE(GetProcessHandleCount(GetCurrentProcess(), &security_after));
+  SetLastError(last_error);
   return result;
 }
 typedef struct {
