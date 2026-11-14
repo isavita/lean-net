@@ -554,7 +554,7 @@ static void test_generation_retirement(void) {
   check(rn_socket_new(r, &last) == 0 && (int64_t)last > 0 && (last >> 32) == INT32_MAX, "final IOCP socket token remains signed-positive");
   check(rn_arm_timer(r, stale, 0, 0) == -EINVAL && rn_close_connection(r, stale) == -EINVAL, "old IOCP socket alias cannot address final generation");
   check(rn_close_connection(r, last) == 0 && rn_step(r, 0) == 1 && rn_event_at(r, 0)->connection == last, "final IOCP socket closes with original identity");
-  check(r->free_connection_count == 0 && rn_socket_new(r, &unavailable) == -EAGAIN && unavailable == 0, "exhausted IOCP connection slot is retired");
+  check(r->free_connection_count == 0 && rn_socket_new(r, &unavailable) == -ENOBUFS && unavailable == 0, "exhausted IOCP connection slot is retired");
   check(rn_close_connection(r, last) == -EINVAL && rn_arm_timer(r, last, 0, 0) == -EINVAL && rn_arm_timer(r, stale, 0, 0) == -EINVAL, "all retired IOCP socket aliases remain stale");
   check(rn_acquire_buffer(r, 1, &stale) == 0 && rn_buffer_release(r, stale) == 0, "recycle IOCP buffer before boundary");
   r->buffers[rn_index(stale)].generation = RN_GENERATION_MAX - 1;
@@ -565,7 +565,7 @@ static void test_generation_retirement(void) {
   lean_object *invalid = NULL;
   check(rn_buffer_view(r, stale, &invalid) == -EINVAL && rn_buffer_view(r, last, &invalid) == -EINVAL && rn_buffer_release(r, last) == -EINVAL, "retired IOCP buffer aliases cannot reacquire ownership");
   check(lean_sarray_size(view) == sizeof(binary) && memcmp(lean_sarray_cptr(view), binary, sizeof(binary)) == 0, "retired IOCP buffer view immutable"); lean_dec(view);
-  for (unsigned i = 0; i < 8; ++i) check(rn_acquire_buffer(r, 1, &unavailable) == -EAGAIN && unavailable == 0 && rn_socket_new(r, &unavailable) == -EAGAIN && rn_step(r, 1) == 0, "retired IOCP exhaustion returns without a completion spin");
+  for (unsigned i = 0; i < 8; ++i) check(rn_acquire_buffer(r, 1, &unavailable) == -EAGAIN && unavailable == 0 && rn_socket_new(r, &unavailable) == -ENOBUFS && rn_step(r, 1) == 0, "retired IOCP exhaustion returns without a completion spin");
   atomic_store(&track_native_allocations, 0);
   check(atomic_load(&native_allocations) == 0 && rn_free(r) == 0, "generation retirement has no hot allocation or leaked port");
 }

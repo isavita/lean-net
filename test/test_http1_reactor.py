@@ -404,21 +404,27 @@ class NormalAcceptance:
         self.assertEqual(self.request(b"/binary").body, BINARY_BODY)
 
     def test_worker_ownership_distribution(self):
-        peers = [connect(self.port) for _ in range(32)]
-        try:
-            for sock in peers:
-                sock.sendall(b"GET /who HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-            counts = Counter()
-            for sock in peers:
-                reader = Reader(sock); response = reader.response()
-                worker = int(response.headers[b"x-worker"])
-                self.assertEqual(response.body, str(worker).encode())
-                counts[worker] += 1; reader.eof()
-            self.assertEqual(set(counts), set(range(self.workers)))
+        # Linux hashes connections rather than promising equal counts. Several
+        # bounded batches exercise every worker without relying on one hash sample.
+        batches = 8 if sys.platform == "linux" else 1
+        counts = Counter()
+        for _ in range(batches):
+            peers = [connect(self.port) for _ in range(32)]
+            try:
+                for sock in peers:
+                    sock.sendall(b"GET /who HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                for sock in peers:
+                    reader = Reader(sock); response = reader.response()
+                    worker = int(response.headers[b"x-worker"])
+                    self.assertEqual(response.body, str(worker).encode())
+                    counts[worker] += 1; reader.eof()
+            finally:
+                for sock in peers:
+                    sock.close()
+        self.assertEqual(set(counts), set(range(self.workers)))
+        self.assertEqual(sum(counts.values()), 32 * batches)
+        if sys.platform in ("darwin", "win32"):
             self.assertEqual(set(counts.values()), {32 // self.workers})
-        finally:
-            for sock in peers:
-                sock.close()
 
     def test_date_input_and_observable_second_cache(self):
         supplied = self.request(b"/date")
