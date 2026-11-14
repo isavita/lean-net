@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 #if defined(__linux__)
@@ -37,6 +38,7 @@
 #define RN_READ_BUDGET 16u
 #define RN_WRITE_BUDGET 16u
 #define RN_ACCEPT_BUDGET 64u
+#define RN_GENERATION_MAX ((uint32_t)INT32_MAX)
 
 typedef struct rn_conn {
     int fd;
@@ -50,6 +52,7 @@ typedef struct rn_conn {
     uint8_t paused;
     uint8_t eof;
     uint8_t drain_close;
+    uint8_t read_disabled;
 } rn_conn;
 typedef struct rn_buffer {
     lean_object *bytes;
@@ -136,8 +139,7 @@ static int rn_buffer_get(rn_reactor *r, uint64_t token, rn_buffer **out) {
     *out = b; return 0;
 }
 static uint32_t rn_generation(uint32_t old) {
-    uint32_t next = (old + 1u) & 0x7fffffffu;
-    return next == 0 ? 1u : next;
+    return old < RN_GENERATION_MAX ? old + 1u : 0;
 }
 static int rn_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL);
@@ -201,7 +203,7 @@ static int rn_interest(rn_reactor *r, uint32_t index, uint8_t mask) {
 }
 static void rn_buffer_free_candidate(rn_reactor *r, uint32_t index) {
     rn_buffer *b = &r->buffers[index];
-    if (!b->owner && b->writes == 0 && !b->on_free) {
+    if (!b->owner && b->writes == 0 && !b->on_free && b->generation < RN_GENERATION_MAX) {
         b->on_free = 1;
         r->free_buffers[r->free_buffer_count++] = index;
     }
@@ -213,6 +215,12 @@ int rn_acquire_buffer(rn_reactor *r, uint32_t minimum, uint64_t *out) {
     for (uint32_t remaining = r->free_buffer_count; remaining > 0; --remaining) {
         uint32_t pos = remaining - 1u;
         uint32_t index = r->free_buffers[pos]; rn_buffer *b = &r->buffers[index];
+        if (b->generation >= RN_GENERATION_MAX) {
+            uint32_t last = --r->free_buffer_count;
+            r->free_buffers[pos] = r->free_buffers[last]; b->on_free = 0;
+            if (best_position == last) best_position = pos;
+            continue;
+        }
         if (b->capacity >= minimum && b->capacity < best_capacity && lean_is_exclusive(b->bytes)) {
             best = index; best_position = pos; best_capacity = b->capacity;
             if (best_capacity == preferred) break;
@@ -308,10 +316,14 @@ int rn_close_connection(rn_reactor *r, uint64_t token) {
 }
 int rn_socket_new(rn_reactor *r, uint64_t *out) {
     if (out == NULL) return -EINVAL;
-    if (r->free_connection_count == 0) return -EAGAIN;
-    uint32_t index = r->free_connections[--r->free_connection_count];
+    uint32_t index = 0, generation = 0;
+    while (r->free_connection_count) {
+        index = r->free_connections[--r->free_connection_count];
+        generation = rn_generation(r->connections[index].generation);
+        if (generation) break;
+    }
+    if (!generation) return -EAGAIN;
     rn_conn *c = &r->connections[index];
-    uint32_t generation = rn_generation(c->generation);
     memset(c, 0, sizeof(*c)); c->fd = c->pending_accept_fd = -1; c->generation = generation; c->state = 1;
     c->head_write = c->tail_write = c->next_closed = RN_NONE;
     *out = rn_token(index, generation); return 0;
@@ -403,6 +415,22 @@ int rn_close_after_writes(rn_reactor *r, uint64_t token) {
     if (c->head_write == RN_NONE) return rn_close_connection(r, token);
     c->drain_close = 1;
     return rn_interest(r, rn_index(token), 2);
+}
+int rn_set_read_enabled(rn_reactor *r, uint64_t token, int enabled) {
+    if (r == NULL || (enabled != 0 && enabled != 1)) return -EINVAL;
+    rn_conn *c; int error = rn_conn_get(r, token, &c);
+    if (error) return error;
+    if (c->state != 4) return -EINVAL;
+    uint8_t interest = (uint8_t)(c->interest & 2u);
+    if (enabled && !c->paused && !c->eof && !c->drain_close) interest |= 1u;
+    error = rn_interest(r, rn_index(token), interest);
+    if (!error) c->read_disabled = (uint8_t)!enabled;
+    return error;
+}
+int rn_connection_live(rn_reactor *r, uint64_t token) {
+    if (r == NULL) return -EINVAL;
+    rn_conn *c;
+    return rn_conn_get(r, token, &c) == 0 && c->state == 4;
 }
 
 static int rn_peer_error(int fd) {
@@ -584,7 +612,7 @@ static int rn_accept_ready(rn_reactor *r, uint32_t index) {
 }
 static int rn_read_ready(rn_reactor *r, uint32_t index) {
     rn_conn *c = &r->connections[index]; uint64_t token = rn_token(index, c->generation);
-    if (c->eof || c->drain_close) return 0;
+    if (c->eof || c->drain_close || c->read_disabled) return 0;
     for (uint32_t attempt = 0; attempt < RN_READ_BUDGET && r->event_count < r->config.max_events; ++attempt) {
         uint64_t lease;
         int error = rn_acquire_buffer(r, 4096, &lease);
@@ -615,41 +643,60 @@ static int rn_read_ready(rn_reactor *r, uint32_t index) {
 }
 static int rn_write_ready(rn_reactor *r, uint32_t index) {
     rn_conn *c = &r->connections[index]; uint64_t token = rn_token(index, c->generation);
-    for (uint32_t attempt = 0; attempt < RN_WRITE_BUDGET && c->head_write != RN_NONE &&
+    uint32_t budget = RN_WRITE_BUDGET;
+    for (uint32_t attempt = 0; attempt < RN_WRITE_BUDGET && budget && c->head_write != RN_NONE &&
          r->event_count < r->config.max_events; ++attempt) {
-        uint32_t write_index = c->head_write; rn_write *w = &r->writes[write_index];
-        rn_buffer *b = &r->buffers[rn_index(w->buffer)];
-        uint32_t remaining = w->length - w->sent;
+        struct iovec vectors[16];
+        uint32_t count = 0, wi = c->head_write;
+        uint32_t limit = r->config.max_events - r->event_count;
+        if (limit > budget) limit = budget;
+        if (limit > 16u) limit = 16u;
+        size_t total = 0;
+        while (wi != RN_NONE && count < limit) {
+            rn_write *w = &r->writes[wi]; rn_buffer *b = &r->buffers[rn_index(w->buffer)];
+            vectors[count].iov_base = lean_sarray_cptr(b->bytes) + w->offset + w->sent;
+            vectors[count].iov_len = w->length - w->sent;
+            total += vectors[count].iov_len;
+            ++count; wi = w->next;
+        }
         ssize_t n;
-        if (remaining == 0) n = 0;
+        if (total == 0) n = 0;
         else {
-#ifdef MSG_NOSIGNAL
-            int flags = MSG_NOSIGNAL;
+#if defined(__linux__)
+            struct msghdr message; memset(&message, 0, sizeof(message));
+            message.msg_iov = vectors; message.msg_iovlen = count;
+            n = sendmsg(c->fd, &message, MSG_NOSIGNAL);
 #else
-            int flags = 0;
+            n = writev(c->fd, vectors, (int)count);
 #endif
-            n = send(c->fd, lean_sarray_cptr(b->bytes) + w->offset + w->sent, remaining, flags);
         }
         if (n < 0) {
             int e = errno;
             if (e == EAGAIN || e == EWOULDBLOCK) return 0;
+            rn_write *w = &r->writes[c->head_write];
             int error = rn_emit(r, RN_ERROR, token, w->operation, 0, 0, 0, -e, 0);
             if (error) return error;
             if (e != EINTR) return rn_close_connection(r, token);
             return 0;
         }
-        if (remaining && n == 0) {
+        if ((total && n == 0) || (size_t)n > total) {
+            rn_write *w = &r->writes[c->head_write];
             int error = rn_emit(r, RN_ERROR, token, w->operation, 0, 0, 0, -EIO, 0);
             if (error) return error;
             return rn_close_connection(r, token);
         }
-        w->sent += (uint32_t)n;
-        if (w->sent == w->length) {
+        size_t remaining = (size_t)n;
+        for (uint32_t completed = 0; completed < count && c->head_write != RN_NONE; ++completed) {
+            uint32_t write_index = c->head_write; rn_write *w = &r->writes[write_index];
+            uint32_t length = w->length - w->sent;
+            if (remaining < length) { w->sent += (uint32_t)remaining; break; }
+            remaining -= length;
             int error = rn_emit(r, RN_WRITTEN, token, w->operation, 0, 0, w->length, w->length, 0);
             if (error) return error;
             c->head_write = w->next;
             if (c->head_write == RN_NONE) c->tail_write = RN_NONE;
             rn_write_release(r, write_index);
+            --budget;
         }
     }
     if (c->head_write == RN_NONE) {
@@ -667,7 +714,8 @@ static int rn_closed_events(rn_reactor *r) {
         r->closed_head = c->next_closed;
         if (r->closed_head == RN_NONE) r->closed_tail = RN_NONE;
         c->state = 0; c->next_closed = RN_NONE;
-        r->free_connections[r->free_connection_count++] = index;
+        if (c->generation < RN_GENERATION_MAX)
+            r->free_connections[r->free_connection_count++] = index;
     }
     return 0;
 }
@@ -696,7 +744,8 @@ static void rn_due_timers(rn_reactor *r, uint64_t now) {
 }
 static int rn_has_read_buffer(rn_reactor *r) {
     for (uint32_t pos = 0; pos < r->free_buffer_count; ++pos) {
-        if (lean_is_exclusive(r->buffers[r->free_buffers[pos]].bytes)) return 1;
+        rn_buffer *b = &r->buffers[r->free_buffers[pos]];
+        if (b->generation < RN_GENERATION_MAX && lean_is_exclusive(b->bytes)) return 1;
     }
     return 0;
 }
@@ -709,7 +758,7 @@ static int rn_resume_paused(rn_reactor *r) {
             c->paused = 0; r->paused_connections[position] = r->paused_connections[--r->paused_count];
             continue;
         }
-        int enabled = c->state == 3 ? r->free_connection_count != 0 : available;
+        int enabled = c->state == 3 ? r->free_connection_count != 0 : available && !c->read_disabled;
 #if defined(__APPLE__)
         if (c->state == 3 && r->accept_target_count) {
             int error = c->pending_accept_fd >= 0 ? rn_forward_accept(r, c) : 0;

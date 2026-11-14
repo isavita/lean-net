@@ -10,7 +10,9 @@ first read. One-worker servers use their reactor's listener directly.
 Each reactor owns its sockets, write operations, timer entries, event records,
 and fixed-capacity 4 KiB/16 KiB/64 KiB buffer pools. Native connection and buffer
 tokens carry generations; a token from a closed/recycled object cannot address
-its replacement. Established native I/O uses startup-allocated storage. Lean's
+its replacement. Generations never wrap: exhausted socket and buffer slots are
+retired before crossing the signed FFI token boundary. Established native I/O
+uses startup-allocated storage. Lean's
 FFI adapters and protocol dispatch can still allocate Lean result objects; this
 is not a claim of allocation-free whole-program execution.
 

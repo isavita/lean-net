@@ -94,6 +94,13 @@ lean_object *shim_reactor_write(uint64_t handle, uint64_t connection, uint64_t b
                                uint32_t offset, uint32_t length, uint64_t operation) {
     return rn_io_number(handle == 0 ? -EINVAL : rn_queue_write(rn_handle(handle), connection, buffer, offset, length, operation));
 }
+lean_object *shim_reactor_read_enabled(uint64_t handle, uint64_t connection, uint8_t enabled) {
+    return rn_io_number(handle == 0 || enabled > 1 ? -EINVAL :
+        rn_set_read_enabled(rn_handle(handle), connection, enabled));
+}
+lean_object *shim_reactor_connection_live(uint64_t handle, uint64_t connection) {
+    return rn_io_number(handle == 0 ? -EINVAL : rn_connection_live(rn_handle(handle), connection));
+}
 lean_object *shim_reactor_acquire(uint64_t handle, uint32_t minimum) {
     if (handle == 0) return rn_io_number(-EINVAL);
     uint64_t token = 0;
@@ -114,6 +121,13 @@ lean_object *shim_reactor_copy(uint64_t handle, uint64_t token, b_lean_obj_arg b
     size_t size = lean_sarray_size((lean_object *)bytes);
     if (handle == 0 || size > UINT32_MAX) return rn_io_number(-EINVAL);
     return rn_io_number(rn_buffer_copy(rn_handle(handle), token, lean_sarray_cptr((lean_object *)bytes), (uint32_t)size));
+}
+lean_object *shim_reactor_copy_slice(uint64_t handle, uint64_t token, b_lean_obj_arg bytes,
+                                    uint32_t offset, uint32_t length) {
+    size_t size = lean_sarray_size((lean_object *)bytes);
+    if (handle == 0 || offset > size || length > size - offset) return rn_io_number(-EINVAL);
+    return rn_io_number(rn_buffer_copy(rn_handle(handle), token,
+        lean_sarray_cptr((lean_object *)bytes) + offset, length));
 }
 lean_object *shim_reactor_arm_timer(uint64_t handle, uint64_t connection, uint32_t kind, uint64_t deadline) {
     return rn_io_number(handle == 0 ? -EINVAL : rn_arm_timer(rn_handle(handle), connection, kind, deadline));

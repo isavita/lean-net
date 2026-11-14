@@ -1,4 +1,5 @@
 /- Public LeanNet API. Raw FFI declarations are implementation details. -/
+import LeanNet.Bytes
 import LeanNet.Socket.Handle
 import LeanNet.TCP.Listener
 import LeanNet.TCP.Connection
@@ -7,7 +8,14 @@ import LeanNet.HTTP1.Request
 import LeanNet.HTTP1.Parser
 import LeanNet.HTTP1.Date
 import LeanNet.HTTP1.Response
+import LeanNet.HTTP1.Protocol
+import LeanNet.HTTP1.Encoding
+import LeanNet.HTTP1.Config
+import LeanNet.HTTP1.Router
+import LeanNet.HTTP1.Machine
+import LeanNet.HTTP1.Handlers
 import LeanNet.HTTP1.Server
+import LeanNet.HTTP.ReactorServer
 import LeanNet.HTTP2.Preface
 import LeanNet.HTTP2.Frame
 import LeanNet.HTTP2.HPACK

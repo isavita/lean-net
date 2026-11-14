@@ -1,4 +1,4 @@
-import LeanNet.HTTP1.Request
+import LeanNet.HTTP1.Protocol
 
 namespace LeanNet.HTTP1
 
@@ -8,8 +8,6 @@ private def tokenByte (b : UInt8) : Bool :=
   (n >= 48 && n <= 57) || (n >= 65 && n <= 90) || (n >= 97 && n <= 122) ||
     [33, 35, 36, 37, 38, 39, 42, 43, 45, 46, 94, 95, 96, 124, 126].contains n
 private def whitespace (b : UInt8) : Bool := b == 32 || b == 9
-private def trim (xs : List UInt8) : List UInt8 :=
-  ((xs.dropWhile whitespace).reverse.dropWhile whitespace).reverse
 
 private def splitOnce (xs : List UInt8) (separator : UInt8) : Option (List UInt8 × List UInt8) :=
   go xs []
@@ -29,17 +27,35 @@ private def validPercentEncoding : List UInt8 → Bool
   | 37 :: _ => false
   | _ :: rest => validPercentEncoding rest
 
-private def parseHeader (line : List UInt8) : Except String Header := do
-  let some (name, value) := splitOnce line 58 | throw "malformed header"
-  if name.isEmpty || !name.all tokenByte then throw "invalid header name"
-  if !value.all (fun c => c == 9 || (c.toNat >= 32 && c.toNat != 127)) then
-    throw "invalid header value"
-  let some nameText := String.fromUTF8? (bytes name) | throw "invalid header name"
-  return { name := nameText.toLower, value := bytes (trim value) }
-
 private def isHex (c : UInt8) : Bool :=
   (c.toNat >= 48 && c.toNat <= 57) || (c.toNat >= 65 && c.toNat <= 70) ||
     (c.toNat >= 97 && c.toNat <= 102)
+
+private def allSpan (input : ByteArray) (start stop : Nat) (test : UInt8 → Bool) : Bool := Id.run do
+  for i in [start:stop] do
+    if !test input[i]! then return false
+  return true
+
+private def findByte (input : ByteArray) (start stop : Nat) (test : UInt8 → Bool) : Nat := Id.run do
+  for i in [start:stop] do
+    if test input[i]! then return i
+  return stop
+
+private def trimSpan (input : ByteArray) (start stop : Nat) : Nat × Nat := Id.run do
+  let left := findByte input start stop (!whitespace ·)
+  let mut right := stop
+  for delta in [:stop - left] do
+    let i := stop - 1 - delta
+    if !whitespace input[i]! then
+      right := i + 1
+      break
+  return (left, if left == stop then stop else right)
+
+private def percentSpan (input : ByteArray) (start stop : Nat) : Bool := Id.run do
+  for i in [start:stop] do
+    if input[i]! == 37 && (i + 2 >= stop || !isHex input[i + 1]! || !isHex input[i + 2]!) then
+      return false
+  return true
 
 private def validPort (port : List UInt8) : Bool :=
   port.all (fun c => c.toNat >= 48 && c.toNat <= 57)
@@ -98,7 +114,7 @@ private def validIPvFuture (raw : List UInt8) : Bool :=
               [33,36,38,39,40,41,42,43,44,45,46,58,59,61,95,126].contains n)
   | [] => false
 
-def validAuthority (value : ByteArray) : Bool :=
+private def complexAuthority (value : ByteArray) : Bool :=
   let raw := value.toList
   match raw with
   | 91 :: rest =>
@@ -112,13 +128,26 @@ def validAuthority (value : ByteArray) : Bool :=
     | none => validRegName raw
     | some (name, port) => validRegName name && validPort port
 
+/-- Preserve generic URI authority grammar; HTTP routing applies any required
+    nonempty-host constraint separately. Ordinary hostnames scan wire bytes. -/
+def validAuthority (value : ByteArray) : Bool :=
+  if !value.isEmpty && value[0]! == 91 then complexAuthority value
+  else
+    let colon := findByte value 0 value.size (· == 58)
+    let regNameByte := fun c : UInt8 =>
+      let n := c.toNat
+      (n >= 65 && n <= 90) || (n >= 97 && n <= 122) || (n >= 48 && n <= 57) ||
+        [33,36,37,38,39,40,41,42,43,44,45,46,59,61,95,126].contains n
+    allSpan value 0 colon regNameByte && percentSpan value 0 colon &&
+      (colon == value.size || allSpan value (colon + 1) value.size (fun c => c >= 48 && c <= 57))
+
 private def validUserInfo (value : List UInt8) : Bool :=
   value.all (fun c =>
     let n := c.toNat
     (n >= 65 && n <= 90) || (n >= 97 && n <= 122) || (n >= 48 && n <= 57) ||
       [33,36,37,38,39,40,41,42,43,44,45,46,58,59,61,95,126].contains n)
 
-private def parseRequestLine (line : List UInt8) : Except String (String × ByteArray) := do
+private def parseRequestLine (line : List UInt8) : Except String (String × ByteArray × String) := do
   let some (method, afterMethod) := splitOnce line 32 | throw "invalid request line"
   let some (target, version) := splitOnce afterMethod 32 | throw "invalid request line"
   if method.isEmpty || !method.all tokenByte then throw "invalid method"
@@ -164,33 +193,9 @@ private def parseRequestLine (line : List UInt8) : Except String (String × Byte
       if schemeText == "http" || schemeText == "https" ||
           schemeRest.contains 91 || schemeRest.contains 93 then
         throw "invalid absolute request target"
-  if version != "HTTP/1.1".toUTF8.toList then throw "unsupported HTTP version"
+  if version != "HTTP/1.1".toUTF8.toList && version != "HTTP/1.0".toUTF8.toList then throw "unsupported HTTP version"
   let some methodText := String.fromUTF8? (bytes method) | throw "invalid method"
-  return (methodText, bytes target)
-
-private def parseDecimal (xs : List UInt8) (bound : Nat) : Except String Nat := do
-  if xs.isEmpty then throw "empty content length"
-  let mut n := 0
-  for c in xs do
-    if c.toNat < 48 || c.toNat > 57 then throw "invalid content length"
-    n := n * 10 + (c.toNat - 48)
-    if n > bound then throw "body limit exceeded"
-  return n
-
-private def framing (headers : Array Header) (limits : Limits) : Except String (Option Nat) := do
-  let hosts := headers.filter (fun h => h.name == "host")
-  if hosts.size != 1 || !validAuthority hosts[0]!.value then throw "exactly one valid host is required"
-  let cls := headers.filter (fun h => h.name == "content-length")
-  let tes := headers.filter (fun h => h.name == "transfer-encoding")
-  if !cls.isEmpty && !tes.isEmpty then throw "content-length with transfer-encoding"
-  if cls.size > 1 then throw "duplicate content-length"
-  if tes.size > 1 then throw "duplicate transfer-encoding"
-  if !tes.isEmpty then
-    let some coding := String.fromUTF8? tes[0]!.value | throw "invalid transfer-encoding"
-    if coding.toLower != "chunked" then throw "unsupported transfer-encoding"
-    return none
-  if cls.isEmpty then return some 0
-  return some (← parseDecimal cls[0]!.value.toList (min limits.maxBodyBytes limits.maxBodyWireBytes))
+  return (methodText, bytes target, if version == "HTTP/1.0".toUTF8.toList then "HTTP/1.0" else "HTTP/1.1")
 
 private def hexDigit (c : UInt8) : Option Nat :=
   let n := c.toNat
@@ -199,82 +204,165 @@ private def hexDigit (c : UInt8) : Option Nat :=
   else if n >= 97 && n <= 102 then some (n - 87)
   else none
 
-private def quotedTail : List UInt8 → Option (List UInt8)
-  | [] => none
-  | 34 :: rest => some rest
-  | 92 :: c :: rest =>
-    if c == 9 || (c.toNat >= 32 && c.toNat != 127) then quotedTail rest else none
-  | 92 :: [] => none
-  | c :: rest =>
-    if c == 9 || (c.toNat >= 32 && c.toNat != 127) then quotedTail rest else none
-
-private def validExtensions (input : List UInt8) : Bool := go input (input.length + 1)
+private def quotedEnd (input : ByteArray) (start stop : Nat) : Option Nat :=
+  go start (stop - start + 1)
 where
-  go (input : List UInt8) (fuel : Nat) : Bool :=
+  go (index fuel : Nat) : Option Nat :=
+    match fuel with
+    | 0 => none
+    | fuel + 1 =>
+      if index >= stop then none
+      else
+        let c := input[index]!
+        if c == 34 then some (index + 1)
+        else if c == 92 then
+          if index + 1 >= stop then none
+          else
+            let escaped := input[index + 1]!
+            if escaped == 9 || (escaped >= 32 && escaped != 127) then go (index + 2) fuel else none
+        else if c == 9 || (c >= 32 && c != 127) then go (index + 1) fuel else none
+
+private def extensionsSpan (input : ByteArray) (start stop : Nat) : Bool :=
+  go start (stop - start + 1)
+where
+  go (index fuel : Nat) : Bool :=
     match fuel with
     | 0 => false
     | fuel + 1 =>
-      let input := input.dropWhile whitespace
-      match input with
-      | [] => true
-      | 59 :: rest =>
-        let rest := rest.dropWhile whitespace
-        let name := rest.takeWhile tokenByte
-        if name.isEmpty then false
+      let index := findByte input index stop (!whitespace ·)
+      if index == stop then true
+      else if input[index]! != 59 then false
+      else
+        let nameStart := findByte input (index + 1) stop (!whitespace ·)
+        let nameEnd := findByte input nameStart stop (!tokenByte ·)
+        if nameEnd == nameStart then false
         else
-          let rest := (rest.drop name.length).dropWhile whitespace
-          match rest with
-          | 61 :: value =>
-            let value := value.dropWhile whitespace
-            match value with
-            | 34 :: quoted =>
-              match quotedTail quoted with
+          let tail := findByte input nameEnd stop (!whitespace ·)
+          if tail < stop && input[tail]! == 61 then
+            let valueStart := findByte input (tail + 1) stop (!whitespace ·)
+            if valueStart == stop then false
+            else if input[valueStart]! == 34 then
+              match quotedEnd input (valueStart + 1) stop with
               | none => false
-              | some tail => go tail fuel
-            | _ =>
-              let token := value.takeWhile tokenByte
-              if token.isEmpty then false else go (value.drop token.length) fuel
-          | _ => go rest fuel
-      | _ => false
+              | some next => go next fuel
+            else
+              let valueEnd := findByte input valueStart stop (!tokenByte ·)
+              valueEnd != valueStart && go valueEnd fuel
+          else go tail fuel
 
-private def parseChunkSize (line : List UInt8) (bound : Nat) : Except String Nat := do
-  -- Extensions are validated separately so they cannot alter the size grammar.
-  let (size, extension) := match splitOnce line 59 with
-    | some (a, b) => ((a.reverse.dropWhile whitespace).reverse, some (59 :: b))
-    | none => (line, none)
-  if size.isEmpty then throw "empty chunk size"
+private def parseChunkSizeSpan (input : ByteArray) (start stop bound : Nat) : Except String Nat := do
+  let semicolon := findByte input start stop (· == 59)
+  let sizeEnd := if semicolon < stop then (trimSpan input start semicolon).2 else stop
+  if sizeEnd == start then throw "empty chunk size"
+  let mut size := 0
+  for index in [start:sizeEnd] do
+    let some digit := hexDigit input[index]! | throw "invalid chunk size"
+    size := size * 16 + digit
+    if size > bound then throw "body limit exceeded"
+  if semicolon < stop && !extensionsSpan input semicolon stop then throw "invalid chunk extension"
+  return size
+
+private def parseHeaderSpan (input : ByteArray) (start stop : Nat) : Except String Header := do
+  let colon := findByte input start stop (· == 58)
+  if colon == start || colon == stop || !allSpan input start colon tokenByte then throw "invalid header name"
+  if !allSpan input (colon + 1) stop (fun c => c == 9 || (c.toNat >= 32 && c != 127)) then
+    throw "invalid header value"
+  let mut name := ByteArray.emptyWithCapacity (colon - start)
+  for i in [start:colon] do
+    let c := input[i]!
+    name := name.push (if c >= 65 && c <= 90 then c + 32 else c)
+  let some nameText := String.fromUTF8? name | throw "invalid header name"
+  let (left, right) := trimSpan input (colon + 1) stop
+  return { name := nameText, value := input.extract left right }
+
+private def spanAscii (input : ByteArray) (start stop : Nat) (text : String) : Bool :=
+  let expected := text.toUTF8
+  stop - start == expected.size && Id.run do
+    for i in [:expected.size] do
+      if input[start + i]! != expected[i]! then return false
+    return true
+
+/-- Common origin/asterisk targets scan their original input directly. Complex
+    absolute/CONNECT forms retain the established authority grammar. -/
+private def requestLineSpan (input : ByteArray) (start stop : Nat) : Except String (String × ByteArray × String) := do
+  let first := findByte input start stop (· == 32)
+  let second := findByte input (first + 1) stop (· == 32)
+  if first == start || first == stop || second == first + 1 || second == stop ||
+      !allSpan input start first tokenByte then throw "invalid request line"
+  let version := if spanAscii input (second + 1) stop "HTTP/1.1" then "HTTP/1.1"
+    else if spanAscii input (second + 1) stop "HTTP/1.0" then "HTTP/1.0" else ""
+  if version.isEmpty then throw "unsupported HTTP version"
+  let some method := String.fromUTF8? (input.extract start first) | throw "invalid method"
+  if method == "CONNECT" || (input[first + 1]! != 47 && input[first + 1]! != 42) then
+    return ← parseRequestLine (input.extract start stop).toList
+  let targetStart := first + 1
+  if input[targetStart]! == 42 then
+    if second != targetStart + 1 || method != "OPTIONS" then throw "invalid asterisk target"
+  else
+    let valid := fun c : UInt8 =>
+      let n := c.toNat
+      (n >= 65 && n <= 90) || (n >= 97 && n <= 122) || (n >= 48 && n <= 57) ||
+        [33,36,37,38,39,40,41,42,43,44,45,46,47,58,59,61,63,64,95,126].contains n
+    if !allSpan input targetStart second valid || !percentSpan input targetStart second then
+      throw "invalid request target"
+  return (method, input.extract targetStart second, version)
+
+private def inferFraming (version : String) (headers : Array Header) (limits : Limits) : Except String BodyFraming := do
+  let hosts := headers.filter (·.name == "host")
+  if (version == "HTTP/1.1" && hosts.size != 1) || hosts.size > 1 ||
+      hosts.any (fun h => !validAuthority h.value) then throw "exactly one valid host is required"
+  let cls := headers.filter (·.name == "content-length")
+  let tes := headers.filter (·.name == "transfer-encoding")
+  if !cls.isEmpty && !tes.isEmpty then throw "content-length with transfer-encoding"
+  if cls.size > 1 then throw "duplicate content-length"
+  if tes.size > 1 then throw "duplicate transfer-encoding"
+  if !tes.isEmpty then
+    if version != "HTTP/1.1" then throw "transfer-encoding requires HTTP/1.1"
+    let coding := tes[0]!.value
+    if coding.size != 7 || !(Id.run do
+      for i in [:7] do
+        let c := coding[i]!
+        if (if c >= 65 && c <= 90 then c + 32 else c) != ("chunked".toUTF8)[i]! then return false
+      return true) then throw "unsupported transfer-encoding"
+    return .chunked
+  if cls.isEmpty then return .none
+  let value := cls[0]!.value
+  if value.isEmpty then throw "empty content length"
   let mut n := 0
-  for c in size do
-    let some digit := hexDigit c | throw "invalid chunk size"
-    n := n * 16 + digit
-    if n > bound then throw "body limit exceeded"
-  if let some ext := extension then
-    if !validExtensions ext then throw "invalid chunk extension"
-  return n
-
+  for c in value do
+    if c < 48 || c > 57 then throw "invalid content length"
+    n := n * 10 + c.toNat - 48
+    if n > min limits.maxBodyBytes limits.maxBodyWireBytes then throw "body limit exceeded"
+  return .contentLength n
 
 private inductive Stage where
-  | requestLine | headers | fixed (remaining : Nat)
+  | requestLine | headers | paused | done | fixed (remaining : Nat) | untilEof
   | chunkLine | chunkData (remaining : Nat) | chunkCR | chunkLF | trailers
   deriving Inhabited
 
-/-- Incremental parser. Internal state is retained across feeds; each wire byte
-    is processed once, and the body, head, chunk overhead and trailers are bounded. -/
+structure Parser.Options where
+  allowObsFold : Bool := false
+  deriving Repr, Inhabited
+
+/-- Owned partial lines and bounded body blocks allow the caller to release
+    each reactor buffer after a feed, even with a pool smaller than a request. -/
 structure Parser where
   private stage : Stage := .requestLine
   private limits : Limits := {}
-  private lineRev : List UInt8 := []
+  private options : Parser.Options := {}
+  private line : ByteArray := ByteArray.empty
   private lineBytes : Nat := 0
   private sawCR : Bool := false
   private headBytes : Nat := 0
   private trailerBytes : Nat := 0
   private wireBytes : Nat := 0
   private method : String := ""
+  private version : String := "HTTP/1.1"
   private target : ByteArray := ByteArray.empty
   private headers : Array Header := #[]
+  private framing : BodyFraming := .none
+  private body : ByteArray := ByteArray.empty
   private bodyBlocks : List ByteArray := []
-  private bodyRev : List UInt8 := []
-  private bodyBlockSize : Nat := 0
   private bodySize : Nat := 0
   private trailers : Array Header := #[]
 
@@ -284,148 +372,249 @@ inductive ParseResult where
   | error (message : String)
   | eof
 
-def Parser.new (limits : Limits := {}) : Parser := { limits }
-
-/-- Streaming variant reports the validated head once before reading a body. -/
 inductive HeaderParseResult where
   | needMore (parser : Parser)
   | headers (head : RequestHead) (parser : Parser) (remaining : ByteArray)
   | complete (request : Request) (remaining : ByteArray)
   | error (message : String)
 
-private inductive Advance where
-  | more (parser : Parser)
-  | headers (parser : Parser)
-  | done (request : Request)
-  | fail (message : String)
+/-- `consumed` is relative to the input window, including line terminators.
+    A head pauses before every body, including a bodyless message. -/
+inductive Parser.Progress where
+  | needMore (parser : Parser) (consumed : Nat)
+  | head (head : RequestHead) (framing : BodyFraming) (parser : Parser) (consumed : Nat)
+  | complete (request : Request) (consumed : Nat)
+  | error (message : String) (consumed : Nat)
 
-private def appendBody (p : Parser) (c : UInt8) : Parser :=
-  let active := c :: p.bodyRev
-  if p.bodyBlockSize + 1 == 4096 then
-    { p with bodyBlocks := bytes active.reverse :: p.bodyBlocks,
-             bodyRev := [], bodyBlockSize := 0, bodySize := p.bodySize + 1 }
-  else
-    { p with bodyRev := active, bodyBlockSize := p.bodyBlockSize + 1,
-             bodySize := p.bodySize + 1 }
+def Parser.new (limits : Limits := {}) (options : Parser.Options := {}) : Parser := { limits, options }
 
-private def finishRequest (p : Parser) : Request := Id.run do
-  let mut body := ByteArray.empty
-  for block in p.bodyBlocks.reverse do
-    body := body.append block
-  body := body.append (bytes p.bodyRev.reverse)
-  return { method := p.method, target := p.target, headers := p.headers,
-           body := body, trailers := p.trailers }
+private def finishRequest (p : Parser) : Request :=
+  let body := if p.bodyBlocks.isEmpty then p.body else Id.run do
+    let mut body := ByteArray.emptyWithCapacity p.bodySize
+    for block in p.bodyBlocks.reverse do body := body.append block
+    return body.append p.body
+  { method := p.method, version := p.version, target := p.target,
+    headers := p.headers, body, trailers := p.trailers }
 
-private def handleLine (p : Parser) (line : List UInt8) : Advance :=
-  let p := { p with lineRev := [], lineBytes := 0, sawCR := false }
+/-- Only an unframed HTTP/1.0 head may opt into the explicit EOF-body extension. -/
+def Parser.resumeBody (p : Parser) (chosen : BodyFraming) : Except String Parser := do
+  if !(match p.stage with | .paused => true | _ => false) then throw "parser is not paused at a head"
+  if chosen != p.framing && !(chosen == .closeDelimited && p.framing == .none && p.version == "HTTP/1.0") then
+    throw "body framing decision disagrees with request headers"
+  let stage := match chosen with
+    | .none | .contentLength 0 => Stage.done
+    | .contentLength n => .fixed n
+    | .chunked => .chunkLine
+    | .closeDelimited => .untilEof
+  return { p with stage, framing := chosen }
+
+private inductive Step where
+  | more (parser : Parser) (consumed : Nat)
+  | inputEnd (parser : Parser) (consumed : Nat)
+  | head (head : RequestHead) (framing : BodyFraming) (parser : Parser) (consumed : Nat)
+  | done (request : Request) (consumed : Nat)
+  | fail (message : String) (consumed : Nat)
+
+private def charge (p : Parser) (count : Nat) : Except String Parser := do
+  let isHead := match p.stage with | .requestLine | .headers => true | _ => false
+  let isTrailer := match p.stage with | .trailers => true | _ => false
+  let isBody := !isHead
+  let p := { p with
+    headBytes := p.headBytes + (if isHead then count else 0)
+    trailerBytes := p.trailerBytes + (if isTrailer then count else 0)
+    wireBytes := p.wireBytes + (if isBody then count else 0) }
+  if p.headBytes > p.limits.maxHeaderBytes then throw "header limit exceeded"
+  if p.trailerBytes > p.limits.maxTrailerBytes then throw "trailer limit exceeded"
+  if p.wireBytes > p.limits.maxBodyWireBytes then throw "body wire limit exceeded"
+  return p
+
+private def appendField (p : Parser) (input : ByteArray) (start stop : Nat) (trailer : Bool) : Except String Parser := do
+  let fields := if trailer then p.trailers else p.headers
+  let maximum := if trailer then p.limits.maxTrailerCount else p.limits.maxHeaderCount
+  if whitespace input[start]! then
+    if !p.options.allowObsFold || fields.isEmpty then throw "obsolete or orphan header folding"
+    if !allSpan input start stop (fun c => c == 9 || (c.toNat >= 32 && c != 127)) then throw "invalid header value"
+    let (left, right) := trimSpan input start stop
+    let prior := fields.back!
+    let value := input.extract left right
+    let combined := if value.isEmpty then prior.value else if prior.value.isEmpty then value
+      else (prior.value.push 32).append value
+    let fields := fields.set! (fields.size - 1) { prior with value := combined }
+    return if trailer then { p with trailers := fields } else { p with headers := fields }
+  if fields.size >= maximum then throw (if trailer then "too many trailers" else "too many headers")
+  let field ← parseHeaderSpan input start stop
+  if trailer then
+    if forbiddenTrailerName field.name then throw "forbidden trailer"
+    match connectionTokens p.headers with
+    | .error _ => throw "invalid Connection options before trailers"
+    | .ok names => if names.contains field.name then throw "connection-nominated trailer"
+  let fields := fields.push field
+  return if trailer then { p with trailers := fields } else { p with headers := fields }
+
+private def handleLine (p : Parser) (input : ByteArray) (start stop count : Nat) : Step :=
+  let p := { p with line := ByteArray.empty, lineBytes := 0, sawCR := false }
   match p.stage with
-  | .requestLine =>
-    match parseRequestLine line with
-    | .error e => .fail e
-    | .ok (method, target) => .more { p with method := method, target := target, stage := .headers }
+  | .requestLine => match requestLineSpan input start stop with
+    | .error e => .fail e count
+    | .ok (method, target, version) => .more { p with method, target, version, stage := .headers } count
   | .headers =>
-    if line.isEmpty then
-      match framing p.headers p.limits with
-      | .error e => .fail e
-      | .ok (some 0) => .done (finishRequest p)
-      | .ok (some n) => .headers { p with stage := .fixed n }
-      | .ok none => .headers { p with stage := .chunkLine }
-    else if p.headers.size >= p.limits.maxHeaderCount then .fail "too many headers"
-    else match parseHeader line with
-      | .error e => .fail e
-      | .ok h => .more { p with headers := p.headers.push h }
-  | .chunkLine =>
-    match parseChunkSize line (p.limits.maxBodyBytes - p.bodySize) with
-    | .error e => .fail e
-    | .ok 0 => .more { p with stage := .trailers }
-    | .ok n => .more { p with stage := .chunkData n }
+    if start == stop then
+      match inferFraming p.version p.headers p.limits with
+      | .error e => .fail e count
+      | .ok framing =>
+        let p := { p with stage := .paused, framing }
+        .head { method := p.method, version := p.version, target := p.target, headers := p.headers } framing p count
+    else match appendField p input start stop false with
+      | .error e => .fail e count
+      | .ok p => .more p count
+  | .chunkLine => match parseChunkSizeSpan input start stop (p.limits.maxBodyBytes - p.bodySize) with
+    | .error e => .fail e count
+    | .ok 0 => .more { p with stage := .trailers } count
+    | .ok n => .more { p with stage := .chunkData n } count
   | .trailers =>
-    if line.isEmpty then .done (finishRequest p)
-    else if p.trailers.size >= p.limits.maxTrailerCount then .fail "too many trailers"
-    else match parseHeader line with
-      | .error e => .fail e
-      | .ok h =>
-        if ["content-length", "transfer-encoding", "host", "trailer"].contains h.name then
-          .fail "forbidden trailer"
-        else .more { p with trailers := p.trailers.push h }
-  | _ => .fail "internal parser state"
+    if start == stop then .done (finishRequest p) count
+    else match appendField p input start stop true with
+      | .error e => .fail e count
+      | .ok p => .more p count
+  | _ => .fail "internal parser line state" count
 
-private def advanceLine (p : Parser) (c : UInt8) : Advance :=
-  let p := { p with lineBytes := p.lineBytes + 1 }
+private def lineStep (p : Parser) (input : ByteArray) (start available : Nat) : Step := Id.run do
+  let stop := start + available
+  let newline := if p.sawCR then start else findByte input start stop (fun c => c == 13 || c == 10)
+  let complete := p.sawCR || (newline < stop && newline + 1 < stop)
+  let count := if p.sawCR then 1 else if complete then newline - start + 2 else available
+  if p.sawCR && input[start]! != 10 then return .fail "bare CR in line" 1
+  if !p.sawCR && newline < stop && input[newline]! == 10 then return .fail "bare LF in line" (newline - start + 1)
+  if !p.sawCR && complete && input[newline + 1]! != 10 then return .fail "bare CR in line" (newline - start + 2)
+  let p ← match charge p count with | .ok p => pure p | .error e => return .fail e count
   let lineLimit := match p.stage with
     | .chunkLine => p.limits.maxChunkLineBytes
     | .trailers => p.limits.maxTrailerBytes
     | _ => p.limits.maxHeaderBytes
-  if p.lineBytes > lineLimit then .fail "line limit exceeded"
-  else if p.sawCR then
-    if c != 10 then .fail "bare CR in line"
-    else handleLine p p.lineRev.reverse
-  else if c == 13 then .more { p with sawCR := true }
-  else if c == 10 then .fail "bare LF in line"
-  else .more { p with lineRev := c :: p.lineRev }
+  if p.lineBytes + count > lineLimit then return .fail "line limit exceeded" count
+  let contentStop := if newline < stop then newline else stop
+  if complete then
+    if p.sawCR then return handleLine p p.line 0 p.line.size count
+    else if p.line.isEmpty then return handleLine p input start contentStop count
+    else
+      let line := input.copySlice start p.line p.line.size (contentStop - start) false
+      return handleLine p line 0 line.size count
+  else
+    let line := input.copySlice start p.line p.line.size (contentStop - start) false
+    return .inputEnd { p with line, lineBytes := p.lineBytes + count, sawCR := newline < stop } count
 
-private def advance (p : Parser) (c : UInt8) : Advance :=
-  let isHead := match p.stage with | .requestLine | .headers => true | _ => false
-  let isTrailer := match p.stage with | .trailers => true | _ => false
-  let isChunkWire := match p.stage with
-    | .chunkLine | .chunkData _ | .chunkCR | .chunkLF | .trailers => true
-    | _ => false
-  let p := { p with
-    headBytes := p.headBytes + if isHead then 1 else 0
-    trailerBytes := p.trailerBytes + if isTrailer then 1 else 0
-    wireBytes := p.wireBytes + if isChunkWire then 1 else 0 }
-  if p.headBytes > p.limits.maxHeaderBytes then .fail "header limit exceeded"
-  else if p.trailerBytes > p.limits.maxTrailerBytes then .fail "trailer limit exceeded"
-  else if p.wireBytes > p.limits.maxBodyWireBytes then .fail "chunk wire limit exceeded"
-  else match p.stage with
-    | .requestLine | .headers | .chunkLine | .trailers => advanceLine p c
-    | .fixed n =>
-      let p := appendBody p c
-      if n <= 1 then .done (finishRequest p)
-      else .more { p with stage := .fixed (n - 1) }
-    | .chunkData n =>
-      let p := appendBody p c
-      if n <= 1 then .more { p with stage := .chunkCR }
-      else .more { p with stage := .chunkData (n - 1) }
-    | .chunkCR => if c == 13 then .more { p with stage := .chunkLF } else .fail "missing chunk terminator"
-    | .chunkLF => if c == 10 then .more { p with stage := .chunkLine } else .fail "missing chunk terminator"
+/-- Copy input spans in bulk into bounded blocks. Keeping an old immutable
+    parser caps copy-on-write work at one block instead of the entire body. -/
+private def appendBodySpans (input : ByteArray) (start count : Nat)
+    (initialBlocks : List ByteArray) (initial : ByteArray) : List ByteArray × ByteArray := Id.run do
+  let mut blocks := initialBlocks
+  let mut active := initial
+  let mut cursor := start
+  let mut remaining := count
+  for _ in [:count / 4096 + 2] do
+    if remaining == 0 then break
+    let amount := min remaining (4096 - active.size)
+    active := input.copySlice cursor active active.size amount false
+    cursor := cursor + amount
+    remaining := remaining - amount
+    if active.size == 4096 then
+      blocks := active :: blocks
+      active := ByteArray.empty
+  return (blocks, active)
 
-/-- Feed wire bytes exactly once. Unconsumed bytes are returned for pipelining. -/
+private def bodyStep (p : Parser) (input : ByteArray) (start count : Nat) : Except String Parser := do
+  if p.bodySize + count > p.limits.maxBodyBytes then throw "body limit exceeded"
+  let p ← charge p count
+  let (bodyBlocks, body) := appendBodySpans input start count p.bodyBlocks p.body
+  return { p with body, bodyBlocks, bodySize := p.bodySize + count }
+
+/-- Scan an input window without allocating or copying its unconsumed suffix.
+    The caller must resume the paused head before supplying any body bytes. -/
+def Parser.feedSlice (parser : Parser) (input : ByteArray) (start length : Nat) : Parser.Progress :=
+  if start > input.size || length > input.size - start then .error "invalid parser input slice" 0
+  else go parser start length (length + 1)
+where
+  go (p : Parser) (index remaining fuel : Nat) : Parser.Progress :=
+    match p.stage with
+    | .paused => .error "body framing decision required" (index - start)
+    | .done => .complete (finishRequest p) (index - start)
+    | _ => match fuel with
+      | 0 => .error "internal parser progress limit" (index - start)
+      | fuel + 1 =>
+        if remaining == 0 then .needMore p (index - start)
+        else
+          let step := match p.stage with
+            | .requestLine | .headers | .chunkLine | .trailers => lineStep p input index remaining
+            | .fixed n | .chunkData n =>
+              let count := min n remaining
+              if count == 0 then .fail "internal zero-length body stage" 0
+              else match bodyStep p input index count with
+                | .error e => .fail e count
+                | .ok p => match p.stage with
+                  | .fixed _ => if n == count then .done (finishRequest p) count else .more { p with stage := .fixed (n - count) } count
+                  | _ => .more { p with stage := if n == count then .chunkCR else .chunkData (n - count) } count
+            | .untilEof => match bodyStep p input index remaining with
+              | .error e => .fail e remaining
+              | .ok p => .inputEnd p remaining
+            | .chunkCR | .chunkLF => match charge p 1 with
+              | .error e => .fail e 1
+              | .ok p => match p.stage with
+                | .chunkCR => if input[index]! == 13 then .more { p with stage := .chunkLF } 1 else .fail "missing chunk terminator" 1
+                | _ => if input[index]! == 10 then .more { p with stage := .chunkLine } 1 else .fail "missing chunk terminator" 1
+            | _ => .fail "internal parser state" 0
+          match step with
+          | .more next count => go next (index + count) (remaining - count) fuel
+          | .inputEnd next count => .needMore next (index + count - start)
+          | .head head framing next count => .head head framing next (index + count - start)
+          | .done request count => .complete request (index + count - start)
+          | .fail message count => .error message (index + count - start)
+
+private def automaticBody (parser : Parser) (framing : BodyFraming) (input : ByteArray) (start : Nat) : Parser.Progress :=
+  match parser.resumeBody framing with
+  | .error e => .error e start
+  | .ok parser => match parser.feedSlice input start (input.size - start) with
+    | .needMore next n => .needMore next (start + n)
+    | .complete request n => .complete request (start + n)
+    | .error e n => .error e (start + n)
+    | .head _ _ _ n => .error "duplicate parser head" (start + n)
+
+/-- Compatible complete-message interface; the explicit head decision is made
+    automatically using ordinary HTTP request framing. -/
 def Parser.feed (parser : Parser) (input : ByteArray) : ParseResult :=
-  go parser 0 input.size
-where
-  go (p : Parser) (index remaining : Nat) : ParseResult :=
-    match remaining with
-    | 0 => .needMore p
-    | n + 1 =>
-      match advance p input[index]! with
-      | .more next | .headers next => go next (index + 1) n
-      | .fail message => .error message
-      | .done request => .complete request (input.extract (index + 1) input.size)
+  let result := match parser.feedSlice input 0 input.size with
+    | .head _ framing next consumed => automaticBody next framing input consumed
+    | result => result
+  match result with
+  | .needMore next _ => .needMore next
+  | .complete request consumed => .complete request (input.extract consumed input.size)
+  | .error message _ => .error message
+  | .head .. => .error "internal duplicate parser head"
 
-/-- Like `feed`, but yields once immediately after a body-bearing head. The
-    caller can handle `Expect: 100-continue` before reading the request body.
-    Resume the returned parser with the returned, unconsumed bytes. -/
+/-- Compatibility interface yields body-bearing heads only, as before. -/
 def Parser.feedWithHeaders (parser : Parser) (input : ByteArray) : HeaderParseResult :=
-  go parser 0 input.size
-where
-  go (p : Parser) (index remaining : Nat) : HeaderParseResult :=
-    match remaining with
-    | 0 => .needMore p
-    | n + 1 =>
-      match advance p input[index]! with
-      | .more next => go next (index + 1) n
-      | .headers next =>
-        let head : RequestHead := { method := next.method, target := next.target, headers := next.headers }
-        .headers head next (input.extract (index + 1) input.size)
-      | .fail message => .error message
-      | .done request => .complete request (input.extract (index + 1) input.size)
+  match parser.feedSlice input 0 input.size with
+  | .head head framing next consumed =>
+    match next.resumeBody framing with
+    | .error e => .error e
+    | .ok next =>
+      let bodyBearing := match framing with | .chunked | .closeDelimited => true | .contentLength n => n > 0 | .none => false
+      if bodyBearing then .headers head next (input.extract consumed input.size)
+      else match next.feedSlice input consumed (input.size - consumed) with
+        | .complete request used => .complete request (input.extract (consumed + used) input.size)
+        | .needMore next _ => .needMore next
+        | .error message _ => .error message
+        | .head .. => .error "internal duplicate parser head"
+  | .needMore next _ => .needMore next
+  | .complete request used => .complete request (input.extract used input.size)
+  | .error message _ => .error message
 
-/-- EOF before a complete message is an error, including a partial chunk. -/
+/-- Only explicit close-delimited mode completes at EOF. All incomplete framed
+    bodies and partial request heads remain truncation errors. -/
 def Parser.finish (parser : Parser) : ParseResult :=
   match parser.stage with
-  | .requestLine =>
-    if parser.headBytes == 0 then .eof else .error "unexpected EOF in request"
+  | .untilEof | .done => .complete (finishRequest parser) ByteArray.empty
+  | .requestLine => if parser.headBytes == 0 then .eof else .error "unexpected EOF in request"
+  | .paused => .error "body framing decision required"
   | _ => .error "unexpected EOF in request"
 
 end LeanNet.HTTP1

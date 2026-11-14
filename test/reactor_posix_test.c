@@ -11,6 +11,8 @@
 #include "../c/reactor.h"
 #include <errno.h>
 #include <stdlib.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #if defined(__linux__)
 #include <sys/epoll.h>
@@ -23,6 +25,36 @@ static int injected_wait_error;
 static unsigned native_wait_calls;
 static int injected_read_error;
 static unsigned native_read_calls;
+static size_t vector_send_limit;
+static unsigned native_vector_calls, max_vector_count;
+static int vector_prefix(const struct iovec *input, int count, struct iovec *output) {
+    ++native_vector_calls;
+    if ((unsigned)count > max_vector_count) max_vector_count = (unsigned)count;
+    size_t remaining = vector_send_limit ? vector_send_limit : SIZE_MAX;
+    int used = 0;
+    for (int i = 0; i < count && remaining; ++i) {
+        output[used] = input[i];
+        if (output[used].iov_len > remaining) output[used].iov_len = remaining;
+        remaining -= output[used].iov_len;
+        ++used;
+    }
+    return used;
+}
+#if defined(__linux__)
+static ssize_t rn_test_sendmsg(int fd, const struct msghdr *message, int flags) {
+    struct iovec vectors[16]; struct msghdr prefix = *message;
+    prefix.msg_iovlen = (size_t)vector_prefix(message->msg_iov, (int)message->msg_iovlen, vectors);
+    prefix.msg_iov = vectors;
+    return sendmsg(fd, &prefix, flags);
+}
+#define sendmsg(...) rn_test_sendmsg(__VA_ARGS__)
+#else
+static ssize_t rn_test_writev(int fd, const struct iovec *vectors, int count) {
+    struct iovec prefix[16];
+    return writev(fd, prefix, vector_prefix(vectors, count, prefix));
+}
+#define writev(...) rn_test_writev(__VA_ARGS__)
+#endif
 static ssize_t rn_test_read(int fd, void *bytes, size_t size) {
     ++native_read_calls;
     if (injected_read_error) { errno = injected_read_error; injected_read_error = 0; return -1; }
@@ -57,6 +89,11 @@ static int rn_test_kevent(int fd, const struct kevent *changes, int change_count
 #undef realloc
 #undef lean_alloc_sarray
 #undef read
+#if defined(__linux__)
+#undef sendmsg
+#else
+#undef writev
+#endif
 #if defined(__linux__)
 #undef epoll_wait
 #else
@@ -185,8 +222,176 @@ static void half_close_idle_regression(rn_reactor *r) {
     (void)r;
 #endif
 }
+static uint64_t connected_peer(rn_reactor *r, uint64_t listener, int *peer) {
+    struct sockaddr_in address; socklen_t length = sizeof(address);
+    check(getsockname(r->connections[rn_index(listener)].fd, (struct sockaddr *)&address, &length) == 0, "transport listener address");
+    *peer = socket(AF_INET, SOCK_STREAM, 0);
+    check(*peer >= 0 && connect(*peer, (struct sockaddr *)&address, sizeof(address)) == 0, "connect transport peer");
+    for (unsigned tick = 0; tick < 100; ++tick) {
+        int count = rn_step(r, 10); check(count >= 0, "accept transport peer");
+        for (int i = 0; i < count; ++i) {
+            const rn_event *event = rn_event_at(r, (uint32_t)i);
+            if (event->kind == RN_ACCEPTED) return event->connection;
+        }
+    }
+    check(0, "transport accept timeout"); return 0;
+}
+static void pause_and_vectors_regression(void) {
+    for (unsigned mode = 0; mode < 2; ++mode) {
+        hot_path = 0;
+        rn_config config = {4, mode ? 32u : 2u, 32, 4, 0, 0, 1};
+        rn_reactor *r = NULL; uint64_t listener = 0;
+        check(rn_new(&config, &r) == 0 && rn_listen(r, "127.0.0.1", 0, 0, &listener) == 0, "create transport reactor");
+        int peer; uint64_t connection = connected_peer(r, listener, &peer);
+        hot_path = 1;
+        check(rn_set_read_enabled(r, listener, 0) == -EINVAL && rn_set_read_enabled(r, connection, 2) == -EINVAL, "validate read control");
+        check(rn_set_read_enabled(r, connection, 0) == 0, "pause transport reads");
+        check(send(peer, "abc", 3, 0) == 3 && rn_step(r, 1) == 0, "paused reads do not consume input");
+        uint64_t held[4];
+        for (unsigned i = 0; i < 4; ++i) check(rn_acquire_buffer(r, 4096, &held[i]) == 0, "hold pool under user pause");
+        check(rn_set_read_enabled(r, connection, 1) == 0 && rn_step(r, 0) == 0, "pool pressure pauses an enabled read");
+        check(r->connections[rn_index(connection)].paused, "resource pause tracked separately");
+        check(rn_set_read_enabled(r, connection, 0) == 0, "user pause while pool paused");
+        for (unsigned i = 0; i < 4; ++i) check(rn_buffer_release(r, held[i]) == 0, "return pool cells");
+        check(rn_step(r, 1) == 0, "pool recovery cannot override user pause");
+        check(rn_set_read_enabled(r, connection, 1) == 0, "resume pooled reads");
+        int saw_read = 0;
+        for (unsigned tick = 0; tick < 100 && !saw_read; ++tick) {
+            int count = rn_step(r, 1); check(count >= 0, "poll resumed input");
+            for (int i = 0; i < count; ++i) {
+                const rn_event *event = rn_event_at(r, (uint32_t)i);
+                if (event->kind == RN_READ) {
+                    lean_object *view; check(rn_buffer_view(r, event->buffer, &view) == 0 && lean_sarray_size(view) == 3 && memcmp(lean_sarray_cptr(view), "abc", 3) == 0, "resumed input remains exact");
+                    check(rn_set_read_enabled(r, connection, 0) == 0 && rn_buffer_release(r, event->buffer) == 0, "pause preserves returned read lease");
+                    saw_read = 1;
+                }
+            }
+        }
+        check(saw_read, "resumed read delivered");
+        unsigned char block[4096], expected[20 * 4096], received[20 * 4096]; size_t size = 0;
+        uint64_t buffers[4]; lean_object *retained;
+        for (unsigned b = 0; b < 4; ++b) {
+            for (size_t i = 0; i < sizeof(block); ++i) block[i] = (unsigned char)(i * 13 + b);
+            check(rn_acquire_buffer(r, 4096, &buffers[b]) == 0 && rn_buffer_copy(r, buffers[b], block, sizeof(block)) == 0, "prepare vector pool cells");
+        }
+        check(rn_buffer_view(r, buffers[0], &retained) == 0, "retain vector source view"); lean_inc(retained);
+        for (unsigned op = 0; op < 20; ++op) {
+            unsigned b = op % 4, offset = op % 19, length = op % 5 == 0 ? 0 : 4096 - offset;
+            check(rn_queue_write(r, connection, buffers[b], offset, length, op + 1) == 0, "queue ordered vector slice");
+            lean_object *view; check(rn_buffer_view(r, buffers[b], &view) == 0, "view vector source");
+            memcpy(expected + size, lean_sarray_cptr(view) + offset, length); size += length;
+        }
+        for (unsigned b = 0; b < 4; ++b) check(rn_buffer_release(r, buffers[b]) == 0, "release vector lease while pinned");
+        check(rn_close_after_writes(r, connection) == 0 && rn_nonblocking(peer) == 0, "drain vectors while reads paused");
+        vector_send_limit = 97; native_vector_calls = max_vector_count = 0;
+        size_t got = 0; unsigned written = 0, closed = 0; int eof = 0;
+        for (unsigned tick = 0; tick < 10000 && (!eof || !closed); ++tick) {
+            int count = rn_step(r, 0); check(count >= 0 && (unsigned)count <= config.max_events, "bounded vector completion count");
+            for (int i = 0; i < count; ++i) {
+                const rn_event *event = rn_event_at(r, (uint32_t)i);
+                if (event->kind == RN_WRITTEN) {
+                    check(event->operation == ++written && written <= 20, "vector operations complete in order once");
+                    unsigned op = written - 1, length = op % 5 == 0 ? 0 : 4096 - op % 19;
+                    check(event->result == length && event->length == length, "vector completion reports its whole logical slice");
+                } else if (event->kind == RN_CLOSED) { check(written == 20, "all vector completions precede close"); closed = 1; }
+                else check(event->kind != RN_ERROR && event->kind != RN_READ, "paused vector transport has no error/read");
+            }
+            unsigned char extra;
+            ssize_t n = recv(peer, got < sizeof(received) ? received + got : &extra, got < sizeof(received) ? sizeof(received) - got : 1, 0);
+            if (n > 0) got += (size_t)n;
+            else if (!n) eof = 1;
+            else check(errno == EAGAIN || errno == EWOULDBLOCK, "receive vector bytes");
+        }
+        check(eof && closed && got == size && memcmp(expected, received, size) == 0, "partial binary vectors remain exact");
+        check(native_vector_calls > 20 && max_vector_count == (mode ? 16u : 2u), "writes coalesce within native event credits");
+        vector_send_limit = 0;
+        for (unsigned b = 0; b < 3; ++b) check(rn_acquire_buffer(r, 4096, &held[b]) == 0, "unaliased vector cells recycled");
+        uint64_t unavailable; check(rn_acquire_buffer(r, 4096, &unavailable) == -EAGAIN, "retained vector view blocks its cell reuse");
+        check(lean_sarray_cptr(retained)[17] == (uint8_t)(17 * 13), "retained vector bytes immutable"); lean_dec(retained);
+        check(rn_acquire_buffer(r, 4096, &held[3]) == 0, "vector alias cell recyclable after release");
+        for (unsigned b = 0; b < 4; ++b) check(rn_buffer_release(r, held[b]) == 0, "release transport test cells");
+        check(close(peer) == 0, "close vector peer");
+        connection = connected_peer(r, listener, &peer);
+        check(rn_set_read_enabled(r, connection, 0) == 0, "pause cancellation reads");
+        for (unsigned b = 0; b < 3; ++b) {
+            check(rn_acquire_buffer(r, 4096, &buffers[b]) == 0 && rn_buffer_copy(r, buffers[b], block, sizeof(block)) == 0 && rn_queue_write(r, connection, buffers[b], 0, sizeof(block), 1001 + b) == 0, "queue cancellation vectors");
+        }
+        check(rn_buffer_view(r, buffers[0], &retained) == 0, "retain canceled vector source"); lean_inc(retained);
+        for (unsigned b = 0; b < 3; ++b) check(rn_buffer_release(r, buffers[b]) == 0, "release canceled vector owner");
+        vector_send_limit = 97; r->event_count = 0;
+        check(rn_write_ready(r, rn_index(connection)) == 0 && r->writes[r->connections[rn_index(connection)].head_write].sent > 0, "force partial multi-buffer write before cancellation");
+        check(rn_close_connection(r, connection) == 0 && r->free_write_count == config.max_writes, "cancel queued vectors releases every write credit");
+        for (unsigned b = 0; b < 3; ++b) check(r->buffers[rn_index(buffers[b])].writes == 0, "canceled vectors release every native buffer pin");
+        check(lean_sarray_size(retained) == sizeof(block) && memcmp(lean_sarray_cptr(retained), block, sizeof(block)) == 0, "canceled vector alias stays immutable"); lean_dec(retained);
+        vector_send_limit = 0;
+        check(rn_step(r, 0) == 1 && rn_event_at(r, 0)->kind == RN_CLOSED && close(peer) == 0, "canceled vector closes exactly once");
+        connection = connected_peer(r, listener, &peer);
+        check(send(peer, "lease", 5, 0) == 5, "send returned-batch lease");
+        uint64_t returned = 0;
+        for (unsigned tick = 0; tick < 100 && !returned; ++tick) {
+            int count = rn_step(r, 1); check(count >= 0, "poll returned-batch lease");
+            for (int i = 0; i < count; ++i) if (rn_event_at(r, (uint32_t)i)->kind == RN_READ) returned = rn_event_at(r, (uint32_t)i)->buffer;
+        }
+        check(returned && rn_set_read_enabled(r, connection, 0) == 0 && rn_close_connection(r, connection) == 0, "pause and close after READ batch returned");
+        lean_object *view;
+        check(rn_buffer_view(r, returned, &view) == 0 && lean_sarray_size(view) == 5 && memcmp(lean_sarray_cptr(view), "lease", 5) == 0 && rn_buffer_release(r, returned) == 0, "returned read lease survives connection close");
+        check(rn_step(r, 0) == 1 && close(peer) == 0, "returned-batch close cleanup");
+        hot_path = 0;
+        check(rn_free(r) == 0, "free transport reactor");
+    }
+}
+static void historical_write_liveness(void) {
+    hot_path = 0;
+    rn_config config = {4, 1, 4, 4, 0, 0, 1}; rn_reactor *r = NULL; uint64_t listener = 0;
+    check(rn_new(&config, &r) == 0 && rn_listen(r, "127.0.0.1", 0, 0, &listener) == 0, "create liveness reactor");
+    int peer; uint64_t connection = connected_peer(r, listener, &peer);
+    hot_path = 1;
+    check(rn_connection_live(NULL, connection) == -EINVAL && rn_connection_live(r, 0) == 0 && rn_connection_live(r, listener) == 0, "liveness rejects non-connection identities");
+    check(rn_connection_live(r, connection) == 1 && rn_set_read_enabled(r, connection, 0) == 0 && rn_connection_live(r, connection) == 1, "paused live connection remains live");
+    uint64_t buffer; check(rn_acquire_buffer(r, 3, &buffer) == 0 && rn_buffer_copy(r, buffer, (const uint8_t *)"bye", 3) == 0, "prepare liveness output");
+    check(rn_queue_write(r, connection, buffer, 0, 3, 9001) == 0 && rn_buffer_release(r, buffer) == 0 && rn_close_after_writes(r, connection) == 0 && rn_connection_live(r, connection) == 1, "live query includes active drain");
+    check(rn_step(r, 10) == 1 && rn_event_at(r, 0)->kind == RN_WRITTEN && rn_event_at(r, 0)->operation == 9001, "single-event batch returns historical write first");
+    check(rn_connection_live(r, connection) == 0, "historical write identity is already closed before CLOSED delivery");
+    check(rn_step(r, 0) == 1 && rn_event_at(r, 0)->kind == RN_CLOSED && rn_connection_live(r, connection) == 0, "queued CLOSED preserves dead liveness");
+    uint64_t fresh; check(rn_socket_new(r, &fresh) == 0 && fresh != connection && rn_connection_live(r, fresh) == 0 && rn_connection_live(r, connection) == 0, "liveness cannot alias a recycled generation");
+    check(close(peer) == 0, "close liveness peer"); hot_path = 0;
+    check(rn_free(r) == 0, "free liveness reactor");
+}
+static void generation_retirement(void) {
+    hot_path = 0;
+    rn_config config = {1, 1, 1, 1, 0, 0, 1}; rn_reactor *r = NULL;
+    check(rn_new(&config, &r) == 0, "create generation boundary reactor");
+    hot_path = 1;
+    uint64_t stale, last, unavailable = 0;
+    check(rn_socket_new(r, &stale) == 0 && rn_close_connection(r, stale) == 0 && rn_step(r, 0) == 1, "recycle socket before boundary");
+    r->connections[rn_index(stale)].generation = RN_GENERATION_MAX - 1;
+    check(rn_socket_new(r, &last) == 0 && (int64_t)last > 0 && (last >> 32) == INT32_MAX, "final socket generation remains FFI-positive");
+    check(rn_arm_timer(r, stale, 0, 0) == -EBADF && rn_close_connection(r, stale) == -EBADF, "old socket alias cannot reach final generation");
+    check(rn_close_connection(r, last) == 0 && rn_step(r, 0) == 1 && rn_event_at(r, 0)->connection == last, "final socket closes with original positive identity");
+    check(r->free_connection_count == 0 && rn_socket_new(r, &unavailable) == -EAGAIN && unavailable == 0, "exhausted socket slot retired without a wrapped token");
+    check(rn_arm_timer(r, last, 0, 0) == -EBADF && rn_close_connection(r, last) == -EBADF && rn_arm_timer(r, stale, 0, 0) == -EBADF, "all socket aliases remain stale after retirement");
+    check(rn_acquire_buffer(r, 1, &stale) == 0 && rn_buffer_release(r, stale) == 0, "recycle buffer before boundary");
+    r->buffers[rn_index(stale)].generation = RN_GENERATION_MAX - 1;
+    check(rn_acquire_buffer(r, 1, &last) == 0 && (int64_t)last > 0 && (last >> 32) == INT32_MAX, "final buffer generation remains FFI-positive");
+    const uint8_t binary[] = {0, 255, 17}; lean_object *view = NULL;
+    check(rn_buffer_copy(r, last, binary, sizeof(binary)) == 0 && rn_buffer_view(r, last, &view) == 0, "use final buffer generation"); lean_inc(view);
+    check(rn_buffer_release(r, last) == 0 && r->free_buffer_count == 0 && !r->buffers[rn_index(last)].on_free, "final buffer retires outside free candidates");
+    lean_object *invalid = NULL;
+    check(rn_buffer_view(r, stale, &invalid) == -EINVAL && rn_buffer_view(r, last, &invalid) == -EINVAL && rn_buffer_release(r, last) == -EINVAL, "retired buffer aliases cannot reacquire ownership");
+    check(lean_sarray_size(view) == sizeof(binary) && memcmp(lean_sarray_cptr(view), binary, sizeof(binary)) == 0, "retired buffer retained view is immutable"); lean_dec(view);
+    unsigned calls = native_wait_calls;
+    for (unsigned i = 0; i < 8; ++i) {
+        check(rn_acquire_buffer(r, 1, &unavailable) == -EAGAIN && unavailable == 0 && rn_socket_new(r, &unavailable) == -EAGAIN, "retired resource exhaustion stays bounded");
+        check(rn_step(r, 1) == 0, "retired reactor has no readiness spin");
+    }
+    check(native_wait_calls == calls + 8, "resource exhaustion performs one native wait per poll");
+    hot_path = 0; check(rn_free(r) == 0, "free retired reactor");
+}
 int main(void) {
     lean_initialize_runtime_module();
+    pause_and_vectors_regression();
+    historical_write_liveness();
+    generation_retirement();
     const rn_config config = {16, 7, 32, 2, 1, 1, 1};
     rn_reactor *r = NULL;
     check(rn_new(&config, &r) == 0, "create reactor");

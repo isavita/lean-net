@@ -7,7 +7,28 @@
 #include "../c/reactor_group.h"
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <winsock2.h>
+#include <windows.h>
 static atomic_int track_native_allocations, native_allocations;
+static atomic_uint transport_send_limit, transport_send_calls, transport_max_vectors;
+static int WSAAPI transport_test_WSASend(SOCKET socket, LPWSABUF buffers, DWORD count,
+                                        LPDWORD sent, DWORD flags, LPWSAOVERLAPPED overlapped,
+                                        LPWSAOVERLAPPED_COMPLETION_ROUTINE callback) {
+  atomic_fetch_add(&transport_send_calls, 1);
+  unsigned previous = atomic_load(&transport_max_vectors);
+  while (previous < count && !atomic_compare_exchange_weak(&transport_max_vectors, &previous, count)) {}
+  unsigned limit = atomic_load(&transport_send_limit);
+  if (!limit) return WSASend(socket, buffers, count, sent, flags, overlapped, callback);
+  /* Shorten the stable production descriptor array before submission. The
+   * next operation rebuilds it from logical offsets after this completion. */
+  DWORD used = 0;
+  for (DWORD i = 0; i < count && limit; ++i) {
+    if (used >= 16) abort();
+    if (buffers[i].len > limit) buffers[i].len = limit;
+    limit -= buffers[i].len; ++used;
+  }
+  return WSASend(socket, buffers, used, sent, flags, overlapped, callback);
+}
 static void *tracked_malloc(size_t size) {
   if (atomic_load(&track_native_allocations))
     atomic_fetch_add(&native_allocations, 1);
@@ -20,9 +41,11 @@ static void *tracked_calloc(size_t count, size_t size) {
 }
 #define malloc tracked_malloc
 #define calloc tracked_calloc
+#define WSASend(...) transport_test_WSASend(__VA_ARGS__)
 #include "../c/reactor_windows.c"
 #undef malloc
 #undef calloc
+#undef WSASend
 #include "../c/socket_windows.c"
 
 void lean_initialize_runtime_module(void);
@@ -348,6 +371,203 @@ static void test_legacy_and_handles(void) {
   check(GetProcessHandleCount(GetCurrentProcess(), &after),
         "final handle count");
   check(after <= before + 1, "1000 pending accepts leave handle count flat");
+}
+static void test_transport_pause_vectors(void) {
+  for (unsigned mode = 0; mode < 2; ++mode) {
+    rn_config options = {4, mode ? 32u : 2u, 32, 4, 0, 0, 1};
+    rn_reactor *r = NULL; uint64_t listener = 0;
+    check(rn_new(&options, &r) == 0 && rn_listen(r, "127.0.0.1", 0, 0, &listener) == 0, "create vector reactor");
+    SOCKET peer = connect_client(listener_port(r, listener));
+    uint64_t connection = accept_client(r);
+    rn_connection *c = &r->connections[rn_index(connection)];
+    atomic_store(&native_allocations, 0); atomic_store(&track_native_allocations, 1);
+    check(rn_set_read_enabled(r, listener, 0) == -EINVAL && rn_set_read_enabled(r, connection, 2) == -EINVAL, "validate read enable state");
+    check(c->read.pending && rn_set_read_enabled(r, connection, 0) == 0, "pause one outstanding read");
+    for (unsigned marker = 0; marker < 3; ++marker) {
+      char byte = (char)('A' + marker);
+      if (marker == 1) {
+        check(send(peer, &byte, 1, 0) == 1, "send input during user pause");
+        for (unsigned tick = 0; tick < 3; ++tick) {
+          int count = rn_step(r, 1); check(count >= 0, "poll paused input");
+          for (int i = 0; i < count; ++i) check(rn_event_at(r, (uint32_t)i)->kind != RN_READ, "paused IOCP does not post another receive");
+        }
+        check(rn_set_read_enabled(r, connection, 1) == 0, "resume user-paused read");
+      } else {
+        if (marker == 2) check(rn_set_read_enabled(r, connection, 0) == 0, "pause returned read batch with next receive outstanding");
+        check(send(peer, &byte, 1, 0) == 1, "complete outstanding paused receive");
+      }
+      int received = 0; uint64_t end = rn_now_ms() + 3000;
+      while (!received && rn_now_ms() < end) {
+        int count = rn_step(r, 10); check(count >= 0, "poll controlled receive");
+        for (int i = 0; i < count; ++i) {
+          const rn_event *event = rn_event_at(r, (uint32_t)i);
+          if (event->kind == RN_READ) {
+            lean_object *view;
+            check(rn_buffer_view(r, event->buffer, &view) == 0 && lean_sarray_size(view) == 1 && lean_sarray_cptr(view)[0] == (uint8_t)byte, "read pause preserves exact input and lease");
+            check(rn_buffer_release(r, event->buffer) == 0, "release controlled receive"); ++received;
+          } else check(event->kind != RN_ERROR, "controlled receive has no error");
+        }
+      }
+      check(received == 1 && (marker == 1 || !c->read.pending), "only an already-posted receive completes under pause");
+    }
+    check(rn_set_read_enabled(r, connection, 1) == 0 && !c->read.pending && rn_connection_live(r, connection) == 1, "resume defers receive submission and failure until next native step");
+    check(rn_set_read_enabled(r, connection, 0) == 0 && !c->read.pending, "pause cancels deferred resume without posting IO");
+    uint64_t pressure[4];
+    for (unsigned b = 0; b < 4; ++b) check(rn_acquire_buffer(r, 4096, &pressure[b]) == 0, "exhaust read pool under pause");
+    check(rn_set_read_enabled(r, connection, 1) == 0 && rn_step(r, 0) == 0 && c->read_paused && !c->read.pending, "pool pause remains independent of user pause");
+    check(rn_set_read_enabled(r, connection, 0) == 0, "disable a pool-paused IOCP receive");
+    for (unsigned b = 0; b < 4; ++b) check(rn_buffer_release(r, pressure[b]) == 0, "restore exhausted read pool");
+    check(rn_step(r, 1) == 0 && !c->read.pending, "pool recovery does not override user pause");
+    check(shutdown(peer, SD_SEND) == 0 && rn_step(r, 1) == 0, "paused read delays EOF without blocking writes");
+    check(rn_set_read_enabled(r, connection, 1) == 0, "resume to observe EOF");
+    unsigned saw_eof = 0; uint64_t end = rn_now_ms() + 3000;
+    while (!saw_eof && rn_now_ms() < end) {
+      int count = rn_step(r, 10); check(count >= 0, "poll resumed EOF");
+      for (int i = 0; i < count; ++i) {
+        const rn_event *event = rn_event_at(r, (uint32_t)i);
+        if (event->kind == RN_EOF) ++saw_eof;
+        check(event->kind != RN_ERROR, "resumed EOF has no error");
+      }
+    }
+    check(saw_eof == 1 && rn_set_read_enabled(r, connection, 0) == 0 && rn_set_read_enabled(r, connection, 1) == 0 && !c->read.pending, "EOF cannot be reopened by resume");
+    uint8_t block[4096], expected[20 * 4096], received[20 * 4096]; size_t size = 0, got = 0;
+    uint64_t buffers[4]; lean_object *retained;
+    for (unsigned b = 0; b < 4; ++b) {
+      for (size_t i = 0; i < sizeof(block); ++i) block[i] = (uint8_t)(i * 13 + b);
+      check(rn_acquire_buffer(r, 4096, &buffers[b]) == 0 && rn_buffer_copy(r, buffers[b], block, sizeof(block)) == 0, "prepare scatter buffers");
+    }
+    check(rn_buffer_view(r, buffers[0], &retained) == 0, "retain scatter source view"); lean_inc(retained);
+    for (unsigned op = 0; op < 20; ++op) {
+      unsigned b = op % 4, offset = op % 19, length = op % 5 == 0 ? 0 : 4096 - offset;
+      lean_object *view;
+      check(rn_buffer_view(r, buffers[b], &view) == 0 && rn_queue_write(r, connection, buffers[b], offset, length, op + 1) == 0, "queue ordered scatter slice");
+      memcpy(expected + size, lean_sarray_cptr(view) + offset, length); size += length;
+    }
+    for (unsigned b = 0; b < 4; ++b) check(rn_buffer_release(r, buffers[b]) == 0, "release pinned scatter lease");
+    check(rn_close_after_writes(r, connection) == 0, "drain queued vectors after EOF");
+    u_long nonblocking = 1; check(ioctlsocket(peer, FIONBIO, &nonblocking) == 0, "nonblocking scatter client");
+    atomic_store(&transport_send_limit, 97); atomic_store(&transport_send_calls, 0); atomic_store(&transport_max_vectors, 0);
+    unsigned written = 0, closed = 0; int eof = 0; end = rn_now_ms() + 10000;
+    while ((!closed || !eof) && rn_now_ms() < end) {
+      int count = rn_step(r, 1); check(count >= 0 && (unsigned)count <= options.max_events, "scatter completion count bounded");
+      for (int i = 0; i < count; ++i) {
+        const rn_event *event = rn_event_at(r, (uint32_t)i);
+        if (event->kind == RN_WRITTEN) {
+          check(event->operation == ++written && written <= 20, "scatter writes complete once in queue order");
+          unsigned op = written - 1, length = op % 5 == 0 ? 0 : 4096 - op % 19;
+          check(event->result == length && event->length == length, "scatter completion reports logical operation length");
+        }
+        else if (event->kind == RN_CLOSED) { check(written == 20, "scatter completions precede CLOSED"); ++closed; }
+        else check(event->kind != RN_ERROR && event->kind != RN_READ, "scatter writes have no peer/ownership error");
+      }
+      uint8_t extra;
+      int n = recv(peer, (char *)(got < sizeof(received) ? received + got : &extra), (int)(got < sizeof(received) ? sizeof(received) - got : 1), 0);
+      if (n > 0) got += (size_t)n;
+      else if (!n) eof = 1;
+      else check(WSAGetLastError() == WSAEWOULDBLOCK, "receive scatter bytes");
+    }
+    check(closed == 1 && eof && got == size && memcmp(expected, received, size) == 0, "partial scatter sends preserve all binary bytes");
+    check(atomic_load(&transport_send_calls) > 20 && atomic_load(&transport_max_vectors) == (mode ? 16u : 2u), "scatter operation coalescing respects completion budget");
+    atomic_store(&transport_send_limit, 0);
+    uint64_t held[4];
+    for (unsigned b = 0; b < 3; ++b) check(rn_acquire_buffer(r, 4096, &held[b]) == 0, "completed unaliased scatter cell recycled");
+    uint64_t unavailable; check(rn_acquire_buffer(r, 4096, &unavailable) == -EAGAIN, "retained scatter view prevents reuse");
+    check(lean_sarray_cptr(retained)[17] == (uint8_t)(17 * 13), "retained scatter content unchanged"); lean_dec(retained);
+    check(rn_acquire_buffer(r, 4096, &held[3]) == 0, "scatter alias cell recycled after release");
+    for (unsigned b = 0; b < 4; ++b) check(rn_buffer_release(r, held[b]) == 0, "release scatter test cell");
+    check(closesocket(peer) == 0, "close scatter client");
+
+    peer = connect_client(listener_port(r, listener)); connection = accept_client(r); c = &r->connections[rn_index(connection)];
+    check(rn_set_read_enabled(r, connection, 0) == 0 && c->read.pending, "retain outstanding read for forced cancellation");
+    for (unsigned b = 0; b < 3; ++b) {
+      check(rn_acquire_buffer(r, 4096, &buffers[b]) == 0 && rn_buffer_copy(r, buffers[b], block, sizeof(block)) == 0 && rn_queue_write(r, connection, buffers[b], 0, sizeof(block), 1001 + b) == 0, "queue independent cancellation vector");
+      check(rn_buffer_release(r, buffers[b]) == 0, "release cancellation lease");
+    }
+    rn_post_write(r, rn_index(connection)); uint32_t head = c->write_head;
+    check(head != RN_NONE && r->writes[head].op.pending && r->writes[head].vector_count == (mode ? 3u : 2u), "multiple buffers share stable pending OVERLAPPED");
+    unsigned submitted = r->writes[head].vector_count;
+    check(rn_close_connection(r, connection) == 0, "cancel pending scatter operation");
+    for (unsigned b = 0; b < submitted; ++b) check(r->buffers[rn_index(buffers[b])].io_refs == 1, "each submitted vector stays pinned until cancellation drains");
+    closed = 0; end = rn_now_ms() + 3000;
+    while (!closed && rn_now_ms() < end) {
+      int count = rn_step(r, 10); check(count >= 0, "drain scatter cancellations");
+      for (int i = 0; i < count; ++i) if (rn_event_at(r, (uint32_t)i)->kind == RN_CLOSED && rn_event_at(r, (uint32_t)i)->connection == connection) ++closed;
+    }
+    check(closed == 1, "scatter cancellation closes after all OVERLAPPED operations drain");
+    for (unsigned b = 0; b < 4; ++b) check(rn_acquire_buffer(r, 4096, &held[b]) == 0, "all canceled scatter cells reclaimed");
+    for (unsigned b = 0; b < 4; ++b) check(rn_buffer_release(r, held[b]) == 0, "release canceled scatter cell");
+    check(closesocket(peer) == 0, "close canceled scatter peer");
+    peer = connect_client(listener_port(r, listener)); connection = accept_client(r);
+    check(send(peer, "lease", 5, 0) == 5, "send close-after-returned-read payload");
+    uint64_t returned = 0; end = rn_now_ms() + 3000;
+    while (!returned && rn_now_ms() < end) {
+      int count = rn_step(r, 10); check(count >= 0, "poll close-after-returned-read");
+      for (int i = 0; i < count; ++i) if (rn_event_at(r, (uint32_t)i)->kind == RN_READ) returned = rn_event_at(r, (uint32_t)i)->buffer;
+    }
+    check(returned && rn_set_read_enabled(r, connection, 0) == 0 && rn_close_connection(r, connection) == 0, "pause and close returned read batch");
+    lean_object *view;
+    check(rn_buffer_view(r, returned, &view) == 0 && lean_sarray_size(view) == 5 && memcmp(lean_sarray_cptr(view), "lease", 5) == 0 && rn_buffer_release(r, returned) == 0, "returned read lease survives IOCP cancellation");
+    closed = 0; end = rn_now_ms() + 3000;
+    while (!closed && rn_now_ms() < end) {
+      int count = rn_step(r, 10); check(count >= 0, "drain returned-read close");
+      for (int i = 0; i < count; ++i) if (rn_event_at(r, (uint32_t)i)->kind == RN_CLOSED && rn_event_at(r, (uint32_t)i)->connection == connection) ++closed;
+    }
+    check(closed == 1 && closesocket(peer) == 0, "returned-read connection closes once");
+    atomic_store(&track_native_allocations, 0);
+    check(atomic_load(&native_allocations) == 0 && rn_free(r) == 0, "scatter and pause path has no hot native allocations");
+  }
+}
+static void test_historical_write_liveness(void) {
+  rn_config options = {4, 1, 4, 4, 0, 0, 1}; rn_reactor *r = NULL; uint64_t listener = 0;
+  check(rn_new(&options, &r) == 0 && rn_listen(r, "127.0.0.1", 0, 0, &listener) == 0, "create single-event liveness reactor");
+  SOCKET peer = connect_client(listener_port(r, listener)); uint64_t connection = accept_client(r);
+  atomic_store(&native_allocations, 0); atomic_store(&track_native_allocations, 1);
+  check(rn_connection_live(NULL, connection) == -EINVAL && rn_connection_live(r, 0) == 0 && rn_connection_live(r, listener) == 0, "liveness excludes invalid/listening identities");
+  check(rn_set_read_enabled(r, connection, 0) == 0 && rn_connection_live(r, connection) == 1, "IOCP paused connection remains live");
+  uint64_t buffer;
+  check(rn_acquire_buffer(r, 3, &buffer) == 0 && rn_buffer_copy(r, buffer, (const uint8_t *)"bye", 3) == 0 && rn_queue_write(r, connection, buffer, 0, 3, 9001) == 0 && rn_buffer_release(r, buffer) == 0, "queue liveness write");
+  check(rn_close_after_writes(r, connection) == 0 && rn_connection_live(r, connection) == 1, "IOCP liveness includes pending drain");
+  int written = 0, closed = 0; uint64_t end = rn_now_ms() + 3000;
+  while (!closed && rn_now_ms() < end) {
+    int count = rn_step(r, 10); check(count >= 0 && count <= 1, "liveness completion budget");
+    if (!count) continue;
+    const rn_event *event = rn_event_at(r, 0);
+    if (event->kind == RN_WRITTEN) {
+      check(!written && !closed && event->operation == 9001 && rn_connection_live(r, connection) == 0, "historical write reports dead identity before CLOSED"); written = 1;
+    } else if (event->kind == RN_CLOSED) {
+      check(written && rn_connection_live(r, connection) == 0, "CLOSED follows historical write"); closed = 1;
+    } else check(event->kind != RN_ERROR, "liveness drain has no error");
+  }
+  check(written && closed, "single-event liveness drain completes");
+  uint64_t fresh;
+  check(rn_socket_new(r, &fresh) == 0 && fresh != connection && rn_connection_live(r, fresh) == 0 && rn_connection_live(r, connection) == 0, "IOCP liveness rejects reused generations");
+  atomic_store(&track_native_allocations, 0);
+  check(atomic_load(&native_allocations) == 0 && closesocket(peer) == 0 && rn_free(r) == 0, "liveness has no hot native allocations");
+}
+static void test_generation_retirement(void) {
+  rn_config options = {1, 1, 1, 1, 0, 0, 1}; rn_reactor *r = NULL;
+  check(rn_new(&options, &r) == 0, "create generation boundary reactor");
+  atomic_store(&native_allocations, 0); atomic_store(&track_native_allocations, 1);
+  uint64_t stale, last, unavailable = 0;
+  check(rn_socket_new(r, &stale) == 0 && rn_close_connection(r, stale) == 0 && rn_step(r, 0) == 1, "recycle IOCP slot before boundary");
+  r->connections[rn_index(stale)].generation = RN_GENERATION_MAX - 1;
+  check(rn_socket_new(r, &last) == 0 && (int64_t)last > 0 && (last >> 32) == INT32_MAX, "final IOCP socket token remains signed-positive");
+  check(rn_arm_timer(r, stale, 0, 0) == -EINVAL && rn_close_connection(r, stale) == -EINVAL, "old IOCP socket alias cannot address final generation");
+  check(rn_close_connection(r, last) == 0 && rn_step(r, 0) == 1 && rn_event_at(r, 0)->connection == last, "final IOCP socket closes with original identity");
+  check(r->free_connection_count == 0 && rn_socket_new(r, &unavailable) == -EAGAIN && unavailable == 0, "exhausted IOCP connection slot is retired");
+  check(rn_close_connection(r, last) == -EINVAL && rn_arm_timer(r, last, 0, 0) == -EINVAL && rn_arm_timer(r, stale, 0, 0) == -EINVAL, "all retired IOCP socket aliases remain stale");
+  check(rn_acquire_buffer(r, 1, &stale) == 0 && rn_buffer_release(r, stale) == 0, "recycle IOCP buffer before boundary");
+  r->buffers[rn_index(stale)].generation = RN_GENERATION_MAX - 1;
+  check(rn_acquire_buffer(r, 1, &last) == 0 && (int64_t)last > 0 && (last >> 32) == INT32_MAX, "final IOCP buffer token remains signed-positive");
+  const uint8_t binary[] = {0, 255, 17}; lean_object *view = NULL;
+  check(rn_buffer_copy(r, last, binary, sizeof(binary)) == 0 && rn_buffer_view(r, last, &view) == 0, "use final IOCP buffer generation"); lean_inc(view);
+  check(rn_buffer_release(r, last) == 0 && r->free_buffer_count[0] == 0 && !r->buffers[rn_index(last)].in_free, "exhausted IOCP buffer excluded from free candidates");
+  lean_object *invalid = NULL;
+  check(rn_buffer_view(r, stale, &invalid) == -EINVAL && rn_buffer_view(r, last, &invalid) == -EINVAL && rn_buffer_release(r, last) == -EINVAL, "retired IOCP buffer aliases cannot reacquire ownership");
+  check(lean_sarray_size(view) == sizeof(binary) && memcmp(lean_sarray_cptr(view), binary, sizeof(binary)) == 0, "retired IOCP buffer view immutable"); lean_dec(view);
+  for (unsigned i = 0; i < 8; ++i) check(rn_acquire_buffer(r, 1, &unavailable) == -EAGAIN && unavailable == 0 && rn_socket_new(r, &unavailable) == -EAGAIN && rn_step(r, 1) == 0, "retired IOCP exhaustion returns without a completion spin");
+  atomic_store(&track_native_allocations, 0);
+  check(atomic_load(&native_allocations) == 0 && rn_free(r) == 0, "generation retirement has no hot allocation or leaked port");
 }
 typedef struct dispatch_loop {
   rn_reactor *reactor;
@@ -715,7 +935,11 @@ static void test_console(int legacy) {
 int main(int argc, char **argv) {
   lean_initialize_runtime_module();
   lean_io_mark_end_initialization();
-  if (argc == 2 && strcmp(argv[1], "--dispatch") == 0) {
+  if (argc == 2 && strcmp(argv[1], "--transport") == 0) {
+    test_transport_pause_vectors();
+    test_historical_write_liveness();
+    test_generation_retirement();
+  } else if (argc == 2 && strcmp(argv[1], "--dispatch") == 0) {
     test_dispatch_validation();
     test_dispatch_capacity_one();
     test_dispatch_threads();

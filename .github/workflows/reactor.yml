@@ -24,7 +24,12 @@ jobs:
           test: false
           lint: false
       - name: Build reactor and echo
-        run: lake build lean-net-echo lean-net-reactor-native-test
+        run: lake build lean-net-echo lean-net-reactor-native-test lean-net-http1-reactor-fixture
+      - name: Pure HTTP/1 protocol machines
+        run: |
+          lake env lean --run test/HTTP1ParserV2Test.lean
+          lake env lean --run test/HTTP1EncodingTest.lean
+          lake env lean --run test/HTTP1MachineTest.lean
       - name: Phantom lifecycle checks
         run: lake env lean test/ReactorStateTest.lean
       - name: Native buffers, timers and generations
@@ -34,11 +39,13 @@ jobs:
         run: |
           python3 test/test_reactor_setup.py -v
           python3 test/test_reactor_echo.py -v
+          python3 test/test_http1_reactor.py -v
       - name: Worker echo and FFI setup ownership (Windows)
         if: runner.os == 'Windows'
         run: |
           lake env python test/test_reactor_setup.py -v
           lake env python test/test_reactor_echo.py -v
+          lake env python test/test_http1_reactor.py -v
       - name: Echo acceptance
         if: runner.os != 'Windows'
         run: python3 test/test_echo.py -v

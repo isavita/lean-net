@@ -26,6 +26,8 @@
 #define RN_WAKE_KEY ((ULONG_PTR)1)
 #define RN_MAX_ACCEPT_TARGETS 256u
 #define RN_MAX_ACCEPT_QUEUE 1000000u
+#define RN_WRITE_VECTORS 16u
+#define RN_GENERATION_MAX ((uint32_t)INT32_MAX)
 
 /* A configured channel has one acceptor producer and one worker consumer.
  * Only SOCKET values cross it; each loop retains private protocol/buffer state.
@@ -71,7 +73,7 @@ typedef struct rn_connection {
   LPFN_ACCEPTEX accept_ex;
   uint32_t paused_position;
   int paused;
-  int read_paused, accept_paused, eof, draining;
+  int read_paused, read_disabled, accept_paused, eof, draining;
   rn_operation read, accept;
 } rn_connection;
 typedef struct rn_buffer {
@@ -84,6 +86,11 @@ typedef struct rn_buffer {
 typedef struct rn_write {
   rn_operation op;
   uint32_t used, next, buffer, offset, length, sent;
+  /* The submitted head owns stable descriptors until its one OVERLAPPED
+   * completion. Every logical member separately pins its buffer. */
+  uint32_t submitted, vector_count, vector_total;
+  uint32_t vector_writes[RN_WRITE_VECTORS];
+  WSABUF vectors[RN_WRITE_VECTORS];
   uint64_t operation;
 } rn_write;
 typedef struct rn_timer {
@@ -270,10 +277,10 @@ static int rn_emit(rn_reactor *r, uint32_t kind, uint64_t connection,
   return 0;
 }
 static uint32_t rn_alloc_connection(rn_reactor *r) {
-  if (r->free_connection_count) {
+  while (r->free_connection_count) {
     uint32_t i = r->free_connections[--r->free_connection_count];
     rn_connection *c = &r->connections[i];
-    if (c->state == RN_UNUSED && c->generation != UINT32_MAX) {
+    if (c->state == RN_UNUSED && c->generation < RN_GENERATION_MAX) {
       uint32_t generation = c->generation + 1;
       memset(c, 0, sizeof(*c));
       c->generation = generation;
@@ -306,7 +313,7 @@ static void rn_unpause(rn_reactor *r, uint32_t index) {
 static void rn_recycle_buffer(rn_reactor *r, uint32_t index) {
   rn_buffer *buffer = &r->buffers[index];
   if (buffer->leased || buffer->io_refs || buffer->in_free ||
-      buffer->generation == UINT32_MAX)
+      buffer->generation >= RN_GENERATION_MAX)
     return;
   uint32_t class_id = buffer->class_id;
   r->free_buffers[r->free_buffer_base[class_id] +
@@ -336,7 +343,7 @@ static void rn_finalize_connection(rn_reactor *r, uint32_t index) {
   rn_cancel_all_timers(r, index);
   rn_emit(r, RN_CLOSED, rn_token(index, c->generation), 0, 0, 0, 0, 0, 0);
   c->state = RN_UNUSED;
-  if (c->generation != UINT32_MAX)
+  if (c->generation < RN_GENERATION_MAX)
     r->free_connections[r->free_connection_count++] = index;
 }
 static void rn_write_release(rn_reactor *r, uint32_t wi) {
@@ -345,7 +352,7 @@ static void rn_write_release(rn_reactor *r, uint32_t wi) {
     --r->buffers[w->buffer].io_refs;
   if (w->buffer != RN_NONE)
     rn_recycle_buffer(r, w->buffer);
-  w->used = 0;
+  w->used = 0; w->submitted = 0;
   r->free_writes[r->free_write_count++] = wi;
 }
 static void rn_close_native(rn_reactor *r, uint32_t index) {
@@ -376,16 +383,17 @@ static void rn_close_native(rn_reactor *r, uint32_t index) {
               RN_CLOSE_ERROR, 0, 0);
     }
   }
-  /* Submitted sends retain their record and buffer until their cancellation
-   * completion arrives. Unsubmitted sends can be canceled immediately. */
+  /* Retain the whole submitted prefix, not only its OVERLAPPED head: the
+   * provider can still read any vector until cancellation has been drained. */
   uint32_t wi = c->write_head;
-  uint32_t keep = RN_NONE;
+  uint32_t keep = RN_NONE, keep_tail = RN_NONE;
   while (wi != RN_NONE) {
     rn_write *w = &r->writes[wi];
     uint32_t next = w->next;
-    if (w->op.pending) {
-      keep = wi;
-      w->next = RN_NONE;
+    if (w->submitted) {
+      if (keep_tail == RN_NONE) keep = wi;
+      else r->writes[keep_tail].next = wi;
+      keep_tail = wi;
     } else {
       rn_emit(r, RN_ERROR, rn_token(index, c->generation), w->operation, 0,
               -ECANCELED, 0, 0, 0);
@@ -393,7 +401,8 @@ static void rn_close_native(rn_reactor *r, uint32_t index) {
     }
     wi = next;
   }
-  c->write_head = c->write_tail = keep;
+  if (keep_tail != RN_NONE) r->writes[keep_tail].next = RN_NONE;
+  c->write_head = keep; c->write_tail = keep_tail;
   /* Pending AcceptEx records use the listener handle, but the accepting
    * socket belongs to a separate slot; cancel that handle before freeing. */
   for (uint32_t i = 0; was_listener && i < r->config.max_connections; ++i) {
@@ -413,6 +422,11 @@ static uint32_t rn_take_buffer(rn_reactor *r, uint32_t minimum, int leased) {
     for (uint32_t n = r->free_buffer_count[k]; n > 0; --n) {
       uint32_t index = r->free_buffers[base + n - 1];
       rn_buffer *b = &r->buffers[index];
+      if (b->generation >= RN_GENERATION_MAX) {
+        r->free_buffers[base + n - 1] = r->free_buffers[base + --r->free_buffer_count[k]];
+        b->in_free = 0;
+        continue;
+      }
       if (!lean_is_exclusive(b->bytes))
         continue;
       r->free_buffers[base + n - 1] =
@@ -428,7 +442,7 @@ static uint32_t rn_take_buffer(rn_reactor *r, uint32_t minimum, int leased) {
 }
 static void rn_post_read(rn_reactor *r, uint32_t index) {
   rn_connection *c = &r->connections[index];
-  if (c->state != RN_CONNECTED || c->read.pending || c->eof || c->draining)
+  if (c->state != RN_CONNECTED || c->read.pending || c->eof || c->draining || c->read_disabled)
     return;
   uint32_t bi = rn_take_buffer(r, 4096, 0);
   if (bi == RN_NONE) {
@@ -437,7 +451,6 @@ static void rn_post_read(rn_reactor *r, uint32_t index) {
     return;
   }
   c->read_paused = 0;
-  rn_unpause(r, index);
   rn_buffer *b = &r->buffers[bi];
   rn_operation *op = &c->read;
   memset(op, 0, sizeof(*op));
@@ -471,23 +484,52 @@ static void rn_post_write(rn_reactor *r, uint32_t index) {
   rn_operation *op = &w->op;
   if (op->pending)
     return;
+  rn_pause(r, index);
+  uint32_t limit = r->queue_count >= r->config.max_events ? 0 : r->config.max_events - r->queue_count;
+  if (limit > RN_WRITE_VECTORS) limit = RN_WRITE_VECTORS;
+  if (!limit) return;
+  w->vector_count = w->vector_total = 0;
+  uint32_t wi = c->write_head;
+  while (wi != RN_NONE && w->vector_count < limit) {
+    rn_write *part = &r->writes[wi];
+    uint32_t vector = w->vector_count++;
+    w->vector_writes[vector] = wi;
+    w->vectors[vector].buf = (CHAR *)lean_sarray_cptr(r->buffers[part->buffer].bytes) + part->offset + part->sent;
+    w->vectors[vector].len = part->length - part->sent;
+    w->vector_total += w->vectors[vector].len;
+    part->submitted = 1;
+    wi = part->next;
+  }
+  if (w->vector_total == 0) {
+    uint32_t count = w->vector_count;
+    for (uint32_t n = 0; n < count; ++n) {
+      uint32_t zero = c->write_head; rn_write *part = &r->writes[zero];
+      rn_emit(r, RN_WRITTEN, rn_token(index, c->generation), part->operation, 0, 0, 0, 0, 0);
+      c->write_head = part->next;
+      rn_write_release(r, zero);
+    }
+    if (c->write_head == RN_NONE) {
+      c->write_tail = RN_NONE;
+      if (c->draining) rn_close_native(r, index);
+    }
+    return;
+  }
   memset(&op->overlapped, 0, sizeof(op->overlapped));
   op->kind = RN_OP_WRITE;
   op->connection = index;
   op->write = c->write_head;
-  op->wsabuf.buf = (CHAR *)lean_sarray_cptr(r->buffers[w->buffer].bytes) +
-                   w->offset + w->sent;
-  op->wsabuf.len = w->length - w->sent;
   op->pending = 1;
   ++c->pending;
   ++r->outstanding;
   int result =
-      WSASend(c->socket, &op->wsabuf, 1, NULL, 0, &op->overlapped, NULL);
+      WSASend(c->socket, w->vectors, w->vector_count, NULL, 0, &op->overlapped, NULL);
   if (result == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
     int error = rn_error(WSAGetLastError());
     op->pending = 0;
     --c->pending;
     --r->outstanding;
+    for (uint32_t n = 0; n < w->vector_count; ++n)
+      r->writes[w->vector_writes[n]].submitted = 0;
     rn_emit(r, RN_ERROR, rn_token(index, c->generation), w->operation, 0,
             -error, 0, 0, 0);
     c->write_head = w->next;
@@ -501,7 +543,7 @@ static void rn_release_transferred_slot(rn_reactor *r, uint32_t index) {
   rn_connection *connection = &r->connections[index];
   connection->socket = INVALID_SOCKET;
   connection->state = RN_UNUSED;
-  if (connection->generation != UINT32_MAX)
+  if (connection->generation < RN_GENERATION_MAX)
     r->free_connections[r->free_connection_count++] = index;
 }
 /* Successful publication transfers socket ownership even if the wake fails.
@@ -609,7 +651,7 @@ static void rn_post_accept(rn_reactor *r, uint32_t listener) {
     rn_emit(r, RN_ERROR, rn_token(listener, l->generation), 0, 0,
             -rn_error(WSAGetLastError()), RN_ACCEPT_ERROR, 0, 0);
     c->state = RN_UNUSED;
-    if (c->generation != UINT32_MAX)
+    if (c->generation < RN_GENERATION_MAX)
       r->free_connections[r->free_connection_count++] = index;
     rn_pause(r, listener);
     return;
@@ -620,7 +662,7 @@ static void rn_post_accept(rn_reactor *r, uint32_t listener) {
     rn_emit(r, RN_ERROR, rn_token(listener, l->generation), 0, 0,
             -rn_error(WSAGetLastError()), RN_ACCEPT_ERROR, 0, 0);
     c->state = RN_UNUSED;
-    if (c->generation != UINT32_MAX)
+    if (c->generation < RN_GENERATION_MAX)
       r->free_connections[r->free_connection_count++] = index;
     rn_pause(r, listener);
     return;
@@ -662,11 +704,14 @@ static void rn_resume(rn_reactor *r) {
     else if (c->state == RN_CONNECTED) {
       if (c->write_head != RN_NONE && !r->writes[c->write_head].op.pending)
         rn_post_write(r, i);
-      if (c->state == RN_CONNECTED && c->read_paused && !c->eof && !c->draining)
+      if (c->state == RN_CONNECTED && c->read_paused && !c->read_disabled && !c->eof && !c->draining)
         rn_post_read(r, i);
-      if (c->paused && (!c->read_paused || c->eof || c->draining) &&
-          (c->write_head == RN_NONE || r->writes[c->write_head].op.pending))
-        rn_unpause(r, i);
+      if (c->state == RN_CONNECTED) {
+        int needs_read = c->read_paused && !c->read_disabled && !c->eof && !c->draining;
+        int needs_write = c->write_head != RN_NONE && !r->writes[c->write_head].op.pending;
+        if (needs_read || needs_write) rn_pause(r, i);
+        else rn_unpause(r, i);
+      }
     } else
       rn_unpause(r, i);
     if (c->paused)
@@ -780,26 +825,36 @@ static void rn_completed(rn_reactor *r, rn_operation *op, DWORD bytes,
     }
   } else if (op->kind == RN_OP_WRITE) {
     rn_write *w = &r->writes[op->write];
+    uint32_t batch[RN_WRITE_VECTORS], count = w->vector_count, total = w->vector_total;
+    memcpy(batch, w->vector_writes, count * sizeof(*batch));
+    for (uint32_t n = 0; n < count; ++n) r->writes[batch[n]].submitted = 0;
     if (error || c->state == RN_CLOSING || bytes == 0 ||
-        bytes > w->length - w->sent) {
+        bytes > total) {
       int result = error ? error : c->state == RN_CLOSING ? ECANCELED : EIO;
-      rn_emit(r, RN_ERROR, token, w->operation, 0, -result, 0, 0, 0);
-      c->write_head = w->next;
+      for (uint32_t n = 0; n < count; ++n) {
+        rn_write *part = &r->writes[batch[n]];
+        rn_emit(r, RN_ERROR, token, part->operation, 0, -result, 0, 0, 0);
+        c->write_head = part->next;
+        rn_write_release(r, batch[n]);
+      }
       if (c->write_head == RN_NONE)
         c->write_tail = RN_NONE;
-      rn_write_release(r, op->write);
       if (c->state != RN_CLOSING)
         rn_close_native(r, index);
     } else {
-      w->sent += bytes;
-      if (w->sent == w->length) {
-        rn_emit(r, RN_WRITTEN, token, w->operation, 0, w->length, 0, 0,
-                w->length);
-        c->write_head = w->next;
-        if (c->write_head == RN_NONE)
-          c->write_tail = RN_NONE;
-        rn_write_release(r, op->write);
+      uint32_t remaining = bytes;
+      for (uint32_t n = 0; n < count; ++n) {
+        rn_write *part = &r->writes[batch[n]];
+        uint32_t length = part->length - part->sent;
+        if (remaining < length) { part->sent += remaining; break; }
+        remaining -= length;
+        rn_emit(r, RN_WRITTEN, token, part->operation, 0, part->length, 0, 0,
+                part->length);
+        c->write_head = part->next;
+        rn_write_release(r, batch[n]);
       }
+      if (c->write_head == RN_NONE)
+        c->write_tail = RN_NONE;
       if (c->draining && c->write_head == RN_NONE)
         rn_close_native(r, index);
       else
@@ -1108,8 +1163,6 @@ int rn_queue_write(rn_reactor *r, uint64_t token, uint64_t buffer,
   size_t size = lean_sarray_size(b->bytes);
   if (offset > size || length > size - offset)
     return -EINVAL;
-  if (!length)
-    return rn_emit(r, RN_WRITTEN, token, operation, 0, 0, 0, 0, 0);
   if (!r->free_write_count)
     return -EAGAIN;
   uint32_t wi = r->free_writes[--r->free_write_count];
@@ -1229,6 +1282,22 @@ int rn_close_after_writes(rn_reactor *r, uint64_t token) {
   if (c->write_head == RN_NONE)
     rn_close_native(r, rn_index(token));
   return 0;
+}
+int rn_set_read_enabled(rn_reactor *r, uint64_t token, int enabled) {
+  if (!r || (enabled != 0 && enabled != 1)) return -EINVAL;
+  rn_connection *c = rn_connection_get(r, token);
+  if (!c || c->state != RN_CONNECTED) return -EINVAL;
+  c->read_disabled = !enabled;
+  if (enabled && !c->read.pending && !c->eof && !c->draining) {
+    c->read_paused = 1;
+    rn_pause(r, rn_index(token));
+  }
+  return 0;
+}
+int rn_connection_live(rn_reactor *r, uint64_t token) {
+  if (!r) return -EINVAL;
+  rn_connection *c = rn_connection_get(r, token);
+  return c && c->state == RN_CONNECTED;
 }
 int rn_wake(rn_reactor *r) {
   if (!r)

@@ -20,6 +20,9 @@ jobs:
           lake env lean --run test/HTTP1Test.lean
           lake env lean --run test/HTTP1HeaderEventTest.lean
           lake env lean --run test/HTTP1ResponseTest.lean
+          lake env lean --run test/HTTP1ParserV2Test.lean
+          lake env lean --run test/HTTP1EncodingTest.lean
+          lake env lean --run test/HTTP1MachineTest.lean
           lake env lean --run test/HTTP2PrefaceTest.lean
           lake env lean --run test/HTTP2FrameTest.lean
           lake env lean --run test/HPACKTest.lean

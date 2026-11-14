@@ -52,6 +52,15 @@ private def checkedZero (operation : String) (raw : UInt64) : IO Unit := do
   let value ← checked operation raw
   unless value == 0 do throw (IO.userError s!"{operation}: invalid native success result")
 
+/-- A historical completion identity does not grant socket access. Query before
+    taking protocol actions: CLOSED may still be queued for a later poll. -/
+def SocketId.isLive (id : SocketId) (reactor : Reactor) : IO Bool := do
+  if id.owner != reactor.handle then throw (IO.userError "socket identity belongs to another reactor")
+  if !(← reactor.alive.get) then return false
+  let value ← checked "reactor connection liveness" (← FFI.Reactor.connectionLive reactor.handle id.token)
+  if value > 1 then throw (IO.userError "invalid reactor connection liveness result")
+  return value == 1
+
 /-- Peer failures reported by an accept operation do not invalidate the listener.
     Resource exhaustion, configuration failures and invalid owned descriptors
     remain fatal. Apply only after checking setup/close error flags. -/
@@ -166,15 +175,39 @@ def Socket.closeAfterWrites (socket : Socket .connected) : IO Unit := do
   ensureAlive socket.reactor
   checkedZero "reactor drain close" (← FFI.Reactor.closeAfterWrites socket.reactor.handle socket.token)
 
+/-- Pause future reads. Already-returned events and one outstanding IOCP read
+    can still complete; the dispatcher remains responsible for their leases. -/
+def Socket.setReadEnabled (socket : Socket .connected) (enabled : Bool) : IO Unit := do
+  ensureAlive socket.reactor
+  checkedZero "reactor read interest"
+    (← FFI.Reactor.readEnabled socket.reactor.handle socket.token (if enabled then 1 else 0))
+
 def Reactor.acquire (reactor : Reactor) (minimum : UInt32) : IO Buffer := do
   ensureAlive reactor
   let token ← checked "reactor acquire buffer" (← FFI.Reactor.acquire reactor.handle minimum)
   if token == 0 then throw (IO.userError "reactor acquire: null buffer token")
   return ⟨reactor, token⟩
 
+/-- Pool exhaustion is ordinary backpressure; invalid requests remain errors. -/
+def Reactor.tryAcquire (reactor : Reactor) (minimum : UInt32) : IO (Option Buffer) := do
+  ensureAlive reactor
+  let raw ← FFI.Reactor.acquire reactor.handle minimum
+  let result := LeanNet.Errno.decode raw
+  if result < 0 && (← LeanNet.Errno.isWouldBlock result) then return none
+  let token ← checked "reactor acquire buffer" raw
+  if token == 0 then throw (IO.userError "reactor acquire: null buffer token")
+  return some ⟨reactor, token⟩
+
 def Buffer.copyFrom (buffer : Buffer) (bytes : ByteArray) : IO Unit := do
   ensureAlive buffer.reactor
   checkedZero "reactor copy buffer" (← FFI.Reactor.copy buffer.reactor.handle buffer.token bytes)
+
+/-- Replace buffer contents with a bounded source range without allocating an
+    intermediate ByteArray. Queued writes and retained views prevent mutation. -/
+def Buffer.copySliceFrom (buffer : Buffer) (bytes : ByteArray) (offset length : UInt32) : IO Unit := do
+  ensureAlive buffer.reactor
+  checkedZero "reactor copy buffer slice"
+    (← FFI.Reactor.copySlice buffer.reactor.handle buffer.token bytes offset length)
 
 def Socket.armTimer (socket : Socket .connected)
     (kind : UInt32) (deadlineMs : UInt64) : IO Unit := do
@@ -192,7 +225,7 @@ inductive Event where
   | eof (socket : Socket .connected)
   | timer (socket : Socket .connected) (kind : UInt32)
   | closed (socket : Socket .closed)
-  | error (token : UInt64) (flags : UInt32) (code : Int)
+  | error (socket : SocketId) (flags : UInt32) (code : Int)
   | wake
 
 inductive PollResult where
@@ -213,7 +246,7 @@ def Reactor.event (reactor : Reactor) (index : UInt32) : IO Event := do
   ensureAlive reactor
   let event ← FFI.Reactor.event reactor.handle index
   let result := LeanNet.Errno.decode event.result
-  if event.kind == 7 then return .error event.connection event.flags result
+  if event.kind == 7 then return .error ⟨reactor.handle, event.connection⟩ event.flags result
   if result < 0 then throw (← LeanNet.Errno.error "reactor event" result)
   match event.kind.toNat with
   | 1 => return .accepted ⟨reactor, event.connection⟩

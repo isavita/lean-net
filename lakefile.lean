@@ -40,6 +40,9 @@ lean_exe «lean-net-transport-test» where
 lean_exe «lean-net-reactor-native-test» where
   root := `test.ReactorNativeTest
 
+lean_exe «lean-net-http1-reactor-fixture» where
+  root := `test.HTTP1ReactorFixture
+
 extern_lib socket_shim (pkg : NPackage __name__) := do
   let header ← inputTextFile (pkg.dir / "c" / "socket_shim.h")
   let reactorHeader ← inputTextFile (pkg.dir / "c" / "reactor.h")

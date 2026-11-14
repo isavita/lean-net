@@ -6,16 +6,18 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-static int injected_accept;
-static int injected_option;
-static int cleanup_fd = -1;
+/* Native cleartext servers can accept on several worker threads. */
+static atomic_int injected_accept;
+static atomic_int injected_option;
+static atomic_int cleanup_fd = -1;
 #ifdef SO_NOSIGPIPE
-static int nosigpipe_calls;
+static atomic_int nosigpipe_calls;
 #endif
 static int mode_is(const char *wanted) {
     const char *mode = getenv("LEAN_NET_TEST_SOCKET_FAULT");
@@ -23,32 +25,34 @@ static int mode_is(const char *wanted) {
 }
 static void marker(const char *text) { (void)write(STDERR_FILENO, text, strlen(text)); }
 static int accept_fault(void) {
-    if (injected_accept || (!mode_is("accept_abort") && !mode_is("accept_proto"))) return 0;
-    injected_accept = 1;
+    if (!mode_is("accept_abort") && !mode_is("accept_proto")) return 0;
+    int expected = 0;
+    if (!atomic_compare_exchange_strong(&injected_accept, &expected, 1)) return 0;
     marker("TEST_ACCEPT_FAULT\n");
     errno = mode_is("accept_abort") ? ECONNABORTED : ENOPROTOOPT;
     return 1;
 }
 static int option_fault(int fd, int level, int name) {
 #ifdef SO_NOSIGPIPE
-    if (!injected_option && (mode_is("tls_option_einval_peer") || mode_is("tls_option_proto_peer")) &&
+    if ((mode_is("tls_option_einval_peer") || mode_is("tls_option_proto_peer")) &&
         level == SOL_SOCKET && name == SO_NOSIGPIPE) {
-        ++nosigpipe_calls;
         /* Listener, accepted socket, then TLS session socket preparation. */
-        if (nosigpipe_calls == 3) {
-            injected_option = 1;
-            cleanup_fd = fd;
+        if (atomic_fetch_add(&nosigpipe_calls, 1) == 2) {
+            int expected = 0;
+            if (!atomic_compare_exchange_strong(&injected_option, &expected, 1)) return 0;
+            atomic_store(&cleanup_fd, fd);
             marker("TEST_TLS_OPTION_FAULT\n");
             errno = mode_is("tls_option_einval_peer") ? EINVAL : ENOPROTOOPT;
             return 1;
         }
     }
 #endif
-    if (injected_option || (!mode_is("option_proto") && !mode_is("cleanup_fail") &&
+    if ((!mode_is("option_proto") && !mode_is("cleanup_fail") &&
         !mode_is("option_proto_peer") && !mode_is("option_einval_peer")) ||
         level != IPPROTO_TCP || name != TCP_NODELAY) return 0;
-    injected_option = 1;
-    cleanup_fd = fd;
+    int expected = 0;
+    if (!atomic_compare_exchange_strong(&injected_option, &expected, 1)) return 0;
+    atomic_store(&cleanup_fd, fd);
     marker("TEST_OPTION_FAULT\n");
     errno = mode_is("option_einval_peer") ? EINVAL : ENOPROTOOPT;
     return 1;
@@ -56,7 +60,7 @@ static int option_fault(int fd, int level, int name) {
 static int peer_error_fault(int fd, int level, int name, void *value, socklen_t *length) {
     if ((!mode_is("option_proto_peer") && !mode_is("option_einval_peer") &&
          !mode_is("tls_option_proto_peer") && !mode_is("tls_option_einval_peer")) ||
-        fd != cleanup_fd || level != SOL_SOCKET || name != SO_ERROR || *length < sizeof(int)) return 0;
+        fd != atomic_load(&cleanup_fd) || level != SOL_SOCKET || name != SO_ERROR || *length < sizeof(int)) return 0;
     *(int *)value = ECONNRESET;
     *length = sizeof(int);
     marker("TEST_PENDING_PEER_ERROR\n");
@@ -77,8 +81,8 @@ static int injected_getsockopt_fn(int fd, int level, int name, void *value, sock
     return getsockopt(fd, level, name, value, length);
 }
 static int injected_close_fn(int fd) {
-    if (mode_is("cleanup_fail") && fd == cleanup_fd) {
-        cleanup_fd = -1;
+    int expected = fd;
+    if (fd >= 0 && mode_is("cleanup_fail") && atomic_compare_exchange_strong(&cleanup_fd, &expected, -1)) {
         (void)close(fd);
         marker("TEST_CLEANUP_FAULT\n");
         errno = EIO;
@@ -122,8 +126,8 @@ int getsockopt(int fd, int level, int name, void *value, socklen_t *length) {
 int close(int fd) {
     int (*next)(int);
     LOAD_NEXT("close", next);
-    if (mode_is("cleanup_fail") && fd == cleanup_fd) {
-        cleanup_fd = -1;
+    int expected = fd;
+    if (fd >= 0 && mode_is("cleanup_fail") && atomic_compare_exchange_strong(&cleanup_fd, &expected, -1)) {
         (void)next(fd);
         marker("TEST_CLEANUP_FAULT\n");
         errno = EIO;

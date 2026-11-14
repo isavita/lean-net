@@ -56,6 +56,13 @@ int rn_step(rn_reactor *reactor, int timeout_ms);
 const rn_event *rn_event_at(const rn_reactor *reactor, uint32_t index);
 int rn_queue_write(rn_reactor *reactor, uint64_t connection, uint64_t buffer,
                    uint32_t offset, uint32_t length, uint64_t operation);
+/* Owner-thread application backpressure, separate from native pool pressure.
+ * Pausing prevents future reads; an outstanding IOCP read and completions
+ * already returned in the current batch can still deliver data. */
+int rn_set_read_enabled(rn_reactor *reactor, uint64_t connection, int enabled);
+/* Historical completions can outlive the connected token. Owner-thread query;
+ * returns 1 for a matching connected generation, 0 for stale/closing/closed. */
+int rn_connection_live(rn_reactor *reactor, uint64_t connection);
 int rn_acquire_buffer(rn_reactor *reactor, uint32_t minimum, uint64_t *out_token);
 /* View is borrowed. The FFI increments its reference before returning to Lean.
  * Releasing a lease forbids further views. Buffer storage is never reused until

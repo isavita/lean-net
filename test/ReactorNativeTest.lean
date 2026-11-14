@@ -25,6 +25,60 @@ private def retainedLease (reactor buffer : UInt64) : IO Unit := do
   -- mutate or invalidate a ByteArray reference retained by the application.
   check (view == "immutable pool bytes".toUTF8) "released immutable view changed"
 
+private def sliceSnapshot (reactor buffer : UInt64) (source : ByteArray) : IO Unit := do
+  let (result, view) ← FFI.Reactor.buffer reactor buffer
+  check (result == 0 && view == ByteArray.mk #[0, 255, 13, 10]) "binary copySlice contents"
+  rejected "copySlice mutates retained view" (FFI.Reactor.copySlice reactor buffer source 0 1)
+  check (view == ByteArray.mk #[0, 255, 13, 10]) "failed copySlice changed immutable contents"
+
+private def checkRawBuffer (reactor buffer : UInt64) (expected : ByteArray) : IO Unit := do
+  let (result, view) ← FFI.Reactor.buffer reactor buffer
+  check (result == 0 && view == expected) "copySlice changed logical buffer length or contents"
+
+private def rawSliceChecks (reactor : UInt64) : IO Unit := do
+  let buffer ← ok "acquire slice buffer" (FFI.Reactor.acquire reactor 4096)
+  let source := ByteArray.mk #[90, 0, 255, 13, 10, 65, 91]
+  zero "copy binary source range" (FFI.Reactor.copySlice reactor buffer source 1 4)
+  sliceSnapshot reactor buffer source
+  -- The snapshot is gone: bounds failures must be rejected independently of
+  -- the native mutation guard for shared buffers.
+  rejected "copySlice offset past source" (FFI.Reactor.copySlice reactor buffer source 8 0)
+  rejected "copySlice range past source" (FFI.Reactor.copySlice reactor buffer source 6 2)
+  rejected "copySlice offset overflow" (FFI.Reactor.copySlice reactor buffer source 4294967295 1)
+  rejected "copySlice length overflow" (FFI.Reactor.copySlice reactor buffer source 1 4294967295)
+  checkRawBuffer reactor buffer (ByteArray.mk #[0, 255, 13, 10])
+  zero "copy empty range at source end" (FFI.Reactor.copySlice reactor buffer source 7 0)
+  checkRawBuffer reactor buffer ByteArray.empty
+  let large := ByteArray.mk (Array.replicate 4097 (42 : UInt8))
+  rejected "copySlice exceeds destination capacity" (FFI.Reactor.copySlice reactor buffer large 0 4097)
+  checkRawBuffer reactor buffer ByteArray.empty
+  zero "copySlice exact destination capacity" (FFI.Reactor.copySlice reactor buffer large 1 4096)
+  checkRawBuffer reactor buffer (ByteArray.mk (Array.replicate 4096 (42 : UInt8)))
+  zero "release slice buffer" (FFI.Reactor.release reactor buffer)
+  rejected "copySlice released lease" (FFI.Reactor.copySlice reactor buffer source 1 4)
+
+private def typedAliasExhaustion (reactor : Reactor.Reactor) (buffer : Reactor.Buffer) : IO Unit := do
+  buffer.copySliceFrom (ByteArray.mk #[7, 0, 255, 8]) 1 2
+  let view ← buffer.view
+  buffer.release
+  check ((← reactor.tryAcquire 4096).isNone) "retained typed view bypassed pool backpressure"
+  check (view == ByteArray.mk #[0, 255]) "released typed view changed under acquisition"
+
+private def typedAcquireChecks : IO Unit :=
+  Reactor.withReactor {
+    maxConnections := 2, maxEvents := 2, maxWrites := 2,
+    buffers4k := 1, buffers16k := 0, buffers64k := 0, timerTickMs := 1 } fun reactor => do
+    let some buffer ← reactor.tryAcquire 4096 | throw (IO.userError "typed initial acquisition failed")
+    check ((← reactor.tryAcquire 4096).isNone) "typed pool exhaustion must return none"
+    typedAliasExhaustion reactor buffer
+    let some again ← reactor.tryAcquire 4096 | throw (IO.userError "typed released view did not recycle")
+    again.release
+    let invalid ← try
+      let _ ← reactor.tryAcquire 0
+      pure false
+    catch _ => pure true
+    check invalid "typed invalid acquisition must remain an error"
+
 def main : IO Unit := do
   for native in [FFI.errnoEpipe, FFI.errnoEnotconn, FFI.errnoEtimedout,
       FFI.errnoEconnrefused, FFI.errnoEconnreset, FFI.errnoEconnaborted,
@@ -54,6 +108,7 @@ def main : IO Unit := do
     rejected "stale buffer release" (FFI.Reactor.release reactor buffer)
     zero "release reused storage" (FFI.Reactor.release reactor next)
     rejected "double buffer release" (FFI.Reactor.release reactor next)
+    rawSliceChecks reactor
 
     let socket ← ok "fresh socket" (FFI.Reactor.socketNew reactor)
     rejected "invalid timer kind" (FFI.Reactor.armTimer reactor socket 8 0)
@@ -106,4 +161,5 @@ def main : IO Unit := do
     zero "close timer socket" (FFI.Reactor.close small socket)
   finally
     zero "free single-event reactor" (FFI.Reactor.free small)
+  typedAcquireChecks
   IO.println "native reactor pool, timer and generation tests passed"

@@ -9,6 +9,6 @@ def serveWith (router : HTTP1.Router) (config : HTTP1.ServerConfig := {})
 
 /-- Run the shared demonstration router over HTTP/1.1 and h2c. -/
 def serve (host : String := "127.0.0.1") (port : UInt16 := 8080) : IO Unit :=
-  serveWith HTTP1.defaultRouter {} host port
+  HTTP1.serve host port
 
 end LeanNet.HTTP2

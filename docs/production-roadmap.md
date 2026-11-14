@@ -39,9 +39,11 @@ coverage, not evidence that the new architecture or performance gates pass.
 
 ## Current phase status
 
-Phase 1 reactor acceptance passed at d3ccc2e. Phases 2–6 and all final gates
-remain open. Existing HTTP/TLS servers still use poll and in-loop nonblocking
-OpenSSL; their regression tests do not establish the required migration.
+Phase 1 reactor acceptance passed at d3ccc2e. Phase 2 is in cross-platform
+integration: the pure HTTP/1 machine and cleartext native driver pass local
+acceptance, with Linux/Windows CI still required. Phases 3–6 and all final gates
+remain open. TLS still uses poll and in-loop nonblocking OpenSSL; h2c preserves
+the previous pure HTTP/2 implementation pending its full phase-four migration.
 
 ## Reactor acceptance evidence
 

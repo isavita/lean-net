@@ -1,17 +1,18 @@
 # lean-net
 
-A Lean 4 TCP and HTTP library under development. The TCP echo server uses a
-native epoll/kqueue/IOCP reactor. The HTTP server currently uses a non-blocking
-poll loop and supports HTTP/1.1 and
-prior-knowledge HTTP/2 over cleartext (h2c) on the same listener. The
-separate `tls/` package adds OpenSSL TLS and ALPN for HTTP/2 and HTTP/1.1.
+A Lean 4 TCP and HTTP library under development. TCP echo and cleartext HTTP use
+the native epoll/kqueue/IOCP reactor. HTTP/1.0 and HTTP/1.1 use a pure connection
+machine; the listener also preserves prior-knowledge HTTP/2 (h2c). The separate
+`tls/` package currently retains its previous OpenSSL transport until the
+dedicated TLS-worker migration.
 
 The expanded production brief is being implemented phase by phase.
 [The acceptance ledger](docs/production-roadmap.md) retains
 all pending gates, including h2spec, sustained throughput, and the actual
 24-hour soak. The new native-reactor echo and its ownership model are described
-in [docs/reactor.md](docs/reactor.md); the HTTP/TLS paths still use the previous
-event-loop design until their scheduled migration phases.
+in [docs/reactor.md](docs/reactor.md). The HTTP machine, advanced handlers and
+transport boundaries are documented in [docs/http1-machine.md](docs/http1-machine.md).
+The full HTTP/2 migration and production conformance gates remain open.
 
 ## Build and test
 
@@ -24,6 +25,9 @@ lake env lean test/LeanNetTest.lean
 lake env lean --run test/HTTP1Test.lean
 lake env lean --run test/HTTP1HeaderEventTest.lean
 lake env lean --run test/HTTP1ResponseTest.lean
+lake env lean --run test/HTTP1ParserV2Test.lean
+lake env lean --run test/HTTP1EncodingTest.lean
+lake env lean --run test/HTTP1MachineTest.lean
 lake env lean --run test/HTTP2PrefaceTest.lean
 lake env lean --run test/HTTP2FrameTest.lean
 lake env lean --run test/HPACKTest.lean
@@ -61,9 +65,11 @@ The native reactor has additional ownership, concurrency and allocation checks:
 
 ```sh
 lake build lean-net-reactor-native-test
+lake build lean-net-http1-reactor-fixture
 .lake/build/bin/lean-net-reactor-native-test
 lake env lean test/ReactorStateTest.lean
 python3 -m unittest discover -s test -p 'test_reactor_*.py' -v
+python3 test/test_http1_reactor.py -v
 # Windows IOCP/Winsock fixtures (use lake env to resolve native tool paths):
 # lake env python test/test_reactor_setup.py -v
 # lake env python test/test_reactor_echo.py -v
@@ -96,10 +102,9 @@ retry policy; C does not retry interrupted syscalls. `close` is called once,
 never retried, and `EBADF` indicates a library defect. Socket resources are
 managed with explicit brackets rather than finalizers.
 
-The HTTP server has a scoped SIGINT handler with a self-pipe to wake socket
-waits and permit the Lean brackets to unwind. That facility is process-wide
-and assumes single-threaded use. The reactor echo server instead fans shutdown
-out to its dedicated workers. Unix listeners use `SO_REUSEADDR`; Windows uses
+Native echo and cleartext HTTP use a signal group that wakes and joins every
+dedicated worker before freeing native state. The legacy TLS transport retains
+its single-threaded scoped SIGINT handler. Unix listeners use `SO_REUSEADDR`; Windows uses
 `SO_EXCLUSIVEADDRUSE`. Accepted sockets use `TCP_NODELAY` and platform SIGPIPE
 suppression by default.
 
@@ -113,11 +118,12 @@ configurable size limits, and returns unconsumed bytes for pipelined requests.
 Parsing errors must close the connection; a caller must not resume parsing the
 remaining bytes as a new request after a framing error.
 
-The HTTP/1.1 server multiplexes connections on one thread. `ServerConfig`
-bounds clients, response sizes and idle, request and write times. Router
-callbacks execute synchronously and should not block. Responses have explicit
-framing and a Date header. The default router serves `/`; applications can
-provide a `LeanNet.HTTP1.Router`.
+The default cleartext server uses one protocol worker per core. Its global
+client budget is partitioned across workers. `serveWithConfig` preserves the
+original single-worker ownership of an arbitrary `Router`; multicore
+applications use a per-worker handler factory. Callbacks execute synchronously
+and should not block. Responses have explicit framing and a per-worker cached
+Date header. The default router serves `/`.
 
 HTTP/2 supports request multiplexing, HPACK with static and dynamic tables
 and Huffman coding, and stream and connection flow control. It does not

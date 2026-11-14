@@ -1,13 +1,13 @@
 import LeanNet.HTTP1.Parser
 import LeanNet.HTTP1.Response
+import LeanNet.HTTP1.Config
+import LeanNet.HTTP1.Router
+import LeanNet.HTTP.ReactorServer
 import LeanNet.Socket.Handle
 import LeanNet.HTTP2.Preface
 import LeanNet.HTTP2.Connection
 
 namespace LeanNet.HTTP1
-
-/-- Application callback. A response is serialized and framed by the server. -/
-abbrev Router := Request → IO Response
 
 private def tokenByte (b : UInt8) : Bool :=
   let n := b.toNat
@@ -53,17 +53,6 @@ private def badRequest : Response :=
 
 private def expectationFailed : Response :=
   { status := 417 }
-
-/-- Resource and time bounds for the single-threaded HTTP event loop. -/
-structure ServerConfig where
-  maxClients : Nat := 32
-  maxResponseBytes : Nat := 8 * 1024 * 1024
-  maxResponseHeaderBytes : Nat := 65536
-  maxResponseHeaders : Nat := 100
-  idleTimeoutMs : Nat := 30000
-  requestTimeoutMs : Nat := 30000
-  writeTimeoutMs : Nat := 30000
-  deriving Repr
 
 private inductive Protocol where
   | detect (detector : HTTP2.PrefaceDetector)
@@ -493,38 +482,17 @@ def serveWithTransport (router : Router) (config : ServerConfig)
     listener.setNonblocking
     withConnectionPool (fun pool => eventLoop router config listener pool setup)
 
-/-- Serve many nonblocking HTTP/1.1 and h2c connections on one thread. -/
+/-- Compatibility callback ownership on one native reactor. Advanced multicore
+    applications construct independent handlers with HTTP.ReactorServer.serveFactory. -/
 def serveWithConfig (router : Router) (config : ServerConfig) (host : String := "127.0.0.1")
     (port : UInt16 := 8080) : IO Unit :=
-  serveWithTransport router config none host port
+  HTTP.ReactorServer.serveWithConfig router config host port
 
 def serveWith (router : Router) (host : String := "127.0.0.1") (port : UInt16 := 8080) : IO Unit :=
   serveWithConfig router {} host port
 
-private def requestPath (target : ByteArray) : ByteArray := Id.run do
-  let raw := target.toList
-  if raw.head? == some 47 then
-    return ByteArray.mk ((raw.takeWhile (· != 63)).toArray)
-  -- This demonstration router is host-agnostic. Virtual-host routers must use
-  -- an absolute-form target's authority rather than the Host field.
-  let afterScheme := (raw.dropWhile (· != 58)).drop 1
-  match afterScheme with
-  | 47 :: 47 :: rest =>
-    let path := rest.dropWhile (fun c => c != 47 && c != 63)
-    if path.isEmpty || path.head? == some 63 then return "/".toUTF8
-    return ByteArray.mk ((path.takeWhile (· != 63)).toArray)
-  | _ => return ByteArray.empty
-
-/-- Minimal demonstration route shared by the executable and embedders. -/
-def defaultRouter (request : Request) : IO Response := do
-  if (request.method == "GET" || request.method == "HEAD") && requestPath request.target == "/".toUTF8 then
-    return { status := 200, headers := #[{ name := "content-type", value := "text/plain; charset=utf-8".toUTF8 }],
-             body := "Hello from lean-net!\n".toUTF8 }
-  return { status := 404, headers := #[{ name := "content-type", value := "text/plain; charset=utf-8".toUTF8 }],
-           body := "Not Found\n".toUTF8 }
-
-/-- Run the demonstration HTTP/1.1 route. -/
+/-- Run the demonstration route with one native protocol worker per core. -/
 def serve (host : String := "127.0.0.1") (port : UInt16 := 8080) : IO Unit :=
-  serveWith defaultRouter host port
+  HTTP.ReactorServer.serve host port
 
 end LeanNet.HTTP1
