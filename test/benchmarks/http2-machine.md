@@ -1,9 +1,22 @@
 # Native HTTP/2 machine benchmark
 
-The Phase 4 throughput gate remains open pending measurement of the optimized
-candidate. The initial machine candidate passed correctness and the short RSS
-gate, but one of its three eight-worker rounds missed the declared throughput
-threshold. Its complete failed result is retained below.
+The optimized candidate at source
+`2a9e4157ffab2973a41eab6f739f016b7ced320f` passes the declared Phase 4 throughput,
+protocol conformance and short RSS gates. All three eight-worker rounds exceed 100,000
+requests/s. The initial machine candidate missed the throughput threshold in
+one round; its complete failed result is retained below.
+
+The overall Phase 4 release remains pending. Subsequent Linux CI exposed a
+legacy TLS backpressure shutdown exceeding its unchanged four-second bound.
+The passing `2a9e415` measurements remain historical evidence; the bounded
+shutdown correction requires a new committed candidate, validation and the
+same six-round benchmark gates.
+
+This candidate's native and TLS CI matrices passed on all three platforms, but
+the full Linux regression exposed a blocked TLS shutdown exceeding its existing
+four-second test bound. Phase 4 release acceptance remains pending the cutoff
+abort fix and its matching-artifact validation; the measurements below are
+preserved as this candidate's result.
 
 The benchmark uses the native HTTP/2 fixture's `bench` profile: a global
 128-client limit, 512 requested HTTP output buffers, four HTTP output flights
@@ -55,7 +68,8 @@ measuring a changed implementation; failed measurements are preserved.
 | --- | --- | --- | --- |
 | Pre-machine `e2dbbf0` | 40,635 / 38,190 / 40,970 | 136,652 / 122,984 / 93,328 | All rounds had 680 failed/errored streams |
 | Initial machine `768b4e0` | 41,830 / 42,547 / 42,853 | 130,748 / **90,994** / 136,458 | Throughput gate failed in eight-worker round 2 |
-| Optimized candidate | Pending | Pending | Not yet measured |
+| Optimized `2a9e415` | 75,886 / 80,592 / 78,679 | **227,503 / 220,693 / 211,131** | All declared gates passed |
+| Bounded-shutdown follow-up | Pending | Pending | Release validation pending |
 
 The pre-machine rates count successful responses rather than h2load's total
 completion rate. That server advertised only 32 concurrent streams. Each
@@ -81,7 +95,9 @@ active HTTP/2 and TCP-write stacks. Across 9,800 worker wall-stack observations,
 `syncWriteTimer` appeared in 957, `flushOne` in 613, HPACK in 3,175 and `writev`
 in 287. These inclusive categories overlap and are **not CPU percentages**.
 Allocation/refcount operations, Huffman decoding and stream-table updates also
-appeared prominently.
+appeared prominently. The retained
+[diagnostic summary](http2-conformance-macos-m2-2a9e415/profile-768b4e0-summary.json)
+identifies the unchanged binary, command and raw sample hash.
 
 The optimized candidate uses the output queue head when finding the earliest
 write deadline, avoids recalculating that unchanged deadline when newer output
@@ -89,10 +105,36 @@ is appended or moved into a native lease, and combines small HTTP/2 header and
 control parts into bounded 4 KiB groups while preserving wire order and large
 DATA references. Huffman byte-bit extraction uses a shift and mask rather than
 computing a power for every bit. Correctness validation is separate from the
-pending throughput result. Validation also identified a deterministic TLS
+throughput result. Validation also identified a deterministic TLS
 queue-index liveness defect and a timing-sensitive premature close after an
 empty-stream peer GOAWAY. Native and wire regressions cover both fixes;
 peer-only GOAWAY keeps PING/control frames serviceable and refuses new requests.
-Final artifact validation and measurements will be recorded after these fixes
-are rebuilt. The wire suite now has 48 cases, including verified TLS coverage
-of the new GOAWAY policy.
+The final artifacts passed all **48 wire cases**, **147/147 strict h2spec cases
+on each transport**, and both public CLI tests. The wire suite includes
+verified TLS coverage of the new GOAWAY policy, the mandatory TLS 1.2/h2 cipher
+with P-256, exact binary responses on all four curl protocol modes, strict
+stream-error isolation, priority scheduling, opt-in push and 1,000 native
+connection cycles. The
+[conformance summary and raw logs](http2-conformance-macos-m2-2a9e415/summary.json)
+retain source-file hashes validated against the committed candidate. TLS
+h2spec uses `--insecure` for the generated private PKI; independent Python and
+curl clients verify its CA and exact hostnames.
+
+The optimized benchmark completed all **600,000 successful 2xx requests** with
+zero errors or timeouts, exact DATA totals and passing binary pre/post checks.
+The median rates were **78,679 requests/s** for one worker and **220,693
+requests/s** for eight. Its RSS assessments passed: one worker decreased from
+33,584 to 6,736 KiB; eight workers grew from 227,152 to 227,200 KiB, or
+**48 KiB / 0.02113%**. Page residency differs between short runs; these values
+establish the declared growth check and do not claim a reduction in the
+server's absolute memory requirement.
+
+The passing
+[raw benchmark report](http2-machine-macos-m2-2a9e415.json) records a clean
+source tree and unchanged executable SHA-256
+`b20634f09cd00b767e46f0d5736de85df1eb0a998d89bc33b8951f41c7b12cfb`.
+The [extended source snapshot](http2-machine-macos-m2-2a9e415-source.json)
+also verifies all recorded runtime Lean, C and header files against the
+committed bytes. No acceptance round was repeated, no client-thread/workload
+change was used, and the earlier failed result was preserved. The final
+24-hour soak remains a separate Phase 6 gate.

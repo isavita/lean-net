@@ -1,0 +1,40 @@
+{
+  "evidence_kind": "Exact combined outputs transcribed from completed tool calls; logs were not redirected during those original runs.",
+  "cwd": "/Users/isavita/git/lean-net",
+  "head_at_evidence_capture": "768b4e09e2c168e74b7472c82eb54d9990ba81e2",
+  "openssl": "/opt/homebrew/opt/openssl@3 (3.6.3)",
+  "runs": [
+    {
+      "log": "worker-red.log",
+      "command": "PKG_CONFIG_PATH=/opt/homebrew/opt/openssl@3/lib/pkgconfig python3 tls/test/test_tls_worker_native.py -v",
+      "exit_code": 1,
+      "seconds": 3.693,
+      "source": "new deterministic first-draft fixture against pre-fix worker; before per-session notification epoch"
+    },
+    {
+      "log": "worker-green.log",
+      "command": "PKG_CONFIG_PATH=/opt/homebrew/opt/openssl@3/lib/pkgconfig python3 tls/test/test_tls_worker_native.py -v",
+      "exit_code": 0,
+      "seconds": 4.04,
+      "source": "final worker+fixture snapshots included here"
+    },
+    {
+      "log": "context-green.log",
+      "command": "PKG_CONFIG_PATH=/opt/homebrew/opt/openssl@3/lib/pkgconfig python3 tls/test/test_tls_context_native.py -v",
+      "exit_code": 0,
+      "seconds": 4.833,
+      "source": "final worker snapshot included here"
+    }
+  ],
+  "sanitizers": "Harness default RN_TLS_WORKER_SANITIZERS=1; -fsanitize=address,undefined -fno-omit-frame-pointer. Context harness also ASan/UBSan.",
+  "sha256": {
+    "context-green.log": "030cb3ce42c787b539dfc82227d4801be920ca94042cfc2b027a4d0f89cef52b",
+    "test_tls_context_native.py": "2b374ff8ea3a85e8cb871517d9a7b8426bee0842878641606ca2d5410368b4e2",
+    "test_tls_worker_native.py": "7ef67de9a9b99e68eb9e0e9f51ab0b1b85342993a0801c59c2d6120143dcf621",
+    "tls_worker-before.c": "7ff91b3e39c39db1640e1c3d61f9e8a491b61d2fab2d6a075a57e295bc70bd75",
+    "tls_worker.c": "f04a1763359a263ec7e95703cad06466a3a482accad2e205047f68515f5a45ab",
+    "tls_worker_native.c": "e90126d6de806579fb4cfbb58299629e041714af968dffcc00da0dfd42604b65",
+    "worker-green.log": "172b974c98dbbb817fef8bb54c8a42b6149a9c9169f3272a18e1bf12d4b2ac8e",
+    "worker-red.log": "1063d589870fe2d211e9a735b0da2cf435c118ab8aff48282528d768e6912234"
+  }
+}

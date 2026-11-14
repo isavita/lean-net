@@ -1,0 +1,15 @@
+test_queues_wire_fences_and_join_lifetime (__main__.TLSWorkerNative.test_queues_wire_fences_and_join_lifetime) ... FAIL
+
+======================================================================
+FAIL: test_queues_wire_fences_and_join_lifetime (__main__.TLSWorkerNative.test_queues_wire_fences_and_join_lifetime)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/isavita/git/lean-net/tls/test/test_tls_worker_native.py", line 37, in test_queues_wire_fences_and_join_lifetime
+    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+AssertionError: 1 != 0 : TLS worker native: notification drives queued ciphertext after queue1 cursor ABA
+
+
+----------------------------------------------------------------------
+Ran 1 test in 3.693s
+
+FAILED (failures=1)

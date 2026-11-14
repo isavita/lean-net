@@ -1,0 +1,10 @@
+{
+  "plain": {
+    "path": "/tmp/lean-net-tools/http2-optimized-public-cli-20261114c/plain-server",
+    "sha256": "8965733923c3e7690a7ee9cae8c7ae54fe770549aa998d772ac88250a30a124e"
+  },
+  "tls": {
+    "path": "/tmp/lean-net-tools/http2-optimized-public-cli-20261114c/tls-server",
+    "sha256": "1b77bbaf4e90981ed27cff2dd6da83eeb3c1a9de5743d90be2f1c59ac59319df"
+  }
+}

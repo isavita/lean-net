@@ -1,0 +1,61 @@
+test_all_workers_execute_ssl_off_loop_with_exclusive_ownership (__main__.TLSReactorAcceptance.test_all_workers_execute_ssl_off_loop_with_exclusive_ownership) ... ok
+test_all_workers_serve_verified_connections (__main__.TLSReactorAcceptance.test_all_workers_serve_verified_connections) ... TLS worker counts: {0: 8, 1: 8, 2: 8, 3: 8}
+ok
+test_alpn_preference_fallback_and_no_overlap (__main__.TLSReactorAcceptance.test_alpn_preference_fallback_and_no_overlap) ... ok
+test_expect_continue_barrier_and_buffered_refusal (__main__.TLSReactorAcceptance.test_expect_continue_barrier_and_buffered_refusal) ... ok
+test_fragmented_handshake_and_tls_records (__main__.TLSReactorAcceptance.test_fragmented_handshake_and_tls_records) ... ok
+test_http10_persistence_and_chunked_rejection (__main__.TLSReactorAcceptance.test_http10_persistence_and_chunked_rejection) ... ok
+test_http_framing_status_pipeline_and_metadata (__main__.TLSReactorAcceptance.test_http_framing_status_pipeline_and_metadata) ... ok
+test_immediate_shutdown_after_verified_handshakes_sends_close_notify (__main__.TLSReactorAcceptance.test_immediate_shutdown_after_verified_handshakes_sends_close_notify) ... ok
+test_large_response_exact_after_slow_reader (__main__.TLSReactorAcceptance.test_large_response_exact_after_slow_reader) ... ok
+test_negotiated_protocol_cannot_switch (__main__.TLSReactorAcceptance.test_negotiated_protocol_cannot_switch) ... ok
+test_obsolete_protocol_handshakes_are_rejected_by_server (__main__.TLSReactorAcceptance.test_obsolete_protocol_handshakes_are_rejected_by_server) ... ok
+test_opt_in_http10_eof_body_is_not_parsed_as_pipeline (__main__.TLSReactorAcceptance.test_opt_in_http10_eof_body_is_not_parsed_as_pipeline) ... ok
+test_partial_application_record_waits_without_busy_spin (__main__.TLSReactorAcceptance.test_partial_application_record_waits_without_busy_spin) ... ok
+test_raw_upgrade_held_views_and_blocked_writes_allow_same_worker_progress (__main__.TLSReactorAcceptance.test_raw_upgrade_held_views_and_blocked_writes_allow_same_worker_progress) ... ok
+test_request_trailers_and_close_delimited_response (__main__.TLSReactorAcceptance.test_request_trailers_and_close_delimited_response) ... ok
+test_shutdown_joins_active_and_blocked_tls_workers (__main__.TLSReactorAcceptance.test_shutdown_joins_active_and_blocked_tls_workers) ... ok
+test_slow_handshake_reader_and_resets_isolate_other_peers (__main__.TLSReactorAcceptance.test_slow_handshake_reader_and_resets_isolate_other_peers) ... ok
+test_ten_pipelined_requests_and_tls_eof (__main__.TLSReactorAcceptance.test_ten_pipelined_requests_and_tls_eof) ... ok
+test_thousand_cycles_and_aborts_release_resources (__main__.TLSReactorAcceptance.test_thousand_cycles_and_aborts_release_resources) ... ok
+test_two_sni_certificates_and_verification_failures (__main__.TLSReactorAcceptance.test_two_sni_certificates_and_verification_failures) ... ok
+test_underfunded_tls_pool_rejected_and_endpoint_reusable (__main__.TLSReactorAcceptance.test_underfunded_tls_pool_rejected_and_endpoint_reusable) ... ok
+test_upgrade_raw_tail_and_early_tls_close_notify (__main__.TLSReactorAcceptance.test_upgrade_raw_tail_and_early_tls_close_notify) ... ok
+test_verified_curl_same_route_http10_http11_h2 (__main__.TLSReactorAcceptance.test_verified_curl_same_route_http10_http11_h2) ... ok
+test_verified_tls12_and_tls13 (__main__.TLSReactorAcceptance.test_verified_tls12_and_tls13) ... ok
+test_absolute_handshake_deadline_under_clienthello_trickle (__main__.TLSReactorDeadlines.test_absolute_handshake_deadline_under_clienthello_trickle) ... ok
+test_request_deadline_after_continue (__main__.TLSReactorDeadlines.test_request_deadline_after_continue) ... ok
+test_bounded_queues_preserve_large_binary_pipeline (__main__.TLSReactorQueue3.test_bounded_queues_preserve_large_binary_pipeline) ... ok
+test_openssl_verified_reconnect (__main__.TLSReactorSessionCache.test_openssl_verified_reconnect) ... ok
+test_tls12_cache_only_resume_across_workers (__main__.TLSReactorSessionCache.test_tls12_cache_only_resume_across_workers) ... ok
+test_alpn_change_selects_current_connection_protocol (__main__.TLSReactorTickets.test_alpn_change_selects_current_connection_protocol) ... ok
+test_sni_change_cannot_resume_another_hosts_identity (__main__.TLSReactorTickets.test_sni_change_cannot_resume_another_hosts_identity) ... ok
+test_tls12_ticket_resume_across_workers (__main__.TLSReactorTickets.test_tls12_ticket_resume_across_workers) ... ok
+test_tls13_ticket_resume_across_workers (__main__.TLSReactorTickets.test_tls13_ticket_resume_across_workers) ... ok
+test_bounded_queues_preserve_large_binary_pipeline (__main__.TLSReactorTiny.test_bounded_queues_preserve_large_binary_pipeline) ... ERROR
+
+======================================================================
+ERROR: test_bounded_queues_preserve_large_binary_pipeline (__main__.TLSReactorTiny.test_bounded_queues_preserve_large_binary_pipeline)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/isavita/git/lean-net/tls/test/test_tls_reactor.py", line 646, in test_bounded_queues_preserve_large_binary_pipeline
+    self.assertEqual(reader.response().body, payload)
+                     ^^^^^^^^^^^^^^^^^
+  File "/Users/isavita/git/lean-net/test/test_http1_reactor.py", line 104, in response
+    lines = self.until(b"\r\n\r\n")[:-4].split(b"\r\n")
+            ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/isavita/git/lean-net/test/test_http1_reactor.py", line 72, in until
+    part = self.sock.recv(65536)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/isavita/.pyenv/versions/3.11.7/lib/python3.11/ssl.py", line 1296, in recv
+    return self.read(buflen)
+           ^^^^^^^^^^^^^^^^^
+  File "/Users/isavita/.pyenv/versions/3.11.7/lib/python3.11/ssl.py", line 1169, in read
+    return self._sslobj.read(len)
+           ^^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: The read operation timed out
+
+----------------------------------------------------------------------
+Ran 34 tests in 25.614s
+
+FAILED (errors=1)

@@ -1,0 +1,69 @@
+{
+  "conclusion": "failure",
+  "databaseId": 43636942939,
+  "headSha": "2a9e4157ffab2973a41eab6f739f016b7ced320f",
+  "jobs": [
+    {
+      "completedAt": "2026-11-14T20:22:02Z",
+      "conclusion": "failure",
+      "databaseId": 132575708973,
+      "name": "build",
+      "startedAt": "2026-11-14T20:20:15Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run leanprover/lean-action@v1",
+          "number": 3,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Build and test TCP, HTTP/1.1 and h2c",
+          "number": 4,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Install OpenSSL development files",
+          "number": 5,
+          "status": "completed"
+        },
+        {
+          "conclusion": "failure",
+          "name": "Build and test TLS package",
+          "number": 6,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 12,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 13,
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/isavita/lean-net/actions/runs/43636942939/job/132575708973"
+    }
+  ],
+  "status": "completed",
+  "url": "https://github.com/isavita/lean-net/actions/runs/43636942939",
+  "workflowName": "Lean Action CI"
+}

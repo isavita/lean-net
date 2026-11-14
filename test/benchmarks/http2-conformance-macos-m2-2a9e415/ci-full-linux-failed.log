@@ -1,0 +1,80 @@
+build	Build and test TLS package	﻿2026-11-14T20:21:40.6598618Z ##[group]Run lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test
+build	Build and test TLS package	2026-11-14T20:21:40.6599625Z [36;1mlake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test[0m
+build	Build and test TLS package	2026-11-14T20:21:40.6600315Z [36;1mpython3 tls/test/test_tls.py -v[0m
+build	Build and test TLS package	2026-11-14T20:21:40.6649969Z shell: /usr/bin/bash -e {0}
+build	Build and test TLS package	2026-11-14T20:21:40.6650355Z ##[endgroup]
+build	Build and test TLS package	2026-11-14T20:21:43.2773741Z ✔ [67/93] Built LeanNetTLS.FFI.Raw (345ms)
+build	Build and test TLS package	2026-11-14T20:21:43.4833364Z ✔ [68/93] Built LeanNetTLS.ReactorConfig (502ms)
+build	Build and test TLS package	2026-11-14T20:21:43.4835153Z ✔ [69/93] Built LeanNetTLS.FFI.Raw:c.o (155ms)
+build	Build and test TLS package	2026-11-14T20:21:43.6860874Z ✔ [70/93] Built LeanNetTLS.ReactorConfig:c.o (266ms)
+build	Build and test TLS package	2026-11-14T20:21:43.6861975Z ✔ [71/93] Built «lean-net-tls»/tls_shim.static (1.1s)
+build	Build and test TLS package	2026-11-14T20:21:43.8863344Z ✔ [73/93] Built LeanNetTLS.FFI.Worker (399ms)
+build	Build and test TLS package	2026-11-14T20:21:44.0867970Z ✔ [74/93] Built LeanNetTLS.FFI.Worker:c.o (198ms)
+build	Build and test TLS package	2026-11-14T20:21:44.1876651Z ✔ [75/93] Built LeanNetTLS.Session (797ms)
+build	Build and test TLS package	2026-11-14T20:21:44.7877394Z ✔ [76/93] Built test.TLSInterruptibleTest (525ms)
+build	Build and test TLS package	2026-11-14T20:21:44.9870022Z ✔ [77/93] Built LeanNetTLS.Reactor (1.2s)
+build	Build and test TLS package	2026-11-14T20:21:44.9896289Z ✔ [78/93] Built test.TLSInterruptibleTest:c.o (281ms)
+build	Build and test TLS package	2026-11-14T20:21:45.0887899Z ✔ [79/93] Built LeanNetTLS.Session:c.o (916ms)
+build	Build and test TLS package	2026-11-14T20:21:45.4887991Z ✔ [80/93] Built LeanNetTLS.ReactorServer (422ms)
+build	Build and test TLS package	2026-11-14T20:21:45.4889626Z ✔ [81/93] Built «lean-net-tls-interruptible-test»:exe (342ms)
+build	Build and test TLS package	2026-11-14T20:21:45.5889550Z ✔ [82/93] Built LeanNetTLS.ReactorServer:c.o (192ms)
+build	Build and test TLS package	2026-11-14T20:21:45.8896507Z ✔ [83/93] Built LeanNetTLS.Server (420ms)
+build	Build and test TLS package	2026-11-14T20:21:45.9926479Z ✔ [84/93] Built LeanNetTLS.Server:c.o (167ms)
+build	Build and test TLS package	2026-11-14T20:21:46.3926396Z ✔ [85/93] Built LeanNetTLS (554ms)
+build	Build and test TLS package	2026-11-14T20:21:46.4921934Z ✔ [86/93] Built LeanNetTLS:c.o (114ms)
+build	Build and test TLS package	2026-11-14T20:21:46.4923920Z ✔ [87/93] Built test.TLSFixture (614ms)
+build	Build and test TLS package	2026-11-14T20:21:46.6927966Z ✔ [88/93] Built test.TLSFixture:c.o (231ms)
+build	Build and test TLS package	2026-11-14T20:21:46.8930589Z ✔ [89/93] Built Main (428ms)
+build	Build and test TLS package	2026-11-14T20:21:46.9931887Z ✔ [90/93] Built Main:c.o (136ms)
+build	Build and test TLS package	2026-11-14T20:21:47.0933531Z ✔ [91/93] Built LeanNetTLS.Reactor:c.o (2.0s)
+build	Build and test TLS package	2026-11-14T20:21:47.3937239Z ✔ [92/93] Built «lean-net-tls»:exe (290ms)
+build	Build and test TLS package	2026-11-14T20:21:47.3938396Z ✔ [93/93] Built «lean-net-tls-fixture»:exe (294ms)
+build	Build and test TLS package	2026-11-14T20:21:47.4147658Z Build completed successfully (93 jobs).
+build	Build and test TLS package	2026-11-14T20:21:47.7267030Z test_certificate_and_hostname_verification_failures_do_not_kill_server (__main__.TLSAcceptance.test_certificate_and_hostname_verification_failures_do_not_kill_server) ... ok
+build	Build and test TLS package	2026-11-14T20:21:47.7671601Z test_coalesced_tls_records_are_all_processed (__main__.TLSAcceptance.test_coalesced_tls_records_are_all_processed) ... ok
+build	Build and test TLS package	2026-11-14T20:21:47.8202140Z test_curl_verified_http1_and_h2 (__main__.TLSAcceptance.test_curl_verified_http1_and_h2) ... ok
+build	Build and test TLS package	2026-11-14T20:21:47.9024297Z test_fragmented_http1_inside_tls (__main__.TLSAcceptance.test_fragmented_http1_inside_tls) ... ok
+build	Build and test TLS package	2026-11-14T20:21:47.9552030Z test_interruptible_io_cannot_bypass_installed_tls (__main__.TLSAcceptance.test_interruptible_io_cannot_bypass_installed_tls) ... ok
+build	Build and test TLS package	2026-11-14T20:21:48.0408128Z test_invalid_certificate_and_key_fail_startup (__main__.TLSAcceptance.test_invalid_certificate_and_key_fail_startup) ... ok
+build	Build and test TLS package	2026-11-14T20:21:48.2368783Z test_malformed_handshakes_do_not_leak_descriptors (__main__.TLSAcceptance.test_malformed_handshakes_do_not_leak_descriptors) ... ok
+build	Build and test TLS package	2026-11-14T20:21:48.3516017Z test_many_pipelined_requests_across_tls_records (__main__.TLSAcceptance.test_many_pipelined_requests_across_tls_records) ... ok
+build	Build and test TLS package	2026-11-14T20:21:48.3889797Z test_negotiated_protocol_is_not_silently_switched (__main__.TLSAcceptance.test_negotiated_protocol_is_not_silently_switched) ... ok
+build	Build and test TLS package	2026-11-14T20:21:48.4216442Z test_no_alpn_overlap_is_fatal (__main__.TLSAcceptance.test_no_alpn_overlap_is_fatal) ... ok
+build	Build and test TLS package	2026-11-14T20:21:48.4633253Z test_openssl_verified_alpn_h2 (__main__.TLSAcceptance.test_openssl_verified_alpn_h2) ... ok
+build	Build and test TLS package	2026-11-14T20:21:48.5076538Z test_orderly_tls_close_notify (__main__.TLSAcceptance.test_orderly_tls_close_notify) ... ok
+build	Build and test TLS package	2026-11-14T20:21:49.3582797Z test_partial_tls_record_waits_without_busy_spin (__main__.TLSAcceptance.test_partial_tls_record_waits_without_busy_spin) ... ok
+build	Build and test TLS package	2026-11-14T20:21:51.5152074Z test_sigint_closes_multiple_active_connections (__main__.TLSAcceptance.test_sigint_closes_multiple_active_connections) ... ok
+build	Build and test TLS package	2026-11-14T20:21:51.5712982Z test_slow_handshake_and_peer_abort_do_not_block_other_clients (__main__.TLSAcceptance.test_slow_handshake_and_peer_abort_do_not_block_other_clients) ... ok
+build	Build and test TLS package	2026-11-14T20:21:54.1103204Z test_thousand_tls_connections_do_not_leak_descriptors (__main__.TLSAcceptance.test_thousand_tls_connections_do_not_leak_descriptors) ... ok
+build	Build and test TLS package	2026-11-14T20:21:54.1418444Z test_tls12_with_verified_certificate (__main__.TLSAcceptance.test_tls12_with_verified_certificate) ... ok
+build	Build and test TLS package	2026-11-14T20:21:54.1743158Z test_tls13_with_verified_certificate (__main__.TLSAcceptance.test_tls13_with_verified_certificate) ... ok
+build	Build and test TLS package	2026-11-14T20:21:54.2827824Z test_tls_einval_with_peer_reset_is_isolated (__main__.TLSAcceptance.test_tls_einval_with_peer_reset_is_isolated) ... ok
+build	Build and test TLS package	2026-11-14T20:21:54.3881567Z test_tls_unrelated_setup_error_with_peer_reset_is_fatal (__main__.TLSAcceptance.test_tls_unrelated_setup_error_with_peer_reset_is_fatal) ... ok
+build	Build and test TLS package	2026-11-14T20:21:54.4228120Z test_verified_h2_and_http1_concurrently (__main__.TLSAcceptance.test_verified_h2_and_http1_concurrently) ... ok
+build	Build and test TLS package	2026-11-14T20:21:54.4552388Z test_verified_tls_and_no_alpn_fallback (__main__.TLSAcceptance.test_verified_tls_and_no_alpn_fallback) ... ok
+build	Build and test TLS package	2026-11-14T20:21:54.6168180Z test_binary_roundtrip_and_pipeline (__main__.TLSFixtureAcceptance.test_binary_roundtrip_and_pipeline) ... ok
+build	Build and test TLS package	2026-11-14T20:21:54.8953445Z test_large_tls_h2_response_survives_partial_writes (__main__.TLSFixtureAcceptance.test_large_tls_h2_response_survives_partial_writes) ... ok
+build	Build and test TLS package	2026-11-14T20:21:59.1200719Z test_sigint_while_tls_write_is_backpressured (__main__.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured) ... ERROR
+build	Build and test TLS package	2026-11-14T20:21:59.3531870Z test_stalled_tls_writer_does_not_block_other_client (__main__.TLSFixtureAcceptance.test_stalled_tls_writer_does_not_block_other_client) ... ok
+build	Build and test TLS package	2026-11-14T20:22:00.2598964Z test_clienthello_trickle_cannot_extend_absolute_handshake_deadline (__main__.TLSHandshakeDeadline.test_clienthello_trickle_cannot_extend_absolute_handshake_deadline) ... ok
+build	Build and test TLS package	2026-11-14T20:22:00.9517082Z test_idle_handshake_times_out_and_releases_only_slot (__main__.TLSHandshakeDeadline.test_idle_handshake_times_out_and_releases_only_slot) ... ok
+build	Build and test TLS package	2026-11-14T20:22:00.9518815Z
+build	Build and test TLS package	2026-11-14T20:22:00.9519139Z ======================================================================
+build	Build and test TLS package	2026-11-14T20:22:00.9520831Z ERROR: test_sigint_while_tls_write_is_backpressured (__main__.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)
+build	Build and test TLS package	2026-11-14T20:22:00.9522386Z ----------------------------------------------------------------------
+build	Build and test TLS package	2026-11-14T20:22:00.9523244Z Traceback (most recent call last):
+build	Build and test TLS package	2026-11-14T20:22:00.9524553Z   File "/home/runner/work/lean-net/lean-net/tls/test/test_tls.py", line 599, in test_sigint_while_tls_write_is_backpressured
+build	Build and test TLS package	2026-11-14T20:22:00.9526474Z     self.assertEqual(self.server.wait(timeout=4), 0)
+build	Build and test TLS package	2026-11-14T20:22:00.9527193Z                      ~~~~~~~~~~~~~~~~^^^^^^^^^^^
+build	Build and test TLS package	2026-11-14T20:22:00.9527813Z   File "/usr/lib/python3.14/subprocess.py", line 1279, in wait
+build	Build and test TLS package	2026-11-14T20:22:00.9528462Z     return self._wait(timeout=timeout)
+build	Build and test TLS package	2026-11-14T20:22:00.9528887Z            ~~~~~~~~~~^^^^^^^^^^^^^^^^^
+build	Build and test TLS package	2026-11-14T20:22:00.9529354Z   File "/usr/lib/python3.14/subprocess.py", line 2076, in _wait
+build	Build and test TLS package	2026-11-14T20:22:00.9529876Z     raise TimeoutExpired(self.args, timeout)
+build	Build and test TLS package	2026-11-14T20:22:00.9531349Z subprocess.TimeoutExpired: Command '['/home/runner/work/lean-net/lean-net/tls/.lake/build/bin/lean-net-tls-fixture', '/tmp/lean-net-tls-test-xfqepcz3/server.pem', '/tmp/lean-net-tls-test-xfqepcz3/server.key', '45503']' timed out after 4 seconds
+build	Build and test TLS package	2026-11-14T20:22:00.9532678Z
+build	Build and test TLS package	2026-11-14T20:22:00.9533159Z ----------------------------------------------------------------------
+build	Build and test TLS package	2026-11-14T20:22:00.9533649Z Ran 28 tests in 13.426s
+build	Build and test TLS package	2026-11-14T20:22:00.9533850Z
+build	Build and test TLS package	2026-11-14T20:22:00.9533973Z FAILED (errors=1)
+build	Build and test TLS package	2026-11-14T20:22:00.9667558Z ##[error]Process completed with exit code 1.

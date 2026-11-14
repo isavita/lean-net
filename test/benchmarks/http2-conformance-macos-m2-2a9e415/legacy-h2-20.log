@@ -1,0 +1,25 @@
+test_curl_prior_knowledge (__main__.CurlH2EndToEnd.test_curl_prior_knowledge) ... ok
+test_control_frames_progress_while_large_response_is_backpressured (__main__.H2EndToEnd.test_control_frames_progress_while_large_response_is_backpressured) ... ok
+test_expect_continue_before_upload (__main__.H2EndToEnd.test_expect_continue_before_upload) ... ok
+test_fragmented_headers_and_continuation (__main__.H2EndToEnd.test_fragmented_headers_and_continuation) ... ok
+test_incomplete_header_block_deadline_sends_goaway (__main__.H2EndToEnd.test_incomplete_header_block_deadline_sends_goaway) ... ok
+test_incomplete_preface_deadline (__main__.H2EndToEnd.test_incomplete_preface_deadline) ... ok
+test_interleaved_header_block_sends_goaway (__main__.H2EndToEnd.test_interleaved_header_block_sends_goaway) ... ok
+test_invalid_hpack_sends_compression_error (__main__.H2EndToEnd.test_invalid_hpack_sends_compression_error) ... ok
+test_large_binary_upload_and_response_flow_control (__main__.H2EndToEnd.test_large_binary_upload_and_response_flow_control) ... ok
+test_malformed_data_stream_zero_sends_goaway (__main__.H2EndToEnd.test_malformed_data_stream_zero_sends_goaway) ... ok
+test_mixed_http1_and_http2_concurrent (__main__.H2EndToEnd.test_mixed_http1_and_http2_concurrent) ... ok
+test_multiplex_while_another_stream_is_incomplete (__main__.H2EndToEnd.test_multiplex_while_another_stream_is_incomplete) ... ok
+test_request_deadline_resets_only_stalled_stream (__main__.H2EndToEnd.test_request_deadline_resets_only_stalled_stream) ... ok
+test_reset_on_never_opened_even_stream_sends_goaway (__main__.H2EndToEnd.test_reset_on_never_opened_even_stream_sends_goaway) ... ok
+test_reset_preserves_other_stream (__main__.H2EndToEnd.test_reset_preserves_other_stream) ... ok
+test_reset_stream_keeps_dynamic_hpack_synchronized (__main__.H2EndToEnd.test_reset_stream_keeps_dynamic_hpack_synchronized) ... ok
+test_sigint_closes_active_h2_connection (__main__.H2EndToEnd.test_sigint_closes_active_h2_connection) ... ok
+test_unsupported_expectation_on_bodyless_request_returns_417 (__main__.H2EndToEnd.test_unsupported_expectation_on_bodyless_request_returns_417) ... ok
+test_unsupported_expectation_returns_417_before_upload (__main__.H2EndToEnd.test_unsupported_expectation_returns_417_before_upload) ... ok
+test_zero_stream_window_blocks_data_but_not_ping_or_other_stream (__main__.H2EndToEnd.test_zero_stream_window_blocks_data_but_not_ping_or_other_stream) ... ok
+
+----------------------------------------------------------------------
+Ran 20 tests in 8.263s
+
+OK

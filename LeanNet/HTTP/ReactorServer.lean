@@ -769,6 +769,12 @@ private def Driver.drainHTTP2 (driver : Driver) : IO Unit := do
       let ready ← driver.hasWork
       let providerReady ← driver.transport.hasWork
       driver.pollEvents (if ready || providerReady then 0 else 10) false
+  -- The application drain budget has expired. Retaining these sockets would
+  -- make TLS teardown spend a fresh timeout on the same blocked output. Abort
+  -- the remaining connections; the provider still observes native cancellation
+  -- and joins its worker before releasing its transport buffers.
+  for (id, client) in (← driver.state.get).clients.toArray do
+    if let .http2 _ := client.protocol then driver.closeNow id
 
 private def withOutputSlots (reactor : Reactor.Reactor) (count : Nat)
     (use : Array OutputSlot → IO α) : IO α := go count #[]

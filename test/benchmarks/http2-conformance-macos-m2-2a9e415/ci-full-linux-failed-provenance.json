@@ -1,0 +1,6 @@
+{
+  "source": "gh run view 43636942939 --log-failed",
+  "transformation": "Removed trailing spaces and tabs only.",
+  "original_sha256": "b07982b2470de5f700211b647c693c559c9f7a1be43936822699d53025ee80ff",
+  "stored_sha256": "10f40a93a31d6fc14fa4f56318811512929c18fd648cff14db8f62daf1150a20"
+}

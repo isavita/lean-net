@@ -1,0 +1,37 @@
+{
+  "binary": "/tmp/lean-net-tools/http2-optimized-conformance-20261114b/plain-server",
+  "cases": [
+    {
+      "mode": "coalesced",
+      "code": 0,
+      "counts": {
+        "ping_ack": 40
+      }
+    },
+    {
+      "mode": "coalesced",
+      "code": 255,
+      "counts": {
+        "ping_ack": 40
+      }
+    },
+    {
+      "mode": "split",
+      "code": 0,
+      "counts": {
+        "connection_reset": 3,
+        "ping_ack": 36,
+        "clean_eof": 1
+      }
+    },
+    {
+      "mode": "split",
+      "code": 255,
+      "counts": {
+        "ping_ack": 26,
+        "connection_reset": 8,
+        "clean_eof": 6
+      }
+    }
+  ]
+}

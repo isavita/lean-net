@@ -72,8 +72,10 @@ peer and configured stream limits. The demo binaries expose this through
 
 On shutdown the driver stops admission, sends GOAWAY and continues servicing
 accepted streams, including window updates, until they drain or the configured
-`shutdownDrainMs` deadline (default 2,000 ms) expires. TLS then performs its
-separately bounded transport shutdown. A peer EOF cancels incomplete requests;
+`shutdownDrainMs` deadline (default 2,000 ms) expires. Connections still present
+at that deadline are aborted, so blocked HTTP/2 output cannot consume a fresh
+TLS shutdown timeout. TLS then performs its separately bounded transport
+cleanup. A peer EOF cancels incomplete requests;
 completed requests and queued responses may drain. A deadline is a bound, not
 a guarantee that a blocked client receives all pending data.
 
