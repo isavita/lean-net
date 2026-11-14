@@ -40,4 +40,4 @@ jobs:
         run: python3 test/test_reactor_posix.py -v
       - name: IOCP operations and cancellation lifetime
         if: runner.os == 'Windows'
-        run: python test/test_windows_native.py -v
+        run: lake env python test/test_windows_native.py -v

@@ -44,7 +44,9 @@ coverage, not evidence that the new architecture or performance gates pass.
 - Reactor work remains in progress. No new phase gate has
   been declared complete.
 - Windows listener sharding requires a platform-specific acceptor design;
-  Windows lacks Unix SO_REUSEPORT listener semantics. A user decision is pending.
+  Windows lacks Unix SO_REUSEPORT listener semantics. The approved design uses
+  one acceptor transferring connections to dedicated per-core IOCP workers.
+  That transfer path remains to be implemented.
 
 ## Reactor progress (not a completed phase)
 

@@ -8,6 +8,7 @@ through the library's public API.
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,13 +24,25 @@ class WindowsNative(unittest.TestCase):
         cls.temporary = tempfile.TemporaryDirectory(prefix="lean-net-windows-")
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.binary = Path(cls.temporary.name) / "windows-native.exe"
-        prefix = subprocess.run(["lean", "--print-prefix"], check=True,
-                                capture_output=True, text=True).stdout.strip()
+        prefix = os.environ.get("LEAN_SYSROOT")
+        if not prefix:
+            lean = shutil.which("lean.exe") or shutil.which("lean")
+            # lean-action may expose shell shims to Git Bash rather than a
+            # Windows executable discoverable through CreateProcess/PATHEXT.
+            command = ([lean, "--print-prefix"] if lean else
+                       ["bash", "--noprofile", "--norc", "-c", "lean --print-prefix"])
+            prefix = subprocess.run(command, check=True, capture_output=True,
+                                    text=True).stdout.strip()
+        leanc = Path(prefix) / "bin" / "leanc.exe"
+        if not leanc.is_file():
+            raise RuntimeError(f"Native leanc executable missing: {leanc}")
         # Lean's bundled clang uses a deliberately minimal -nostdinc sysroot,
         # sufficient for generated Lean C but missing the Windows SDK. Compile
         # native sources with the full MinGW SDK, then let leanc link its runtime.
         objects = []
-        compiler = os.environ.get("CC", "gcc")
+        compiler = os.environ.get("CC") or shutil.which("gcc.exe") or shutil.which("gcc")
+        if not compiler:
+            raise RuntimeError("MinGW gcc executable is required for the Windows SDK headers")
         for source in ("test/windows_native.c", "c/reactor_group.c"):
             target = Path(cls.temporary.name) / (Path(source).stem + ".o")
             command = [compiler, "-std=c11", "-O1", "-g", "-Wall", "-Wextra",
@@ -39,7 +52,7 @@ class WindowsNative(unittest.TestCase):
             if compiled.returncode:
                 raise RuntimeError(compiled.stdout + compiled.stderr)
             objects.append(str(target))
-        linked = subprocess.run(["leanc", *objects, "-lws2_32", "-o", str(cls.binary)],
+        linked = subprocess.run([str(leanc), *objects, "-lws2_32", "-o", str(cls.binary)],
                                 capture_output=True, text=True, timeout=120)
         if linked.returncode:
             raise RuntimeError(linked.stdout + linked.stderr)

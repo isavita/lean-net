@@ -1,9 +1,10 @@
 # Native reactor migration
 
 The completion API is implemented by epoll on Linux, kqueue on macOS, and an
-IOCP backend on Windows. The Windows implementation still needs runtime CI
-validation; implementing its multi-core acceptor depends on the platform
-listener decision recorded in the production ledger.
+IOCP backend on Windows, with native lifecycle tests in the CI matrix. The
+approved Windows multi-core design uses one acceptor transferring connections
+to dedicated per-core IOCP workers. That transfer path is not implemented yet;
+run the Windows echo server with an explicit single worker for now.
 
 Each reactor owns its sockets, write operations, timer entries, event records,
 and fixed-capacity 4 KiB/16 KiB/64 KiB buffer pools. Native connection and buffer
