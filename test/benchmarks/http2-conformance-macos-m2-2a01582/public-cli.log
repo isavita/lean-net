@@ -1,0 +1,7 @@
+test_plaintext_public_cli (__main__.PublicCliPushAcceptance.test_plaintext_public_cli) ... ok
+test_verified_tls_public_cli (__main__.PublicCliPushAcceptance.test_verified_tls_public_cli) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 1.107s
+
+OK

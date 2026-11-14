@@ -10,12 +10,12 @@ and production gates.
 
 The expanded production brief is being implemented phase by phase.
 [The acceptance ledger](docs/production-roadmap.md) retains
-all pending gates, including h2spec, sustained throughput, and the actual
-24-hour soak. The new native-reactor echo and its ownership model are described
+completed phase gates and the remaining static-file, hardening and actual
+24-hour soak work. The new native-reactor echo and its ownership model are described
 in [docs/reactor.md](docs/reactor.md). The HTTP machine, advanced handlers and
 transport boundaries are documented in [docs/http1-machine.md](docs/http1-machine.md).
 See [docs/http2-machine.md](docs/http2-machine.md) for HTTP/2 configuration,
-priority scheduling, push and draining. Phase 4 acceptance remains pending;
+priority scheduling, push and draining. Phases 1–4 passed acceptance;
 static files and production hardening remain open in phases 5 and 6.
 
 ## Build and test

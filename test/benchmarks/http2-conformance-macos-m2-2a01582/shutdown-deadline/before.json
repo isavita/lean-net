@@ -1,0 +1,23 @@
+{
+  "classification": "Before-fix diagnostic; exact existing four-second assertion unchanged.",
+  "fixture": "/tmp/lean-net-tools/phase4-drain-deadline-before",
+  "fixture_sha256": "bfd842308b769bf9afcc60b23e34389bfdd41e37c8b511864eb3df6b2976c340",
+  "tests": 3,
+  "failures": 0,
+  "errors": 3,
+  "passed": false,
+  "cases": [
+    {
+      "test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)",
+      "wall_seconds": 4.6859680420020595
+    },
+    {
+      "test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)",
+      "wall_seconds": 4.214643874991452
+    },
+    {
+      "test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)",
+      "wall_seconds": 4.222550500009675
+    }
+  ]
+}

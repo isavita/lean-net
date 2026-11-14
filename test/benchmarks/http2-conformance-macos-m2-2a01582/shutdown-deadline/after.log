@@ -1,0 +1,78 @@
+test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured) ... ok
+CASE_WALL_SECONDS 2.72712991698063
+test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured) ... ok
+CASE_WALL_SECONDS 2.2846506659989245
+test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured) ... ok
+CASE_WALL_SECONDS 2.426461124996422
+test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured) ... ok
+CASE_WALL_SECONDS 2.2703022499918006
+test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured) ... ok
+CASE_WALL_SECONDS 2.2452072910091374
+
+----------------------------------------------------------------------
+Ran 5 tests in 12.151s
+
+OK
+FOCUSED_SUMMARY {"tests": 5, "failures": 0, "errors": 0, "passed": true, "cases": [{"test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)", "wall_seconds": 2.72712991698063}, {"test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)", "wall_seconds": 2.2846506659989245}, {"test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)", "wall_seconds": 2.426461124996422}, {"test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)", "wall_seconds": 2.2703022499918006}, {"test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)", "wall_seconds": 2.2452072910091374}]}
+test_certificate_and_hostname_verification_failures_do_not_kill_server (test_tls.TLSAcceptance.test_certificate_and_hostname_verification_failures_do_not_kill_server) ... ok
+CASE_WALL_SECONDS 0.45184900000458583
+test_coalesced_tls_records_are_all_processed (test_tls.TLSAcceptance.test_coalesced_tls_records_are_all_processed) ... ok
+CASE_WALL_SECONDS 0.1660821660188958
+test_curl_verified_http1_and_h2 (test_tls.TLSAcceptance.test_curl_verified_http1_and_h2) ... ok
+CASE_WALL_SECONDS 0.2763822079868987
+test_fragmented_http1_inside_tls (test_tls.TLSAcceptance.test_fragmented_http1_inside_tls) ... ok
+CASE_WALL_SECONDS 0.14465583299170248
+test_interruptible_io_cannot_bypass_installed_tls (test_tls.TLSAcceptance.test_interruptible_io_cannot_bypass_installed_tls) ... ok
+CASE_WALL_SECONDS 0.34306041701347567
+test_invalid_certificate_and_key_fail_startup (test_tls.TLSAcceptance.test_invalid_certificate_and_key_fail_startup) ... ok
+CASE_WALL_SECONDS 0.194216082978528
+test_malformed_handshakes_do_not_leak_descriptors (test_tls.TLSAcceptance.test_malformed_handshakes_do_not_leak_descriptors) ... ok
+CASE_WALL_SECONDS 0.5008699579921085
+test_many_pipelined_requests_across_tls_records (test_tls.TLSAcceptance.test_many_pipelined_requests_across_tls_records) ... ok
+CASE_WALL_SECONDS 0.2723600000026636
+test_negotiated_protocol_is_not_silently_switched (test_tls.TLSAcceptance.test_negotiated_protocol_is_not_silently_switched) ... ok
+CASE_WALL_SECONDS 0.23035212501417845
+test_no_alpn_overlap_is_fatal (test_tls.TLSAcceptance.test_no_alpn_overlap_is_fatal) ... ok
+CASE_WALL_SECONDS 0.1466384170053061
+test_openssl_verified_alpn_h2 (test_tls.TLSAcceptance.test_openssl_verified_alpn_h2) ... ok
+CASE_WALL_SECONDS 0.6935675420099869
+test_orderly_tls_close_notify (test_tls.TLSAcceptance.test_orderly_tls_close_notify) ... ok
+CASE_WALL_SECONDS 0.105222332989797
+test_partial_tls_record_waits_without_busy_spin (test_tls.TLSAcceptance.test_partial_tls_record_waits_without_busy_spin) ... ok
+CASE_WALL_SECONDS 0.909497457992984
+test_sigint_closes_multiple_active_connections (test_tls.TLSAcceptance.test_sigint_closes_multiple_active_connections) ... ok
+CASE_WALL_SECONDS 2.2273279580113012
+test_slow_handshake_and_peer_abort_do_not_block_other_clients (test_tls.TLSAcceptance.test_slow_handshake_and_peer_abort_do_not_block_other_clients) ... ok
+CASE_WALL_SECONDS 0.07720983299077488
+test_thousand_tls_connections_do_not_leak_descriptors (test_tls.TLSAcceptance.test_thousand_tls_connections_do_not_leak_descriptors) ... ok
+CASE_WALL_SECONDS 2.1438343329937197
+test_tls12_with_verified_certificate (test_tls.TLSAcceptance.test_tls12_with_verified_certificate) ... ok
+CASE_WALL_SECONDS 0.06066420901333913
+test_tls13_with_verified_certificate (test_tls.TLSAcceptance.test_tls13_with_verified_certificate) ... ok
+CASE_WALL_SECONDS 0.06297104200348258
+test_tls_einval_with_peer_reset_is_isolated (test_tls.TLSAcceptance.test_tls_einval_with_peer_reset_is_isolated) ... ok
+CASE_WALL_SECONDS 0.8317623749899212
+test_tls_unrelated_setup_error_with_peer_reset_is_fatal (test_tls.TLSAcceptance.test_tls_unrelated_setup_error_with_peer_reset_is_fatal) ... ok
+CASE_WALL_SECONDS 0.4595809580059722
+test_verified_h2_and_http1_concurrently (test_tls.TLSAcceptance.test_verified_h2_and_http1_concurrently) ... ok
+CASE_WALL_SECONDS 0.07263375000911765
+test_verified_tls_and_no_alpn_fallback (test_tls.TLSAcceptance.test_verified_tls_and_no_alpn_fallback) ... ok
+CASE_WALL_SECONDS 0.06939704201067798
+test_binary_roundtrip_and_pipeline (test_tls.TLSFixtureAcceptance.test_binary_roundtrip_and_pipeline) ... ok
+CASE_WALL_SECONDS 0.03503166700829752
+test_large_tls_h2_response_survives_partial_writes (test_tls.TLSFixtureAcceptance.test_large_tls_h2_response_survives_partial_writes) ... ok
+CASE_WALL_SECONDS 0.23674987500999123
+test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured) ... ok
+CASE_WALL_SECONDS 2.2575369589903858
+test_stalled_tls_writer_does_not_block_other_client (test_tls.TLSFixtureAcceptance.test_stalled_tls_writer_does_not_block_other_client) ... ok
+CASE_WALL_SECONDS 0.2293734579870943
+test_clienthello_trickle_cannot_extend_absolute_handshake_deadline (test_tls.TLSHandshakeDeadline.test_clienthello_trickle_cannot_extend_absolute_handshake_deadline) ... ok
+CASE_WALL_SECONDS 0.8248844169720542
+test_idle_handshake_times_out_and_releases_only_slot (test_tls.TLSHandshakeDeadline.test_idle_handshake_times_out_and_releases_only_slot) ... ok
+CASE_WALL_SECONDS 0.7604014169774018
+
+----------------------------------------------------------------------
+Ran 28 tests in 15.513s
+
+OK
+FULL_SUMMARY {"tests": 28, "failures": 0, "errors": 0, "passed": true, "cases": [{"test": "test_certificate_and_hostname_verification_failures_do_not_kill_server (test_tls.TLSAcceptance.test_certificate_and_hostname_verification_failures_do_not_kill_server)", "wall_seconds": 0.45184900000458583}, {"test": "test_coalesced_tls_records_are_all_processed (test_tls.TLSAcceptance.test_coalesced_tls_records_are_all_processed)", "wall_seconds": 0.1660821660188958}, {"test": "test_curl_verified_http1_and_h2 (test_tls.TLSAcceptance.test_curl_verified_http1_and_h2)", "wall_seconds": 0.2763822079868987}, {"test": "test_fragmented_http1_inside_tls (test_tls.TLSAcceptance.test_fragmented_http1_inside_tls)", "wall_seconds": 0.14465583299170248}, {"test": "test_interruptible_io_cannot_bypass_installed_tls (test_tls.TLSAcceptance.test_interruptible_io_cannot_bypass_installed_tls)", "wall_seconds": 0.34306041701347567}, {"test": "test_invalid_certificate_and_key_fail_startup (test_tls.TLSAcceptance.test_invalid_certificate_and_key_fail_startup)", "wall_seconds": 0.194216082978528}, {"test": "test_malformed_handshakes_do_not_leak_descriptors (test_tls.TLSAcceptance.test_malformed_handshakes_do_not_leak_descriptors)", "wall_seconds": 0.5008699579921085}, {"test": "test_many_pipelined_requests_across_tls_records (test_tls.TLSAcceptance.test_many_pipelined_requests_across_tls_records)", "wall_seconds": 0.2723600000026636}, {"test": "test_negotiated_protocol_is_not_silently_switched (test_tls.TLSAcceptance.test_negotiated_protocol_is_not_silently_switched)", "wall_seconds": 0.23035212501417845}, {"test": "test_no_alpn_overlap_is_fatal (test_tls.TLSAcceptance.test_no_alpn_overlap_is_fatal)", "wall_seconds": 0.1466384170053061}, {"test": "test_openssl_verified_alpn_h2 (test_tls.TLSAcceptance.test_openssl_verified_alpn_h2)", "wall_seconds": 0.6935675420099869}, {"test": "test_orderly_tls_close_notify (test_tls.TLSAcceptance.test_orderly_tls_close_notify)", "wall_seconds": 0.105222332989797}, {"test": "test_partial_tls_record_waits_without_busy_spin (test_tls.TLSAcceptance.test_partial_tls_record_waits_without_busy_spin)", "wall_seconds": 0.909497457992984}, {"test": "test_sigint_closes_multiple_active_connections (test_tls.TLSAcceptance.test_sigint_closes_multiple_active_connections)", "wall_seconds": 2.2273279580113012}, {"test": "test_slow_handshake_and_peer_abort_do_not_block_other_clients (test_tls.TLSAcceptance.test_slow_handshake_and_peer_abort_do_not_block_other_clients)", "wall_seconds": 0.07720983299077488}, {"test": "test_thousand_tls_connections_do_not_leak_descriptors (test_tls.TLSAcceptance.test_thousand_tls_connections_do_not_leak_descriptors)", "wall_seconds": 2.1438343329937197}, {"test": "test_tls12_with_verified_certificate (test_tls.TLSAcceptance.test_tls12_with_verified_certificate)", "wall_seconds": 0.06066420901333913}, {"test": "test_tls13_with_verified_certificate (test_tls.TLSAcceptance.test_tls13_with_verified_certificate)", "wall_seconds": 0.06297104200348258}, {"test": "test_tls_einval_with_peer_reset_is_isolated (test_tls.TLSAcceptance.test_tls_einval_with_peer_reset_is_isolated)", "wall_seconds": 0.8317623749899212}, {"test": "test_tls_unrelated_setup_error_with_peer_reset_is_fatal (test_tls.TLSAcceptance.test_tls_unrelated_setup_error_with_peer_reset_is_fatal)", "wall_seconds": 0.4595809580059722}, {"test": "test_verified_h2_and_http1_concurrently (test_tls.TLSAcceptance.test_verified_h2_and_http1_concurrently)", "wall_seconds": 0.07263375000911765}, {"test": "test_verified_tls_and_no_alpn_fallback (test_tls.TLSAcceptance.test_verified_tls_and_no_alpn_fallback)", "wall_seconds": 0.06939704201067798}, {"test": "test_binary_roundtrip_and_pipeline (test_tls.TLSFixtureAcceptance.test_binary_roundtrip_and_pipeline)", "wall_seconds": 0.03503166700829752}, {"test": "test_large_tls_h2_response_survives_partial_writes (test_tls.TLSFixtureAcceptance.test_large_tls_h2_response_survives_partial_writes)", "wall_seconds": 0.23674987500999123}, {"test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)", "wall_seconds": 2.2575369589903858}, {"test": "test_stalled_tls_writer_does_not_block_other_client (test_tls.TLSFixtureAcceptance.test_stalled_tls_writer_does_not_block_other_client)", "wall_seconds": 0.2293734579870943}, {"test": "test_clienthello_trickle_cannot_extend_absolute_handshake_deadline (test_tls.TLSHandshakeDeadline.test_clienthello_trickle_cannot_extend_absolute_handshake_deadline)", "wall_seconds": 0.8248844169720542}, {"test": "test_idle_handshake_times_out_and_releases_only_slot (test_tls.TLSHandshakeDeadline.test_idle_handshake_times_out_and_releases_only_slot)", "wall_seconds": 0.7604014169774018}]}

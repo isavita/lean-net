@@ -1,0 +1,326 @@
+{
+  "git_head": "2a9e4157ffab2973a41eab6f739f016b7ced320f",
+  "git_status": " M LeanNet/HTTP/ReactorServer.lean\n M docs/http2-machine.md\n M test/benchmarks/http2-machine.md\n?? test/benchmarks/http2-conformance-macos-m2-2a9e415/\n?? test/benchmarks/http2-machine-macos-m2-2a9e415-source.json\n?? test/benchmarks/http2-machine-macos-m2-2a9e415.json\n",
+  "working_tree_source_sha256": {
+    "LeanNet/Bytes.lean": "2622427af8ac5d7da00133a490489b42fe4ef0a25900b323981cb6c6d6eb248d",
+    "LeanNet/Echo/ReactorServer.lean": "50cb3a5673715d42418c1fd897b03c34dc4a14162b07846917d2fd93bb38a291",
+    "LeanNet/Echo/Server.lean": "83072598ed02314002dcd96d7e5482baa693b4e51f4b453a19d0bf4d6c8cc5fb",
+    "LeanNet/FFI/Errno.lean": "147ae56b9e5a135740990903a83ac9244f4ca7f4b46aa3b4c277ceaa1b9e2b14",
+    "LeanNet/FFI/Raw.lean": "726a0d38246dac1540bfcc1d9bbf9f3193a03d50fc47f04e2d9017df1ff28a1d",
+    "LeanNet/FFI/Reactor.lean": "dc7696bcf711e5ca196c6b99a69b9b5265652fe5a0f5884fcdf2a1240aceec2d",
+    "LeanNet/HTTP/ReactorServer.lean": "f969611a596c44cfb44ae9dc6919c3a43954a56aed498e393593ea0f7594d9f1",
+    "LeanNet/HTTP/Transport.lean": "a17a1142bc6b8c3713e2e844e396c0305e6e7b268db3c0bdaacf6290dfea1fed",
+    "LeanNet/HTTP/WorkerPool.lean": "141f749915fcaeb3fecbdfbd5deab0128c1923bf90b668c263ea3b3b0279e10e",
+    "LeanNet/HTTP1/Config.lean": "d0082984d1e4a5ca8d2e0f2e9087edff8cdfefc2d306eceb4927368b028464ba",
+    "LeanNet/HTTP1/Date.lean": "94356f1332cc793ee54748ccdbbb0df9e63e2d9024bf926b3e4416c070fa0450",
+    "LeanNet/HTTP1/Encoding.lean": "528718e66b6fb1f286366adffc705ba0ae80fb3c44264a02dccd6a964ba41f09",
+    "LeanNet/HTTP1/Handlers.lean": "a676a714758936948cd7365add295abe6c423fea9e9b3d11bd1afa78ad0dbff8",
+    "LeanNet/HTTP1/Machine.lean": "d2fd027777d6491ce211097081988b970213f76da65d98e9f9792789c8e58be9",
+    "LeanNet/HTTP1/Parser.lean": "604da32c995658998a2d58c4dff55a94f19e12b55cb5b2fcc5ced1a8900352dc",
+    "LeanNet/HTTP1/Protocol.lean": "3c08a1f5f79e450f0e96b0559da45eb3df28eb393a648488fa74bfc69d78a4fc",
+    "LeanNet/HTTP1/Request.lean": "8706c8df3318dc668f84ad70ae28501cf096aa6e539eccc561988b7308a1a1e1",
+    "LeanNet/HTTP1/Response.lean": "9d7c44bbc1e662209e1f0876d56ca8f1fa4d7b22dc1faa2a7e8b15500024f974",
+    "LeanNet/HTTP1/Router.lean": "65b3c60cb44db60b848bd5713f9167c9922375e2873bce6c1d500690782504e1",
+    "LeanNet/HTTP1/Server.lean": "0e46235be2b34c2c396816ce9d166240a7a8c3af739b57586a80d4baf018ddf9",
+    "LeanNet/HTTP2/Connection.lean": "5a54f66c8e8109cba78775af793ba25f0a77081de71dab9b33bb859c146656f3",
+    "LeanNet/HTTP2/Frame.lean": "d0ada5aa82a78c94a2698bf05a99f3622dbc6d5195bdd7a08db01792d9ea75ee",
+    "LeanNet/HTTP2/HPACK.lean": "a642066e98f10c8a092a09184c6deae7ad247e5a34a0f2fc81bd9020cb4fc6ad",
+    "LeanNet/HTTP2/Machine.lean": "811a63c625223783960bd1cb8c2cd48a77e9e823fff2653b74bde86deada3234",
+    "LeanNet/HTTP2/Preface.lean": "fb574a9141d37970d031182aecc6193ff728354e38864e13aa1f341c16144120",
+    "LeanNet/HTTP2/Priority.lean": "7e1d92d2e9e558f2e875df0490eaec4a4f15d42452da9d4623738a866354a045",
+    "LeanNet/HTTP2/Push.lean": "b46cb3d726e56152b844a608dc2ac28bf8126609d278f094ad26a2cc97d4568d",
+    "LeanNet/HTTP2/Request.lean": "885adcaeacb3b9f8ddd47e10ebcb37a7f798f0c4d26fd26e11d71aebedb71c86",
+    "LeanNet/HTTP2/Server.lean": "4dddfe2fb9a303bd8bd5740ea6495c2d46fd7396a33c4f15809a6a97fdcac425",
+    "LeanNet/HTTP2/Stream.lean": "182205655a408121a7d4859a1567131c82db9d2cc071ea38bba7f7201d33cee2",
+    "LeanNet/Reactor/Basic.lean": "c763acab6b236f2ba7a0ac4a206acd5237f93e0e6914208e7b1b7f60199c545f",
+    "LeanNet/Socket/Handle.lean": "cdd6c2ff861242a51d1b6272def22bf633d41433452728e0359c380e490bf34b",
+    "LeanNet/Socket/State.lean": "dea28f88d20212d3f87bad4f8148f90589f678ba45759dbbff0647afb00d60b2",
+    "LeanNet/TCP/Connection.lean": "943b90d5f68c1e7a9391018e186ff8b16f5c51b3d8fbcff0be360609e7ed1760",
+    "LeanNet/TCP/Listener.lean": "943b90d5f68c1e7a9391018e186ff8b16f5c51b3d8fbcff0be360609e7ed1760",
+    "c/reactor.h": "1ef3b1a56e95a62e4c4be91121175838427a39aa02a62a355dc0e9947a97298e",
+    "c/reactor_ffi.h": "cc48720b49adfa4e4626e4b5ef5484984412d27bcd391e688ac39b04de496a50",
+    "c/reactor_group.c": "8dcbf1a128a03695fdab4048a62a2b2d1cc856f7e74b901ac8624707da1bbdee",
+    "c/reactor_group.h": "15a2e6f81032fff46f8b3d3ba1f5a49818a024de61b27e454ec29ec22f65fdd8",
+    "c/reactor_group_ffi.h": "eb1d0943ece1bb4355696840c1fbf2becd3a3e8328c322f502dcc2b16c1e75cb",
+    "c/reactor_lean.h": "6af98a742d72966b4a7fceb89d0e3e66354a0fe722cc6b394d4538a6fadba318",
+    "c/reactor_posix.c": "d2edc5fdd33f695ca7f23869a85ff8aee6519cde0fbab651883075799028d0a1",
+    "c/reactor_transport_impl.h": "ac653186d087c170988304599df5949d45f06e48f9cf5c699b1d52ccb164e42b",
+    "c/reactor_windows.c": "ba1da19152e7195f525bb93fa8c5f7b08cf235b89ce9902ba3497a580be53d67",
+    "c/socket_shim.c": "0dce402b5c0a8a443a50de6e003974dd91e6128ca19c1a150e322bc4c809b3e8",
+    "c/socket_shim.h": "1a982aa99636abf1c6262509164480af314f680366eb01d5c11b5207dc2c3a57",
+    "c/socket_windows.c": "e418dcc1a4ca86d669fb89e0641bcd30db5bb74f1fc1d7906f005b9e8d2f765c",
+    "c/socket_windows_bridge.h": "8fbe86edf327b0fc640a3105fc0fab348b2d66bfb9fb3cfacfdc1d17be816aaa",
+    "c/windows_error.h": "8f3d3d148645a6faeb0e2952c8b66d67fdf64d0ac70402459bd4b66fc31845ee",
+    "lakefile.lean": "c492bd7e382677c114d3c47ea7299dc28d95a7625f48451bf05ed986bae92dec",
+    "test/HTTP2ReactorFixture.lean": "a85d82a51b2ea50ab5faf42cadf36bef56e6726fda5505a4a3b4f4fa71ee297a",
+    "test/http2_test_support.py": "06e069830585874eaca295caaca2554d242e1a20a818179c2a32357f897003e3",
+    "test/test_http2_reactor.py": "c421b842e95546cb9701a34f63f4bb89ff5b87c45d4ae24d4cfb099250ff3fc9",
+    "tls/LeanNetTLS/FFI/Raw.lean": "4bf63c493e586d32f4f5be9465aba14c4bcbdd59fe48b3aef84fbda3dc29555a",
+    "tls/LeanNetTLS/FFI/Worker.lean": "fd110a82a4a11ae0aafd5fd38c8744547cad7a6140383beba220c71ad3bcb76d",
+    "tls/LeanNetTLS/Reactor.lean": "be5b01ba4c12e1efc46a99bf6c60095d5541540acd9cf47e29114c7b6d1dd56b",
+    "tls/LeanNetTLS/ReactorConfig.lean": "856546d603cad97beb41b6517e2baaa5f9c06a13731fb0d63217e27ade457fff",
+    "tls/LeanNetTLS/ReactorServer.lean": "cc4eae2370409f57f1f05e74803ab74305704c8483efcdb66b26519c45b8aa15",
+    "tls/LeanNetTLS/Server.lean": "262c0f94ad60f594bddddb954498b40393bbeadf4ee25aebc5578122b52ebb96",
+    "tls/LeanNetTLS/Session.lean": "36f099f6078a2c86fef5585214a3c6ebcf0b2779a6fe31beb337936925f7a77c",
+    "tls/c/tls_shim.c": "57b106028b35411a115682db44373836239592248505f2befd8ff33ac9f8c943",
+    "tls/c/tls_worker.c": "f04a1763359a263ec7e95703cad06466a3a482accad2e205047f68515f5a45ab",
+    "tls/c/tls_worker.h": "892d9b0a96cfe3b3462268af75b7da6fb26384f39af99de622e8e899774d6634"
+  },
+  "binary_snapshots": {
+    "plain": {
+      "path": "/tmp/lean-net-tools/http2-optimized-conformance-20261114d/plain-server",
+      "sha256": "3d865555e9abb4ade00e97cfc722c39b0ee3e05c515e764f94668c38ba1a641e"
+    },
+    "tls": {
+      "path": "/tmp/lean-net-tools/http2-optimized-conformance-20261114d/tls-server",
+      "sha256": "172dadb7a39bb8847df017724d51a1f29459d83f01b6a5f5294e2a2fc2a425b1"
+    }
+  },
+  "tool": "/tmp/lean-net-tools/h2spec-v2.6.0/bin/h2spec",
+  "tool_sha256": "844982faff743b70eae6258dc6f2b1a83a3614ed3e7e42d292dec86b32aa5701",
+  "tool_version": "Version: 2.6.0 (70ac2294010887f48b18e2d64f5cccd48421fad1)",
+  "profiles": [
+    {
+      "profile": "plain",
+      "command": [
+        "/tmp/lean-net-tools/h2spec-v2.6.0/bin/h2spec",
+        "--strict",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "65321",
+        "--path",
+        "/binary",
+        "--junit-report",
+        "/tmp/lean-net-tools/http2-optimized-conformance-20261114d/plain.xml"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.07163225000840612,
+      "counts": {
+        "tests": 147,
+        "passed": 147,
+        "skipped": 0,
+        "failed": 0
+      }
+    },
+    {
+      "profile": "tls",
+      "command": [
+        "/tmp/lean-net-tools/h2spec-v2.6.0/bin/h2spec",
+        "--strict",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "65479",
+        "--path",
+        "/binary",
+        "--junit-report",
+        "/tmp/lean-net-tools/http2-optimized-conformance-20261114d/tls.xml",
+        "--tls",
+        "--insecure"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.3423755830153823,
+      "counts": {
+        "tests": 147,
+        "passed": 147,
+        "skipped": 0,
+        "failed": 0
+      }
+    }
+  ],
+  "certificate_verification_scope": "h2spec TLS uses -k solely for generated local PKI; the independent wire suite and TLS preflight verify CA plus exact alpha.test/beta.test hostnames.",
+  "wire": {
+    "exit_code": 0,
+    "wall_seconds": 3.691609041998163,
+    "tests": 48,
+    "suite_seconds": 3.571
+  },
+  "validated_against_commit": "2a015829682986d9f4bbf2c84188e9129bd293bb",
+  "captured_source_files_match_commit": true,
+  "provenance_note": "Conformance captured the frozen working tree before this commit; every recorded source file was subsequently byte-hash validated against the committed snapshot. Raw capture HEAD/status are retained.",
+  "public_cli": {
+    "tests": 2,
+    "exit_code": 0,
+    "artifacts": {
+      "plain": {
+        "path": "/tmp/lean-net-tools/http2-optimized-public-cli-20261114d/plain-server",
+        "sha256": "54b095254414c7e9912866834362522a2cc4fdd95c8bcb8f14596f31947fc1af"
+      },
+      "tls": {
+        "path": "/tmp/lean-net-tools/http2-optimized-public-cli-20261114d/tls-server",
+        "sha256": "684d2459414a113e1b16409fe1da3c843fb8f9f905dfda4a3c929076c1257ae1"
+      }
+    }
+  },
+  "shutdown_deadline_regression": {
+    "before": {
+      "tests": 3,
+      "errors": 3,
+      "passed": false
+    },
+    "after_focused": {
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "passed": true,
+      "cases": [
+        {
+          "test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)",
+          "wall_seconds": 2.72712991698063
+        },
+        {
+          "test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)",
+          "wall_seconds": 2.2846506659989245
+        },
+        {
+          "test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)",
+          "wall_seconds": 2.426461124996422
+        },
+        {
+          "test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)",
+          "wall_seconds": 2.2703022499918006
+        },
+        {
+          "test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)",
+          "wall_seconds": 2.2452072910091374
+        }
+      ]
+    },
+    "after_full_legacy": {
+      "tests": 28,
+      "failures": 0,
+      "errors": 0,
+      "passed": true,
+      "cases": [
+        {
+          "test": "test_certificate_and_hostname_verification_failures_do_not_kill_server (test_tls.TLSAcceptance.test_certificate_and_hostname_verification_failures_do_not_kill_server)",
+          "wall_seconds": 0.45184900000458583
+        },
+        {
+          "test": "test_coalesced_tls_records_are_all_processed (test_tls.TLSAcceptance.test_coalesced_tls_records_are_all_processed)",
+          "wall_seconds": 0.1660821660188958
+        },
+        {
+          "test": "test_curl_verified_http1_and_h2 (test_tls.TLSAcceptance.test_curl_verified_http1_and_h2)",
+          "wall_seconds": 0.2763822079868987
+        },
+        {
+          "test": "test_fragmented_http1_inside_tls (test_tls.TLSAcceptance.test_fragmented_http1_inside_tls)",
+          "wall_seconds": 0.14465583299170248
+        },
+        {
+          "test": "test_interruptible_io_cannot_bypass_installed_tls (test_tls.TLSAcceptance.test_interruptible_io_cannot_bypass_installed_tls)",
+          "wall_seconds": 0.34306041701347567
+        },
+        {
+          "test": "test_invalid_certificate_and_key_fail_startup (test_tls.TLSAcceptance.test_invalid_certificate_and_key_fail_startup)",
+          "wall_seconds": 0.194216082978528
+        },
+        {
+          "test": "test_malformed_handshakes_do_not_leak_descriptors (test_tls.TLSAcceptance.test_malformed_handshakes_do_not_leak_descriptors)",
+          "wall_seconds": 0.5008699579921085
+        },
+        {
+          "test": "test_many_pipelined_requests_across_tls_records (test_tls.TLSAcceptance.test_many_pipelined_requests_across_tls_records)",
+          "wall_seconds": 0.2723600000026636
+        },
+        {
+          "test": "test_negotiated_protocol_is_not_silently_switched (test_tls.TLSAcceptance.test_negotiated_protocol_is_not_silently_switched)",
+          "wall_seconds": 0.23035212501417845
+        },
+        {
+          "test": "test_no_alpn_overlap_is_fatal (test_tls.TLSAcceptance.test_no_alpn_overlap_is_fatal)",
+          "wall_seconds": 0.1466384170053061
+        },
+        {
+          "test": "test_openssl_verified_alpn_h2 (test_tls.TLSAcceptance.test_openssl_verified_alpn_h2)",
+          "wall_seconds": 0.6935675420099869
+        },
+        {
+          "test": "test_orderly_tls_close_notify (test_tls.TLSAcceptance.test_orderly_tls_close_notify)",
+          "wall_seconds": 0.105222332989797
+        },
+        {
+          "test": "test_partial_tls_record_waits_without_busy_spin (test_tls.TLSAcceptance.test_partial_tls_record_waits_without_busy_spin)",
+          "wall_seconds": 0.909497457992984
+        },
+        {
+          "test": "test_sigint_closes_multiple_active_connections (test_tls.TLSAcceptance.test_sigint_closes_multiple_active_connections)",
+          "wall_seconds": 2.2273279580113012
+        },
+        {
+          "test": "test_slow_handshake_and_peer_abort_do_not_block_other_clients (test_tls.TLSAcceptance.test_slow_handshake_and_peer_abort_do_not_block_other_clients)",
+          "wall_seconds": 0.07720983299077488
+        },
+        {
+          "test": "test_thousand_tls_connections_do_not_leak_descriptors (test_tls.TLSAcceptance.test_thousand_tls_connections_do_not_leak_descriptors)",
+          "wall_seconds": 2.1438343329937197
+        },
+        {
+          "test": "test_tls12_with_verified_certificate (test_tls.TLSAcceptance.test_tls12_with_verified_certificate)",
+          "wall_seconds": 0.06066420901333913
+        },
+        {
+          "test": "test_tls13_with_verified_certificate (test_tls.TLSAcceptance.test_tls13_with_verified_certificate)",
+          "wall_seconds": 0.06297104200348258
+        },
+        {
+          "test": "test_tls_einval_with_peer_reset_is_isolated (test_tls.TLSAcceptance.test_tls_einval_with_peer_reset_is_isolated)",
+          "wall_seconds": 0.8317623749899212
+        },
+        {
+          "test": "test_tls_unrelated_setup_error_with_peer_reset_is_fatal (test_tls.TLSAcceptance.test_tls_unrelated_setup_error_with_peer_reset_is_fatal)",
+          "wall_seconds": 0.4595809580059722
+        },
+        {
+          "test": "test_verified_h2_and_http1_concurrently (test_tls.TLSAcceptance.test_verified_h2_and_http1_concurrently)",
+          "wall_seconds": 0.07263375000911765
+        },
+        {
+          "test": "test_verified_tls_and_no_alpn_fallback (test_tls.TLSAcceptance.test_verified_tls_and_no_alpn_fallback)",
+          "wall_seconds": 0.06939704201067798
+        },
+        {
+          "test": "test_binary_roundtrip_and_pipeline (test_tls.TLSFixtureAcceptance.test_binary_roundtrip_and_pipeline)",
+          "wall_seconds": 0.03503166700829752
+        },
+        {
+          "test": "test_large_tls_h2_response_survives_partial_writes (test_tls.TLSFixtureAcceptance.test_large_tls_h2_response_survives_partial_writes)",
+          "wall_seconds": 0.23674987500999123
+        },
+        {
+          "test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)",
+          "wall_seconds": 2.2575369589903858
+        },
+        {
+          "test": "test_stalled_tls_writer_does_not_block_other_client (test_tls.TLSFixtureAcceptance.test_stalled_tls_writer_does_not_block_other_client)",
+          "wall_seconds": 0.2293734579870943
+        },
+        {
+          "test": "test_clienthello_trickle_cannot_extend_absolute_handshake_deadline (test_tls.TLSHandshakeDeadline.test_clienthello_trickle_cannot_extend_absolute_handshake_deadline)",
+          "wall_seconds": 0.8248844169720542
+        },
+        {
+          "test": "test_idle_handshake_times_out_and_releases_only_slot (test_tls.TLSHandshakeDeadline.test_idle_handshake_times_out_and_releases_only_slot)",
+          "wall_seconds": 0.7604014169774018
+        }
+      ]
+    },
+    "timing_scope": "Per-case wall durations include setup and cleanup; the original test independently asserts process wait and shutdown elapsed are both within four seconds. No test assertion or timeout was changed.",
+    "original_ci_failure_run": "43636942939"
+  },
+  "retained_artifact_sha256": {
+    "wire.log": "21cc5b8e58122305b7c99ec1444ae5d4acd1fa42023bcf930955faf09c5cd575",
+    "public-cli.log": "d1b488e92b01f66bda055b98e6afb2748d28f0971602a39345f4088402b65bf6",
+    "public-cli-artifacts.json": "f995afe438b5e3367b15dbc3f00616d066d0352a7dba214a91d802b6c9787da9",
+    "h2spec-plain.xml": "e9ec47d1d4019644ff2b5de33e92bae3b54d943e0f1420f0c961e4553f2d3409",
+    "h2spec-tls.xml": "13894678adc5ffa9bb86c179d297fd47b14f92dfe90a39d0d70d045254a90c68",
+    "h2spec-plain.log": "f4a19352df119b3663bd233725052eb10ca3cdccb4f529988b7bfcd52eb6ca5f",
+    "h2spec-tls.log": "ee66be3757558bd9c97023c18135afa0e9193736d2806a8cf7fd01d15bcc74cf",
+    "shutdown-deadline/before.json": "df753698dad7bc820c4da211ff1111dd12ece2a68b7de06c7a70b7ae30b9a0df",
+    "shutdown-deadline/after.json": "a005f9b82e6c3cde575e90265c2b4c9c6d7535d53432c8236113a3989fc63a5d",
+    "shutdown-deadline/before.log": "ca5566dea8994916a475adf014f06e32caf8aa0a003f3a02fb9673835fd5b743",
+    "shutdown-deadline/after.log": "a8ba193d727455ade4b986f6e9f671d2a17ab9d8bac98c779aaafddef235e2d4"
+  }
+}

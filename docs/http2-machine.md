@@ -93,6 +93,6 @@ tests use the independent pinned HPACK dependency in
 `test/requirements-http2.txt`; `test/test_http2_reactor.py` exercises protocol
 behavior on the native reactor and verified TLS, and `test/test_http2_cli.py`
 checks the public executables' push flag over both transports. Build the native
-fixtures and executables before running these tests. Phase 4 acceptance remains
-pending its gates; phase 5 static files and phase 6 production hardening remain
-open. See the [acceptance ledger](production-roadmap.md) for the full gates.
+fixtures and executables before running these tests. Phase 4 passed its protocol,
+performance and cross-platform gates; phase 5 static files and phase 6 production
+hardening remain open. See the [acceptance ledger](production-roadmap.md) for the full gates.

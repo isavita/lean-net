@@ -1,22 +1,24 @@
 # Native HTTP/2 machine benchmark
 
-The optimized candidate at source
-`2a9e4157ffab2973a41eab6f739f016b7ced320f` passes the declared Phase 4 throughput,
-protocol conformance and short RSS gates. All three eight-worker rounds exceed 100,000
-requests/s. The initial machine candidate missed the throughput threshold in
-one round; its complete failed result is retained below.
+The shutdown-corrected candidate at source
+`2a015829682986d9f4bbf2c84188e9129bd293bb` passes the declared Phase 4 throughput,
+protocol conformance and short RSS gates. Its three eight-worker rounds reach
+279,326 / 283,681 / 300,794 requests/s. The full Linux regression and native/TLS
+matrices pass on Linux, macOS and Windows; Phase 4 is accepted. The final
+24-hour soak remains a separate Phase 6 gate.
 
-The overall Phase 4 release remains pending. Subsequent Linux CI exposed a
-legacy TLS backpressure shutdown exceeding its unchanged four-second bound.
-The passing `2a9e415` measurements remain historical evidence; the bounded
-shutdown correction requires a new committed candidate, validation and the
-same six-round benchmark gates.
-
-This candidate's native and TLS CI matrices passed on all three platforms, but
-the full Linux regression exposed a blocked TLS shutdown exceeding its existing
-four-second test bound. Phase 4 release acceptance remains pending the cutoff
-abort fix and its matching-artifact validation; the measurements below are
-preserved as this candidate's result.
+The earlier `2a9e415` candidate passed its local benchmark and both native/TLS
+CI matrices on all three platforms, but the
+[full Linux regression](https://github.com/isavita/lean-net/actions/runs/43636942939)
+exposed a blocked TLS shutdown exceeding its unchanged four-second bound.
+Those measurements and the failure are retained as historical evidence. The
+current fix aborts remaining HTTP/2 transports when the configured drain budget
+expires, preventing a further full TLS shutdown interval from extending that
+deadline. The unchanged focused case timed out in all three before-fix trials
+and passed all five after-fix trials; the complete 28-case legacy TLS suite also
+passed. [Raw logs and timing metadata](http2-conformance-macos-m2-2a01582/shutdown-deadline/after.json)
+record total case durations, including setup/cleanup, separately from the
+test's original four-second shutdown assertion.
 
 The benchmark uses the native HTTP/2 fixture's `bench` profile: a global
 128-client limit, 512 requested HTTP output buffers, four HTTP output flights
@@ -68,8 +70,8 @@ measuring a changed implementation; failed measurements are preserved.
 | --- | --- | --- | --- |
 | Pre-machine `e2dbbf0` | 40,635 / 38,190 / 40,970 | 136,652 / 122,984 / 93,328 | All rounds had 680 failed/errored streams |
 | Initial machine `768b4e0` | 41,830 / 42,547 / 42,853 | 130,748 / **90,994** / 136,458 | Throughput gate failed in eight-worker round 2 |
-| Optimized `2a9e415` | 75,886 / 80,592 / 78,679 | **227,503 / 220,693 / 211,131** | All declared gates passed |
-| Bounded-shutdown follow-up | Pending | Pending | Release validation pending |
+| Optimized `2a9e415` | 75,886 / 80,592 / 78,679 | 227,503 / 220,693 / 211,131 | Benchmark passed; later Linux shutdown failure |
+| Bounded shutdown `2a01582` | 90,598 / 79,616 / 88,230 | **279,326 / 283,681 / 300,794** | All local and CI gates passed |
 
 The pre-machine rates count successful responses rather than h2load's total
 completion rate. That server advertised only 32 concurrent streams. Each
@@ -115,26 +117,28 @@ verified TLS coverage of the new GOAWAY policy, the mandatory TLS 1.2/h2 cipher
 with P-256, exact binary responses on all four curl protocol modes, strict
 stream-error isolation, priority scheduling, opt-in push and 1,000 native
 connection cycles. The
-[conformance summary and raw logs](http2-conformance-macos-m2-2a9e415/summary.json)
+[conformance summary and raw logs](http2-conformance-macos-m2-2a01582/summary.json)
 retain source-file hashes validated against the committed candidate. TLS
 h2spec uses `--insecure` for the generated private PKI; independent Python and
 curl clients verify its CA and exact hostnames.
 
 The optimized benchmark completed all **600,000 successful 2xx requests** with
 zero errors or timeouts, exact DATA totals and passing binary pre/post checks.
-The median rates were **78,679 requests/s** for one worker and **220,693
+The median rates were **88,230 requests/s** for one worker and **283,681
 requests/s** for eight. Its RSS assessments passed: one worker decreased from
-33,584 to 6,736 KiB; eight workers grew from 227,152 to 227,200 KiB, or
-**48 KiB / 0.02113%**. Page residency differs between short runs; these values
+33,552 to 7,568 KiB; eight workers grew from 227,152 to 227,296 KiB, or
+**144 KiB / 0.06339%**. Page residency differs between short runs; these values
 establish the declared growth check and do not claim a reduction in the
 server's absolute memory requirement.
 
 The passing
-[raw benchmark report](http2-machine-macos-m2-2a9e415.json) records a clean
+[raw benchmark report](http2-machine-macos-m2-2a01582.json) records a clean
 source tree and unchanged executable SHA-256
-`b20634f09cd00b767e46f0d5736de85df1eb0a998d89bc33b8951f41c7b12cfb`.
-The [extended source snapshot](http2-machine-macos-m2-2a9e415-source.json)
+`3d865555e9abb4ade00e97cfc722c39b0ee3e05c515e764f94668c38ba1a641e`.
+The [extended source snapshot](http2-machine-macos-m2-2a01582-source.json)
 also verifies all recorded runtime Lean, C and header files against the
-committed bytes. No acceptance round was repeated, no client-thread/workload
-change was used, and the earlier failed result was preserved. The final
-24-hour soak remains a separate Phase 6 gate.
+committed bytes. Each candidate used one six-round acceptance attempt; no
+candidate's rounds were retried or rescored. No client-thread/workload change
+was used, and the earlier results remain preserved:
+[passing `2a9e415` measurement](http2-machine-macos-m2-2a9e415.json) and
+[failed `768b4e0` measurement](http2-machine-macos-m2-768b4e0-failed.json).

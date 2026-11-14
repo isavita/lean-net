@@ -42,8 +42,51 @@ coverage, not evidence that the new architecture or performance gates pass.
 Phase 1 reactor acceptance passed at d3ccc2e. Phase 2 HTTP/1 protocol-machine
 acceptance passed at 8be5466 on Linux, macOS and Windows. Phase 3 TLS acceptance
 passed at e2dbbf0 on all three platforms, including matching-artifact full scans
-of both SNI fixture hosts. Phases 4–6 and the remaining final gates stay open. h2c and negotiated h2 retain the previous pure HTTP/2
-implementation pending its phase-four migration.
+of both SNI fixture hosts. Phase 4 HTTP/2 acceptance passed at 2a01582 on all
+three platforms, including strict h2spec and the declared M2 throughput gate.
+Phases 5–6 and the remaining final gates stay open.
+
+## HTTP/2 machine acceptance evidence
+
+- The pure action machine serves both h2c and negotiated TLS h2. It has bounded
+  frame/header/body work, independent flow-control windows, peer SETTINGS
+  enforcement, per-stream errors, GOAWAY and draining. Nine pure suites cover
+  framing, HPACK, requests, streams, connection state, priorities and actions.
+- Official h2spec v2.6.0 in strict mode passes **147/147** on the h2-only
+  cleartext profile and **147/147** on TLS, with zero skips. Its RFC 7540/7541
+  coverage is supplemented by **48 independent wire cases**: RFC 9218 urgency
+  and incremental fairness, priority updates, RST_STREAM isolation, HPACK
+  synchronization, SETTINGS reductions, bounded continuation/body work, push,
+  exact binary data and 1,000 connection cycles. The four curl protocol modes
+  serve the same binary route, with CA/hostname verification on TLS.
+- Push defaults off and is exposed by `--enable-push` on both public binaries.
+  Two public CLI cases verify flag-off, flag-on promises and exact pushed bytes,
+  peer push disable, and verified TLS/ALPN. Sensitive fields remain never-indexed.
+- The predeclared M2 benchmark uses `h2load -n 100000 -c 10 -m 100 -t 1`, three
+  rounds each for one and eight workers. All **600,000 requests** succeed with
+  zero failures, errors or timeouts and exact aggregate DATA counts; independent
+  binary-body checks bracket every round. Eight-worker rates are **279,326 /
+  283,681 / 300,794 RPS**, each above 100k. One-worker characterization is
+  **90,598 / 79,616 / 88,230 RPS**. Both short RSS checks pass: eight workers
+  grow **144 KiB / 0.06339%** after round one; one worker reclaims 25,984 KiB.
+  These are short observations, not the required 24-hour soak. The
+  [methodology and preserved earlier results](../test/benchmarks/http2-machine.md)
+  retain the exact workload, binary/source hashes and failed measurements.
+- Native sanitizer regressions reproduce and fix a queue-one TLS cursor wrap
+  that hid pending input. Peer-only GOAWAY keeps PING/control traffic live;
+  split-write tests prevent premature TCP resets. At the application drain
+  deadline, remaining h2 connections are aborted rather than spending a fresh
+  TLS timeout on blocked output. The existing four-second shutdown bound is
+  unchanged: five focused repeats and all 28 legacy TLS cases pass.
+- The [native matrix](https://github.com/isavita/lean-net/actions/runs/43637937943)
+  and [TLS matrix](https://github.com/isavita/lean-net/actions/runs/43637937975)
+  pass on Linux, macOS and Windows. The
+  [full Linux regression](https://github.com/isavita/lean-net/actions/runs/43637937933)
+  also passes. All verify source `2a015829682986d9f4bbf2c84188e9129bd293bb`.
+  The [matching-artifact report](../test/benchmarks/http2-conformance-macos-m2-2a01582/summary.json)
+  retains source hashes, logs, JUnit results and CI job records. Runtime
+  acceptance still excludes phase-five static files and
+  phase-six production hardening, including the actual full-duration soak.
 
 ## TLS worker acceptance evidence
 
@@ -83,8 +126,8 @@ implementation pending its phase-four migration.
 - SIGINT allows already-accepted handshakes to finish within the stop bound,
   sends close_notify and joins every native worker before reactor destruction.
   The shutdown regression passed 20 old-SIGINT repeats, 10 immediate verified
-  handshake stops and the full 34-case/1,000-cycle suite. Full HTTP/2 GOAWAY and
-  application stream draining remain part of phase six.
+  handshake stops and the full 34-case/1,000-cycle suite. Phase four adds bounded
+  HTTP/2 GOAWAY and stream draining; phase six retains the final hardening gate.
 - Focused native ASan/UBSan fixtures check context-table borrowing and partial
   setup failures, byte-lane wrap, write fences, retained plaintext credit,
   failed-join storage lifetime and exact SSL/BIO allocation/free balance.
@@ -102,8 +145,9 @@ implementation pending its phase-four migration.
   with zero skips ([baseline artifacts](../tls/test/reports/2026-11-14-native-tls-e2dbbf0/h2spec-baseline/metadata.json)).
   Its IP-based conformance client uses --insecure; a separate
   hostname/CA-verified preflight and the verified curl suite check certificate
-  trust. This old RFC 7540/7541 tool does not establish RFC 9113/9218 priority,
-  push or stream-error isolation, so phase four remains open.
+  trust. This historical RFC 7540/7541 baseline alone did not establish RFC
+  9113/9218 priority, push or stream-error isolation; the new machine's evidence
+  is recorded above.
 
 ## HTTP/1 machine acceptance evidence
 
@@ -129,8 +173,8 @@ implementation pending its phase-four migration.
   passes. Local regression also passed 16 HTTP server, 15 event/backpressure,
   20 h2c, 7 injected-fault and 28 legacy TLS tests.
 - Actual curl --http1.0, --http1.1 and --http2-prior-knowledge requests served
-  the same default route. The TLS curl leg must be repeated after phase three;
-  this is not the final four-protocol acceptance gate.
+  the same default route. This historical run omitted the TLS leg; the complete
+  four-protocol matrix was repeated for the phase-four machine above.
 - Controlled HTTP/1 characterization uses 128 clients of capacity, 512 requested
   output credits, concurrency 100 and three 200,000-request rounds. Verified-body
   median RPS: 40,555 with one worker, 93,328 with eight. Separate h2load --h1

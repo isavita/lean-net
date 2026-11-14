@@ -1,0 +1,54 @@
+test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured) ... ERROR
+CASE_WALL_SECONDS 4.6859680420020595
+test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured) ... ERROR
+CASE_WALL_SECONDS 4.214643874991452
+test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured) ... ERROR
+CASE_WALL_SECONDS 4.222550500009675
+
+======================================================================
+ERROR: test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/isavita/git/lean-net/tls/test/test_tls.py", line 599, in test_sigint_while_tls_write_is_backpressured
+    self.assertEqual(self.server.wait(timeout=4), 0)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/isavita/.pyenv/versions/3.11.7/lib/python3.11/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/isavita/.pyenv/versions/3.11.7/lib/python3.11/subprocess.py", line 2038, in _wait
+    raise TimeoutExpired(self.args, timeout)
+subprocess.TimeoutExpired: Command '['/tmp/lean-net-tools/phase4-drain-deadline-before', '/var/folders/46/6lz6t86n4n10lwsyj3pyzd6h0000gn/T/lean-net-tls-test-fidzi49m/server.pem', '/var/folders/46/6lz6t86n4n10lwsyj3pyzd6h0000gn/T/lean-net-tls-test-fidzi49m/server.key', '62434']' timed out after 4 seconds
+
+======================================================================
+ERROR: test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/isavita/git/lean-net/tls/test/test_tls.py", line 599, in test_sigint_while_tls_write_is_backpressured
+    self.assertEqual(self.server.wait(timeout=4), 0)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/isavita/.pyenv/versions/3.11.7/lib/python3.11/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/isavita/.pyenv/versions/3.11.7/lib/python3.11/subprocess.py", line 2038, in _wait
+    raise TimeoutExpired(self.args, timeout)
+subprocess.TimeoutExpired: Command '['/tmp/lean-net-tools/phase4-drain-deadline-before', '/var/folders/46/6lz6t86n4n10lwsyj3pyzd6h0000gn/T/lean-net-tls-test-fidzi49m/server.pem', '/var/folders/46/6lz6t86n4n10lwsyj3pyzd6h0000gn/T/lean-net-tls-test-fidzi49m/server.key', '62462']' timed out after 4 seconds
+
+======================================================================
+ERROR: test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/isavita/git/lean-net/tls/test/test_tls.py", line 599, in test_sigint_while_tls_write_is_backpressured
+    self.assertEqual(self.server.wait(timeout=4), 0)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/isavita/.pyenv/versions/3.11.7/lib/python3.11/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/isavita/.pyenv/versions/3.11.7/lib/python3.11/subprocess.py", line 2038, in _wait
+    raise TimeoutExpired(self.args, timeout)
+subprocess.TimeoutExpired: Command '['/tmp/lean-net-tools/phase4-drain-deadline-before', '/var/folders/46/6lz6t86n4n10lwsyj3pyzd6h0000gn/T/lean-net-tls-test-fidzi49m/server.pem', '/var/folders/46/6lz6t86n4n10lwsyj3pyzd6h0000gn/T/lean-net-tls-test-fidzi49m/server.key', '62467']' timed out after 4 seconds
+
+----------------------------------------------------------------------
+Ran 3 tests in 13.275s
+
+FAILED (errors=3)
+{"classification": "Before-fix diagnostic; exact existing four-second assertion unchanged.", "fixture": "/tmp/lean-net-tools/phase4-drain-deadline-before", "fixture_sha256": "bfd842308b769bf9afcc60b23e34389bfdd41e37c8b511864eb3df6b2976c340", "tests": 3, "failures": 0, "errors": 3, "passed": false, "cases": [{"test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)", "wall_seconds": 4.6859680420020595}, {"test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)", "wall_seconds": 4.214643874991452}, {"test": "test_sigint_while_tls_write_is_backpressured (test_tls.TLSFixtureAcceptance.test_sigint_while_tls_write_is_backpressured)", "wall_seconds": 4.222550500009675}]}

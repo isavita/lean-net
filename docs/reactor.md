@@ -70,8 +70,8 @@ tick. Timers are one-shot completion events and do not allocate one kernel timer
 per connection. HTTP/1 and HTTP/2 use this reactor through their pure action
 machines; TLS uses dedicated native workers and the same HTTP controller. The
 HTTP/2 driver handles bounded input and output, stream scheduling and GOAWAY
-draining; see [http2-machine.md](http2-machine.md). Phase 4 acceptance remains
-pending, and phases 5 and 6 remain open.
+draining; see [http2-machine.md](http2-machine.md). Phases 1–4 passed acceptance;
+phases 5 and 6 remain open.
 
 Read batches preserve owner backpressure: POSIX yields after sixteen reads or
 64 KiB from a peer; IOCP returns a positive read before reposting that peer's

@@ -11,7 +11,7 @@ list without either protocol fails negotiation. TLS 1.2 is the minimum, server
 cipher preference is enabled, and compression and renegotiation are disabled.
 The negotiated protocol selects its parser; an h2 connection must still send
 its HTTP/2 preface. The pure HTTP/2 machine is integrated with this transport;
-phase 4 acceptance and the later production gates remain open.
+phase 4 passed acceptance, with static files and production hardening still open.
 
 Install OpenSSL development headers/libraries (1.1.1 or newer) and `pkg-config`.
 Windows builds use MinGW GCC and matching OpenSSL import libraries/DLLs. On
