@@ -64,9 +64,10 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
     let errorHeader ← inputTextFile (pkg.dir / "c" / "windows_error.h")
     native := native.zipWith (fun source _ => source) errorHeader
   let includeDir ← getLeanIncludeDir
-  let install ← getLeanInstall
-  let compiler := if System.Platform.isWindows then install.cc else "cc"
-  let includes := #["-isystem", includeDir.toString] ++ (if System.Platform.isWindows then install.ccFlags else #[])
+  -- The bundled Windows clang sysroot lacks the Winsock SDK headers.
+  -- Use the runner's complete MinGW toolchain for native sources.
+  let compiler := if System.Platform.isWindows then "gcc" else "cc"
+  let includes := #["-isystem", includeDir.toString]
   let options := #["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"]
   let obj ← buildO (pkg.buildDir / "c" / "socket_shim.o") src
     includes options compiler

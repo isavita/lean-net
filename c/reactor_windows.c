@@ -420,9 +420,15 @@ static void rn_resume(rn_reactor *r) {
     rn_connection *c = &r->connections[i];
     if (c->state == RN_LISTENING && c->pending == 0)
       rn_post_accept(r, i);
-    else if (c->state == RN_CONNECTED && c->read_paused)
-      rn_post_read(r, i);
-    else
+    else if (c->state == RN_CONNECTED) {
+      if (c->write_head != RN_NONE && !r->writes[c->write_head].op.pending)
+        rn_post_write(r, i);
+      if (c->state == RN_CONNECTED && c->read_paused && !c->eof && !c->draining)
+        rn_post_read(r, i);
+      if (c->paused && (!c->read_paused || c->eof || c->draining) &&
+          (c->write_head == RN_NONE || r->writes[c->write_head].op.pending))
+        rn_unpause(r, i);
+    } else
       rn_unpause(r, i);
     if (c->paused)
       ++position;
@@ -844,7 +850,9 @@ int rn_queue_write(rn_reactor *r, uint64_t token, uint64_t buffer,
   else
     r->writes[c->write_tail].next = wi;
   c->write_tail = wi;
-  rn_post_write(r, rn_index(token));
+  /* Submit on the owning step. A synchronous send failure must not close a
+   * connection while Lean is still dispatching the previous immutable batch. */
+  rn_pause(r, rn_index(token));
   return 0;
 }
 int rn_acquire_buffer(rn_reactor *r, uint32_t minimum, uint64_t *out) {
@@ -934,7 +942,8 @@ int rn_close_after_writes(rn_reactor *r, uint64_t token) {
   if (!c || c->state != RN_CONNECTED || c->draining)
     return -EINVAL;
   c->draining = 1;
-  rn_unpause(r, rn_index(token));
+  if (c->write_head == RN_NONE || r->writes[c->write_head].op.pending)
+    rn_unpause(r, rn_index(token));
   if (c->read.pending && !CancelIoEx((HANDLE)c->socket, &c->read.overlapped)) {
     DWORD error = GetLastError();
     if (error != ERROR_NOT_FOUND)

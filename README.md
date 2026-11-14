@@ -6,8 +6,8 @@ The HTTP server uses a non-blocking poll loop and supports HTTP/1.1 and
 prior-knowledge HTTP/2 over cleartext (h2c) on the same listener. The
 separate `tls/` package adds OpenSSL TLS and ALPN for HTTP/2 and HTTP/1.1.
 
-The expanded production brief is being implemented phase by phase on the
-reactor work branch. [The acceptance ledger](docs/production-roadmap.md) retains
+The expanded production brief is being implemented phase by phase.
+[The acceptance ledger](docs/production-roadmap.md) retains
 all pending gates, including h2spec, sustained throughput, and the actual
 24-hour soak. The new native-reactor echo and its ownership model are described
 in [docs/reactor.md](docs/reactor.md); the HTTP/TLS paths still use the previous
@@ -47,6 +47,8 @@ The acceptance suite uses loopback sockets and checks descriptor counts using
 
 ```sh
 .lake/build/bin/lean-net-echo 8080
+# Windows currently requires a single IOCP worker and a MinGW GCC toolchain:
+# .lake/build/bin/lean-net-echo.exe 8080 1
 # Or run the HTTP server and request its default route:
 .lake/build/bin/lean-net-http1 8080
 # In another terminal:
@@ -80,10 +82,11 @@ retry policy; C does not retry interrupted syscalls. `close` is called once,
 never retried, and `EBADF` indicates a library defect. Socket resources are
 managed with explicit brackets rather than finalizers.
 
-The server executables have a scoped SIGINT handler with a self-pipe to wake its
-blocking socket waits and permit the Lean brackets to unwind. This facility is
-process-wide and assumes single-threaded use. The socket shim uses `SO_REUSEADDR`, `TCP_NODELAY`, and
-platform SIGPIPE suppression by default.
+The HTTP server has a scoped SIGINT handler with a self-pipe to wake socket
+waits and permit the Lean brackets to unwind. That facility is process-wide
+and assumes single-threaded use. The reactor echo server instead fans shutdown
+out to its dedicated workers. The socket shim uses `SO_REUSEADDR`,
+`TCP_NODELAY`, and platform SIGPIPE suppression by default.
 
 `lakefile.lean` supplies the native build recipe: Lake cannot express this
 custom C compilation step in the static TOML manifest. Socket handles are

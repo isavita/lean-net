@@ -39,9 +39,9 @@ coverage, not evidence that the new architecture or performance gates pass.
 ## Evidence so far
 
 - Starting revision: 9e5e0bd; macOS and Ubuntu tests from the previous design pass.
-- Current architecture uses poll and in-loop nonblocking OpenSSL. These do not
+- The existing HTTP/TLS architecture uses poll and in-loop nonblocking OpenSSL. These do not
   satisfy the new reactor and off-loop TLS requirements.
-- Reactor work is in progress on codex/production-reactor. No new phase gate has
+- Reactor work remains in progress. No new phase gate has
   been declared complete.
 - Windows listener sharding requires a platform-specific acceptor design;
   Windows lacks Unix SO_REUSEPORT listener semantics. A user decision is pending.
@@ -51,9 +51,19 @@ coverage, not evidence that the new architecture or performance gates pass.
 - macOS kqueue echo passes all nine existing acceptance tests, native buffer/
   generation/timer tests, and signal lifecycle tests under ASan/UBSan.
 - Three-round loopback measurements exceed 50k RPS with one and eight workers;
-  final performance evidence is being refreshed after the last API edits.
+  the latest acceptance repetition is recorded below.
 - The original blocking echo baseline at concurrency100 was approximately
   17.3k RPS and only one client progressed in the first second.
-- Linux epoll and Windows IOCP runtime CI, Windows multi-core acceptor design,
-  and final ownership/fault audits remain open. No HTTP/TLS/static-file phase
-  is being substituted for those gates.
+- Native reactor CI on Linux epoll and macOS kqueue passed on d0d0a83,
+  including lifecycle/allocation sanitizers and echo acceptance. The previous
+  HTTP/1.1/h2c/TLS regression workflow also passed on that revision.
+- Latest local completion-history echo gate: 191,923 verified RPS at
+  concurrency100 with eight workers, 200,000 requests, all clients progressing;
+  report: test/benchmarks/echo-reactor-completion-gate-macos-m2.json.
+- Windows IOCP runtime CI and the Windows multi-core acceptor design remain
+  open. Windows echo currently requires an explicit single worker.
+- macOS listener tracing found all connections assigned to the last-created
+  SO_REUSEPORT listener, including with four independent load processes and
+  1,000 concurrent connections. Multi-core scaling remains unproven; the raw
+  accept-distribution report is in test/benchmarks. No HTTP/TLS/static-file
+  phase substitutes for these gates.

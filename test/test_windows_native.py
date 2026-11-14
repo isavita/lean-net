@@ -25,13 +25,24 @@ class WindowsNative(unittest.TestCase):
         cls.binary = Path(cls.temporary.name) / "windows-native.exe"
         prefix = subprocess.run(["lean", "--print-prefix"], check=True,
                                 capture_output=True, text=True).stdout.strip()
-        command = ["leanc", "-std=c11", "-O1", "-g", "-Wall", "-Wextra",
-                   "-Wpedantic", "-Werror", "-isystem", str(Path(prefix) / "include"),
-                   str(ROOT / "test/windows_native.c"), str(ROOT / "c/reactor_group.c"),
-                   "-lws2_32", "-o", str(cls.binary)]
-        compiled = subprocess.run(command, capture_output=True, text=True, timeout=120)
-        if compiled.returncode:
-            raise RuntimeError(compiled.stdout + compiled.stderr)
+        # Lean's bundled clang uses a deliberately minimal -nostdinc sysroot,
+        # sufficient for generated Lean C but missing the Windows SDK. Compile
+        # native sources with the full MinGW SDK, then let leanc link its runtime.
+        objects = []
+        compiler = os.environ.get("CC", "gcc")
+        for source in ("test/windows_native.c", "c/reactor_group.c"):
+            target = Path(cls.temporary.name) / (Path(source).stem + ".o")
+            command = [compiler, "-std=c11", "-O1", "-g", "-Wall", "-Wextra",
+                       "-Wpedantic", "-Werror", "-isystem", str(Path(prefix) / "include"),
+                       "-c", str(ROOT / source), "-o", str(target)]
+            compiled = subprocess.run(command, capture_output=True, text=True, timeout=120)
+            if compiled.returncode:
+                raise RuntimeError(compiled.stdout + compiled.stderr)
+            objects.append(str(target))
+        linked = subprocess.run(["leanc", *objects, "-lws2_32", "-o", str(cls.binary)],
+                                capture_output=True, text=True, timeout=120)
+        if linked.returncode:
+            raise RuntimeError(linked.stdout + linked.stderr)
 
     def test_iocp_lifetime_buffers_and_legacy(self):
         result = subprocess.run([str(self.binary)], capture_output=True, text=True, timeout=90)

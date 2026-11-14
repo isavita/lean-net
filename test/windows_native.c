@@ -250,6 +250,12 @@ static void test_echo_and_cancellation(void) {
         "fill canceled-write buffer");
   check(rn_queue_write(reactor, connection, buffer, 0, sizeof(large), 99) == 0,
         "submit write before cancellation");
+  /* Submit without draining IOCP, so even synchronous completion retains the
+   * exact operation record until the following forced-close/drain sequence. */
+  rn_post_write(reactor, rn_index(connection));
+  check(reactor->writes[reactor->connections[rn_index(connection)].write_head]
+            .op.pending,
+        "submitted send remains owned until completion dequeue");
   check(rn_buffer_release(reactor, buffer) == 0,
         "release canceled-write buffer owner");
   check(rn_close_connection(reactor, connection) == 0,

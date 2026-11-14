@@ -71,9 +71,9 @@ what actually ran.
 Every round passed `--require-rps 50000`, and every client completed a request
 in the first second. This validates the loopback echo throughput gate on this
 Mac. It does not establish linear multi-core scaling: this workload did not
-show a reliable advantage for eight workers, and its single load-generator
-thread can itself constrain aggregate throughput. HTTP/2, TLS, Windows runtime,
-and long-duration production gates remain separate.
+show a reliable advantage for eight workers. The accept-distribution diagnosis
+below identifies a macOS listener-dispatch limitation in this implementation.
+HTTP/2, TLS, Windows runtime, and long-duration production gates remain separate.
 
 Separate observational runs in `echo-reactor-macos-m2-resource-samples.json`
 used 2,000,000 requests at c=100 while sampling `ps` every 250 ms. Their
@@ -93,3 +93,47 @@ completed requests/s. All 100 clients progressed in the first second and every
 round exceeded the explicit 50,000-RPS gate. Any later correctness build needs
 its own executable-hash acceptance record; the historical reports remain useful
 comparisons rather than claims about a different executable.
+
+After the historical-completion/SocketId correctness change, the final single
+acceptance repetition in `echo-reactor-completion-gate-macos-m2.json` measured
+191,923 completed requests/s at c=100 and eight workers (200,000 verified
+round trips), with all 100 clients progressing in the first second. Executable
+SHA-256 `41e7439d2e6baa62f7a86f9108a579d911d8592f25180a4308115d53cfdb4b8d`
+matched before and after the run; SIGINT exited normally. This is the latest
+local echo throughput gate, not evidence for any later protocol phase.
+
+## macOS worker-distribution diagnosis
+
+`echo-reactor-macos-m2-accept-distribution.json` records a disposable
+`DYLD_INSERT_LIBRARIES` trace of successful `listen`/`accept` calls on the same
+`41e7439d...` executable. It includes the full trace/driver source, hashes, raw
+CPU samples, and listener fd/thread IDs. The production binary was unchanged;
+only successful connection setup was instrumented, with no per-echo tracing.
+Accept counts include one startup probe.
+
+| Native client processes | Total load connections | Successful accepts by listeners 1–8 | Server CPU median / max |
+| ---: | ---: | --- | ---: |
+| 1 | 100 | 0, 0, 0, 0, 0, 0, 0, 101 | 95.5% / 100.0% |
+| 4 | 400 | 0, 0, 0, 0, 0, 0, 0, 401 | 97.9% / 99.0% |
+| 1 | 1,000 | 0, 0, 0, 0, 0, 0, 0, 1,001 | 95.2% / 95.2% |
+
+Every connection reached the last-created listener and its one worker thread;
+the other seven workers received no connections. Four independent native load
+processes did not change this distribution. Thus the measured one-core server
+use is explained by listener selection before Lean processing. These runs do
+not test Lean contention under balanced load, and do not establish Linux or
+Windows distribution. Instrumented timing is diagnostic, not a new acceptance
+gate. The 1,000-connection CPU summary contains only one sample after the first
+second, so the longer 100/400-connection runs provide the stronger CPU evidence.
+
+[Apple's socket-option manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/setsockopt.2.html)
+describes `SO_REUSEPORT` as allowing duplicate bindings, without promising load
+balancing. In the published Apple XNU source,
+[TCP input calls PCB lookup](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/netinet/tcp_input.c#L3020-L3032),
+[IPv4 lookup returns the first matching address-specific PCB](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/netinet/in_pcb.c#L2558-L2665),
+and [new PCBs enter at the list head](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/netinet/in_pcb.c#L2810-L2811).
+That is consistent with the observed last-created-listener selection. This
+source is `xnu-12377.1.9`, older than the running `xnu-13432.41.4`; the measured
+accept distribution is the direct evidence for this host. Balanced macOS
+connection assignment remains unfinished, and phase 1's multicore-scaling
+requirement remains open.

@@ -1,0 +1,685 @@
+{
+  "binary_sha256": "41e7439d2e6baa62f7a86f9108a579d911d8592f25180a4308115d53cfdb4b8d",
+  "trace_source_sha256": "b71f85d901c01b013eede69cab22298d8b2be524855b5f6a6d7c04d4a4022752",
+  "method": "Disposable listen/accept DYLD interposer records successful accept per listener; ps CPU sample; one startup probe included in accept counts; production binary unchanged",
+  "runs": [
+    {
+      "workers": 8,
+      "client_processes": 1,
+      "connections_per_client": 100,
+      "requests_per_client": 1000000,
+      "loads": [
+        {
+          "requests": 1000000,
+          "connections": 100,
+          "payload_bytes": 16,
+          "seconds": 5.635391,
+          "requests_per_second": 177449.98,
+          "latency_us_p50": 523.0,
+          "latency_us_p95": 882.0,
+          "latency_us_p99": 1319.0,
+          "latency_us_max": 3137.0,
+          "clients_progressed_in_first_second": 100
+        }
+      ],
+      "aggregate_elapsed_upper_bound_seconds": 6.0691028329893015,
+      "aggregate_rps_lower_bound": 164768.99922742878,
+      "cpu_percent_median": 95.5,
+      "cpu_percent_max": 100.0,
+      "distribution": [
+        {
+          "listener": 1,
+          "fd": 32,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 2,
+          "fd": 33,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 3,
+          "fd": 34,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 4,
+          "fd": 35,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 5,
+          "fd": 36,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 6,
+          "fd": 37,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 7,
+          "fd": 38,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 8,
+          "fd": 39,
+          "accepted": 101,
+          "thread": 3937459
+        }
+      ],
+      "samples": [
+        {
+          "seconds": 0.010296374995959923,
+          "cpu_percent": 8.2,
+          "rss_kib": 224000
+        },
+        {
+          "seconds": 0.2751299579977058,
+          "cpu_percent": 25.6,
+          "rss_kib": 224144
+        },
+        {
+          "seconds": 0.5439978330105077,
+          "cpu_percent": 70.0,
+          "rss_kib": 224144
+        },
+        {
+          "seconds": 0.8092962499940768,
+          "cpu_percent": 87.4,
+          "rss_kib": 224144
+        },
+        {
+          "seconds": 1.0747537080023903,
+          "cpu_percent": 95.5,
+          "rss_kib": 224144
+        },
+        {
+          "seconds": 1.3325122910027858,
+          "cpu_percent": 97.2,
+          "rss_kib": 224144
+        },
+        {
+          "seconds": 1.5988135829975363,
+          "cpu_percent": 97.0,
+          "rss_kib": 224144
+        },
+        {
+          "seconds": 1.8567754999967292,
+          "cpu_percent": 98.1,
+          "rss_kib": 224144
+        },
+        {
+          "seconds": 2.11616058301297,
+          "cpu_percent": 98.7,
+          "rss_kib": 224144
+        },
+        {
+          "seconds": 2.381302333000349,
+          "cpu_percent": 99.2,
+          "rss_kib": 224144
+        },
+        {
+          "seconds": 2.64615554100601,
+          "cpu_percent": 100.0,
+          "rss_kib": 224144
+        },
+        {
+          "seconds": 2.9110823750088457,
+          "cpu_percent": 100.0,
+          "rss_kib": 224144
+        },
+        {
+          "seconds": 3.170948665996548,
+          "cpu_percent": 95.5,
+          "rss_kib": 7328
+        },
+        {
+          "seconds": 3.435152249992825,
+          "cpu_percent": 93.4,
+          "rss_kib": 7296
+        },
+        {
+          "seconds": 3.6960157499997877,
+          "cpu_percent": 93.0,
+          "rss_kib": 7264
+        },
+        {
+          "seconds": 3.964263000001665,
+          "cpu_percent": 89.8,
+          "rss_kib": 7264
+        },
+        {
+          "seconds": 4.221579291013768,
+          "cpu_percent": 95.1,
+          "rss_kib": 7264
+        },
+        {
+          "seconds": 4.487833582999883,
+          "cpu_percent": 96.8,
+          "rss_kib": 7264
+        },
+        {
+          "seconds": 4.754030582989799,
+          "cpu_percent": 94.3,
+          "rss_kib": 7264
+        },
+        {
+          "seconds": 5.019495624990668,
+          "cpu_percent": 91.4,
+          "rss_kib": 7264
+        },
+        {
+          "seconds": 5.274781540996628,
+          "cpu_percent": 95.1,
+          "rss_kib": 7264
+        },
+        {
+          "seconds": 5.537342208001064,
+          "cpu_percent": 97.4,
+          "rss_kib": 7264
+        },
+        {
+          "seconds": 5.808922166004777,
+          "cpu_percent": 94.3,
+          "rss_kib": 7296
+        }
+      ]
+    },
+    {
+      "workers": 8,
+      "client_processes": 4,
+      "connections_per_client": 100,
+      "requests_per_client": 500000,
+      "loads": [
+        {
+          "requests": 500000,
+          "connections": 100,
+          "payload_bytes": 16,
+          "seconds": 12.923456,
+          "requests_per_second": 38689.34,
+          "latency_us_p50": 2465.0,
+          "latency_us_p95": 3261.0,
+          "latency_us_p99": 5503.0,
+          "latency_us_max": 15243.0,
+          "clients_progressed_in_first_second": 100
+        },
+        {
+          "requests": 500000,
+          "connections": 100,
+          "payload_bytes": 16,
+          "seconds": 12.936115,
+          "requests_per_second": 38651.48,
+          "latency_us_p50": 2465.0,
+          "latency_us_p95": 3263.0,
+          "latency_us_p99": 5462.0,
+          "latency_us_max": 15928.0,
+          "clients_progressed_in_first_second": 100
+        },
+        {
+          "requests": 500000,
+          "connections": 100,
+          "payload_bytes": 16,
+          "seconds": 12.930228,
+          "requests_per_second": 38669.08,
+          "latency_us_p50": 2465.0,
+          "latency_us_p95": 3255.0,
+          "latency_us_p99": 5471.0,
+          "latency_us_max": 15475.0,
+          "clients_progressed_in_first_second": 100
+        },
+        {
+          "requests": 500000,
+          "connections": 100,
+          "payload_bytes": 16,
+          "seconds": 12.933364,
+          "requests_per_second": 38659.7,
+          "latency_us_p50": 2466.0,
+          "latency_us_p95": 3265.0,
+          "latency_us_p99": 5519.0,
+          "latency_us_max": 15036.0,
+          "clients_progressed_in_first_second": 100
+        }
+      ],
+      "aggregate_elapsed_upper_bound_seconds": 13.020494333992247,
+      "aggregate_rps_lower_bound": 153603.9991030644,
+      "cpu_percent_median": 97.9,
+      "cpu_percent_max": 99.0,
+      "distribution": [
+        {
+          "listener": 1,
+          "fd": 32,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 2,
+          "fd": 33,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 3,
+          "fd": 34,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 4,
+          "fd": 35,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 5,
+          "fd": 36,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 6,
+          "fd": 37,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 7,
+          "fd": 38,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 8,
+          "fd": 39,
+          "accepted": 401,
+          "thread": 3938889
+        }
+      ],
+      "samples": [
+        {
+          "seconds": 0.00980883400188759,
+          "cpu_percent": 0.0,
+          "rss_kib": 224000
+        },
+        {
+          "seconds": 0.27548708399990574,
+          "cpu_percent": 50.5,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 0.539486791996751,
+          "cpu_percent": 79.2,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 0.8071420839987695,
+          "cpu_percent": 90.7,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 1.0726622919901274,
+          "cpu_percent": 94.9,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 1.3379897919949144,
+          "cpu_percent": 97.1,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 1.597107124980539,
+          "cpu_percent": 98.0,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 1.8619725839816965,
+          "cpu_percent": 98.5,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 2.1339890839881264,
+          "cpu_percent": 98.8,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 2.4063706249871757,
+          "cpu_percent": 95.9,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 2.667054666992044,
+          "cpu_percent": 93.9,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 2.9361852089932654,
+          "cpu_percent": 96.8,
+          "rss_kib": 200784
+        },
+        {
+          "seconds": 3.207493958994746,
+          "cpu_percent": 97.5,
+          "rss_kib": 49376
+        },
+        {
+          "seconds": 3.4717016670037992,
+          "cpu_percent": 96.6,
+          "rss_kib": 11568
+        },
+        {
+          "seconds": 3.737327541981358,
+          "cpu_percent": 97.9,
+          "rss_kib": 11568
+        },
+        {
+          "seconds": 3.99875400000019,
+          "cpu_percent": 98.5,
+          "rss_kib": 11568
+        },
+        {
+          "seconds": 4.262781583995093,
+          "cpu_percent": 98.8,
+          "rss_kib": 11568
+        },
+        {
+          "seconds": 4.523776416986948,
+          "cpu_percent": 98.8,
+          "rss_kib": 11568
+        },
+        {
+          "seconds": 4.782162333984161,
+          "cpu_percent": 98.7,
+          "rss_kib": 11568
+        },
+        {
+          "seconds": 5.04757124997559,
+          "cpu_percent": 98.6,
+          "rss_kib": 11568
+        },
+        {
+          "seconds": 5.312414416985121,
+          "cpu_percent": 98.5,
+          "rss_kib": 11568
+        },
+        {
+          "seconds": 5.577544667001348,
+          "cpu_percent": 98.6,
+          "rss_kib": 11568
+        },
+        {
+          "seconds": 5.84271749999607,
+          "cpu_percent": 98.5,
+          "rss_kib": 11600
+        },
+        {
+          "seconds": 6.107300125004258,
+          "cpu_percent": 96.7,
+          "rss_kib": 11600
+        },
+        {
+          "seconds": 6.3734334589971695,
+          "cpu_percent": 97.5,
+          "rss_kib": 11600
+        },
+        {
+          "seconds": 6.641610458987998,
+          "cpu_percent": 98.3,
+          "rss_kib": 11600
+        },
+        {
+          "seconds": 6.897236374992644,
+          "cpu_percent": 97.9,
+          "rss_kib": 11600
+        },
+        {
+          "seconds": 7.162305749981897,
+          "cpu_percent": 96.3,
+          "rss_kib": 11600
+        },
+        {
+          "seconds": 7.42720224999357,
+          "cpu_percent": 97.8,
+          "rss_kib": 11600
+        },
+        {
+          "seconds": 7.6919704169849865,
+          "cpu_percent": 98.2,
+          "rss_kib": 11600
+        },
+        {
+          "seconds": 7.958207041985588,
+          "cpu_percent": 94.3,
+          "rss_kib": 11600
+        },
+        {
+          "seconds": 8.285323749994859,
+          "cpu_percent": 87.6,
+          "rss_kib": 11600
+        },
+        {
+          "seconds": 8.553265916998498,
+          "cpu_percent": 78.9,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 8.81567329200334,
+          "cpu_percent": 84.1,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 9.081396208988735,
+          "cpu_percent": 91.8,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 9.345564708986785,
+          "cpu_percent": 96.3,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 9.608705666993046,
+          "cpu_percent": 96.6,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 9.86394987499807,
+          "cpu_percent": 97.2,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 10.121775708976202,
+          "cpu_percent": 98.0,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 10.387441458995454,
+          "cpu_percent": 99.0,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 10.65272250000271,
+          "cpu_percent": 98.4,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 10.918145624978933,
+          "cpu_percent": 98.8,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 11.182204666984035,
+          "cpu_percent": 98.2,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 11.447788833989762,
+          "cpu_percent": 98.7,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 11.71286516697728,
+          "cpu_percent": 98.5,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 11.978159916994628,
+          "cpu_percent": 97.6,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 12.238904375000857,
+          "cpu_percent": 97.5,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 12.503815208998276,
+          "cpu_percent": 98.7,
+          "rss_kib": 11616
+        },
+        {
+          "seconds": 12.760408583999379,
+          "cpu_percent": 99.0,
+          "rss_kib": 11616
+        }
+      ]
+    },
+    {
+      "workers": 8,
+      "client_processes": 1,
+      "connections_per_client": 1000,
+      "requests_per_client": 200000,
+      "loads": [
+        {
+          "requests": 200000,
+          "connections": 1000,
+          "payload_bytes": 16,
+          "seconds": 1.052762,
+          "requests_per_second": 189976.46,
+          "latency_us_p50": 5172.0,
+          "latency_us_p95": 6587.0,
+          "latency_us_p99": 7389.0,
+          "latency_us_max": 8824.0,
+          "clients_progressed_in_first_second": 1000
+        }
+      ],
+      "aggregate_elapsed_upper_bound_seconds": 1.3136254589771852,
+      "aggregate_rps_lower_bound": 152250.3987976329,
+      "cpu_percent_median": 95.2,
+      "cpu_percent_max": 95.2,
+      "distribution": [
+        {
+          "listener": 1,
+          "fd": 32,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 2,
+          "fd": 33,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 3,
+          "fd": 34,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 4,
+          "fd": 35,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 5,
+          "fd": 36,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 6,
+          "fd": 37,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 7,
+          "fd": 38,
+          "accepted": 0,
+          "thread": 0
+        },
+        {
+          "listener": 8,
+          "fd": 39,
+          "accepted": 1001,
+          "thread": 3940812
+        }
+      ],
+      "samples": [
+        {
+          "seconds": 0.004627874994184822,
+          "cpu_percent": 0.0,
+          "rss_kib": 223968
+        },
+        {
+          "seconds": 0.26927574997534975,
+          "cpu_percent": 47.6,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 0.5299034169875085,
+          "cpu_percent": 79.8,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 0.7942584169795737,
+          "cpu_percent": 92.1,
+          "rss_kib": 224160
+        },
+        {
+          "seconds": 1.0589967089763377,
+          "cpu_percent": 95.2,
+          "rss_kib": 224160
+        }
+      ]
+    }
+  ],
+  "environment": {
+    "platform": "macOS-27.2.1-arm64-arm-64bit",
+    "uname": "Darwin Aleksandars-MacBook-Pro.local 27.2.0 Darwin Kernel Version 27.2.0: Wed Oct 14 23:48:16 PDT 2026; root:xnu-13432.41.4~25/RELEASE_ARM64_T8112 arm64",
+    "logical_cpus": 8,
+    "cpu": "Apple M2"
+  },
+  "trace_source": "#define _DARWIN_C_SOURCE 1\n#include <errno.h>\n#include <inttypes.h>\n#include <pthread.h>\n#include <stdatomic.h>\n#include <stdio.h>\n#include <sys/socket.h>\n#include <unistd.h>\n#define LIMIT 65536\nstatic _Atomic unsigned listener_order[LIMIT];\nstatic _Atomic uint64_t counts[LIMIT];\nstatic _Atomic uint64_t thread_ids[LIMIT];\nstatic _Atomic unsigned next_listener;\nstatic int traced_listen(int fd, int backlog) {\n    int result = listen(fd, backlog);\n    if (result == 0 && fd >= 0 && fd < LIMIT)\n        atomic_store(&listener_order[fd], atomic_fetch_add(&next_listener, 1) + 1);\n    return result;\n}\nstatic int traced_accept(int fd, struct sockaddr *addr, socklen_t *len) {\n    int result = accept(fd, addr, len);\n    int saved_errno = errno;\n    if (result >= 0 && fd >= 0 && fd < LIMIT) {\n        uint64_t thread_id = 0;\n        (void)pthread_threadid_np(NULL, &thread_id);\n        atomic_store(&thread_ids[fd], thread_id);\n        atomic_fetch_add(&counts[fd], 1);\n    }\n    errno = saved_errno;\n    return result;\n}\n__attribute__((destructor)) static void report_trace(void) {\n    for (int fd = 0; fd < LIMIT; ++fd) {\n        unsigned order = atomic_load(&listener_order[fd]);\n        if (order)\n            fprintf(stderr, \"ACCEPT_TRACE listener=%u fd=%d accepted=%\" PRIu64 \" thread=%\" PRIu64 \"\\n\", order, fd, atomic_load(&counts[fd]), atomic_load(&thread_ids[fd]));\n    }\n}\n#define INTERPOSE(replacement, original) \\\n    __attribute__((used, section(\"__DATA,__interpose\"))) \\\n    static const struct { const void *replacement_fn; const void *original_fn; } \\\n    interpose_##replacement = {(const void *)replacement, (const void *)original}\nINTERPOSE(traced_listen, listen);\nINTERPOSE(traced_accept, accept);\n",
+  "diagnostic_driver_source": "import hashlib,json,os,pathlib,re,shutil,signal,socket,statistics,subprocess,tempfile,time\nroot=pathlib.Path('/Users/isavita/git/lean-net'); binary=root/'.lake/build/bin/lean-net-echo'\nreport={'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'trace_source_sha256':hashlib.sha256(pathlib.Path('/tmp/lean-net-accept-trace.c').read_bytes()).hexdigest(),'method':'Disposable listen/accept DYLD interposer records successful accept per listener; ps CPU sample; one startup probe included in accept counts; production binary unchanged','runs':[]}\nwith tempfile.TemporaryDirectory(prefix='lean-net-accept-trace-') as d:\n d=pathlib.Path(d);serverpath=d/'server';clientpath=d/'client';shutil.copy2(binary,serverpath)\n subprocess.run(['cc','-O3','-std=c11','-Wall','-Wextra','-Wpedantic','-Werror',str(root/'test/bench_echo.c'),'-o',str(clientpath)],check=True)\n for workers,clients,connections,requests in [(8,1,100,1000000),(8,4,100,500000),(8,1,1000,200000)]:\n  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\n  with tempfile.TemporaryFile(mode='w+') as log:\n   env=os.environ.copy();env['DYLD_INSERT_LIBRARIES']='/tmp/lean-net-accept-trace.dylib'\n   server=subprocess.Popen([str(serverpath),str(port),str(workers)],stdout=log,stderr=log,env=env)\n   try:\n    for _ in range(100):\n     if server.poll() is not None:raise RuntimeError('server startup exit')\n     try:\n      with socket.create_connection(('127.0.0.1',port),timeout=.1):break\n     except OSError:time.sleep(.01)\n    start=time.monotonic(); processes=[subprocess.Popen([str(clientpath),str(port),str(connections),str(requests),'16'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for _ in range(clients)];samples=[]\n    while any(p.poll() is None for p in processes):\n     r=subprocess.run(['ps','-p',str(server.pid),'-o','pcpu=,rss='],capture_output=True,text=True,check=True)\n     cpu,rss=r.stdout.split();samples.append({'seconds':time.monotonic()-start,'cpu_percent':float(cpu),'rss_kib':int(rss)})\n     time.sleep(.25)\n    elapsed=time.monotonic()-start;loads=[]\n    for p in processes:\n     out,err=p.communicate(timeout=2)\n     if p.returncode:raise RuntimeError(err)\n     loads.append(json.loads(out))\n   finally:\n    if server.poll() is None:server.send_signal(signal.SIGINT)\n    code=server.wait(timeout=5);log.seek(0);logtext=log.read()\n    if code:raise RuntimeError(f'server exit {code}: {logtext}')\n   distribution=[dict(zip(['listener','fd','accepted','thread'],map(int,match))) for match in re.findall(r'ACCEPT_TRACE listener=(\\d+) fd=(\\d+) accepted=(\\d+) thread=(\\d+)',logtext)]\n   stable=[s for s in samples if s['seconds']>=1] or samples\n   run={'workers':workers,'client_processes':clients,'connections_per_client':connections,'requests_per_client':requests,'loads':loads,'aggregate_elapsed_upper_bound_seconds':elapsed,'aggregate_rps_lower_bound':clients*requests/elapsed,'cpu_percent_median':statistics.median(s['cpu_percent'] for s in stable),'cpu_percent_max':max(s['cpu_percent'] for s in stable),'distribution':distribution,'samples':samples}\n   report['runs'].append(run);print(json.dumps({k:v for k,v in run.items() if k!='samples'}),flush=True)\npathlib.Path('/tmp/lean-net-accept-distribution.json').write_text(json.dumps(report,indent=2)+'\\n')\n",
+  "diagnostic_driver_source_sha256": "f47d14de60bb0696e5af31e1b3958ecb19e1b695202ad51d2588740d071113c0",
+  "interpretation": "All successful accepts reached only the eighth/last-created listener in every run, including four independent native clients. This explains the observed one-core server use: seven event-loop threads receive no load connections. No inference about Lean contention under balanced load or Linux/Windows behavior is made. Timing with the tracer is diagnostic, not a throughput acceptance repetition.",
+  "primary_sources": [
+    {
+      "url": "https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/setsockopt.2.html",
+      "claim": "Apple documents SO_REUSEPORT as duplicate address/port binding; it does not promise balancing."
+    },
+    {
+      "url": "https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/netinet/in_pcb.c#L2558-L2665",
+      "claim": "Published IPv4 lookup returns first matching address-specific PCB."
+    },
+    {
+      "url": "https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/netinet/in_pcb.c#L2810-L2811",
+      "claim": "New PCB insertion is at hash-list head."
+    },
+    {
+      "url": "https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/netinet/tcp_input.c#L3020-L3032",
+      "claim": "TCP input invokes this PCB lookup."
+    }
+  ],
+  "source_limit": "Published Apple XNU source is xnu-12377.1.9, older than running xnu-13432.41.4; source interpretation supports, but does not replace, measured behavior on this exact host."
+}

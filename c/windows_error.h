@@ -28,15 +28,18 @@ static inline int ln_windows_errno(DWORD error) {
   case WSAEADDRNOTAVAIL:
     return EADDRNOTAVAIL;
   case WSAECONNABORTED:
+  case ERROR_CONNECTION_ABORTED:
     return ECONNABORTED;
   case WSAECONNRESET:
   case ERROR_NETNAME_DELETED:
     return ECONNRESET;
   case WSAECONNREFUSED:
+  case ERROR_CONNECTION_REFUSED:
     return ECONNREFUSED;
   case WSAENOTCONN:
     return ENOTCONN;
   case WSAETIMEDOUT:
+  case ERROR_SEM_TIMEOUT:
   case WAIT_TIMEOUT:
     return ETIMEDOUT;
   case WSAENETRESET:
@@ -44,8 +47,10 @@ static inline int ln_windows_errno(DWORD error) {
   case WSAENETDOWN:
     return ENETDOWN;
   case WSAENETUNREACH:
+  case ERROR_NETWORK_UNREACHABLE:
     return ENETUNREACH;
   case WSAEHOSTUNREACH:
+  case ERROR_HOST_UNREACHABLE:
     return EHOSTUNREACH;
   case WSAEHOSTDOWN:
     return EHOSTUNREACH;
@@ -65,6 +70,8 @@ static inline int ln_windows_errno(DWORD error) {
     return ECANCELED;
   case WSAEOPNOTSUPP:
     return EOPNOTSUPP;
+  case WSAESHUTDOWN:
+    return EPIPE;
   default:
     return EIO;
   }
