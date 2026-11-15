@@ -113,12 +113,14 @@ def workerCount (workers maxClients : Nat) : IO Nat := do
 def withWorkerPool (host : String) (port : UInt16) (workers maxClients : Nat)
     (native : Reactor.Config)
     (run : Nat → Nat → Reactor.Reactor → Reactor.Group → IO Unit)
-    (outboundSlotsPerWorker : Nat := 0) : IO Unit := do
+    (outboundSlotsPerWorker : Nat := 0)
+    (acceptRate : Option Reactor.AcceptRateConfig := none) : IO Unit := do
   let count ← workerCount workers maxClients
   let partitions := (Array.range count).map fun index =>
     maxClients / count + if index < maxClients % count then 1 else 0
   let handoff := count > 1 && (System.Platform.isWindows || System.Platform.isOSX)
-  Reactor.withEndpoint port <| withPartitionReactors partitions native
+  let start := fun (limiter : Option Reactor.AcceptLimiter) =>
+   Reactor.withEndpoint port <| withPartitionReactors partitions native
       (if handoff then 0 else 1) outboundSlotsPerWorker fun reactors => do
     if handoff then
       let sourceConfig : Reactor.Config := {
@@ -126,15 +128,22 @@ def withWorkerPool (host : String) (port : UInt16) (workers maxClients : Nat)
         buffers4k := 1, buffers16k := 0, buffers64k := 0,
         timerTickMs := native.timerTickMs }
       Reactor.withReactor sourceConfig fun acceptor => do
+        if let some limiter := limiter then limiter.attach acceptor 0
         acceptor.setAcceptTargets reactors 1
         let _ ← acceptor.listen host port
         Reactor.withGroup (reactors.push acceptor) fun group =>
           runMembers reactors partitions (some acceptor) group run
     else
-      for reactor in reactors do
+      for h : index in [:reactors.size] do
+        let reactor := reactors[index]
+        if let some limiter := limiter then limiter.attach reactor index
         let fresh ← reactor.socket
         let bound ← fresh.bind host port (count > 1)
         let _ ← bound.listen 4096
       Reactor.withGroup reactors fun group => runMembers reactors partitions none group run
+  if let some rate := acceptRate then
+    Reactor.withAcceptLimiter rate (if handoff then 1 else count) fun limiter =>
+      start (some limiter)
+  else start none
 
 end LeanNet.HTTP

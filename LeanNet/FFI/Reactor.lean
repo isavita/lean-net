@@ -16,6 +16,8 @@ opaque create (connections events writes buffers4k buffers16k buffers64k tickMs 
 @[extern "shim_reactor_free"] opaque free (handle : UInt64) : IO UInt64
 @[extern "shim_reactor_set_accept_targets"]
 opaque setAcceptTargets (handle : UInt64) (workers : @& Array UInt64) (queueCapacity : UInt32) : IO UInt64
+@[extern "shim_reactor_set_accept_limiter"]
+opaque setAcceptLimiter (handle limiter : UInt64) (lane : UInt32) : IO UInt64
 @[extern "shim_reactor_socket_new"] opaque socketNew (handle : UInt64) : IO UInt64
 @[extern "shim_reactor_connect"]
 opaque connect (handle token : UInt64) (address : @& ByteArray) (port : UInt16) : IO UInt64

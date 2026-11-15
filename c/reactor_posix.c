@@ -11,6 +11,8 @@
 #endif
 #ifndef _WIN32
 #include "reactor.h"
+#define LN_RL_NO_LEAN
+#include "ratelimit.h"
 #include "reactor_file_internal.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -130,6 +132,8 @@ struct rn_reactor {
     uint32_t closed_head, closed_tail;
     uint8_t has_polled;
     uint64_t accept_backoff_until;
+    ln_rl *accept_limiter;
+    uint32_t accept_lane;
 #if defined(__APPLE__)
     rn_accept_queue **accept_targets;
     uint32_t accept_target_count, next_accept_target;
@@ -790,7 +794,11 @@ static int rn_accept_ready(rn_reactor *r, uint32_t index) {
         } else
 #endif
         if (r->free_connection_count == 0) { rn_pause(r, index); return rn_interest(r, index, 0); }
-        int fd = accept(listener->fd, NULL, NULL);
+        struct sockaddr_storage peer;
+        socklen_t peer_length = sizeof(peer);
+        int fd = accept(listener->fd,
+                        r->accept_limiter ? (struct sockaddr *)&peer : NULL,
+                        r->accept_limiter ? &peer_length : NULL);
         if (fd < 0) {
             int e = errno;
             if (e == EAGAIN || e == EWOULDBLOCK) return 0;
@@ -805,6 +813,18 @@ static int rn_accept_ready(rn_reactor *r, uint32_t index) {
                 return rn_emit(r, RN_ERROR, listener_token, 0, 0, 0, 0, -e, RN_ACCEPT_ERROR);
             }
             return rn_emit(r, RN_ERROR, listener_token, 0, 0, 0, 0, -e, RN_ACCEPT_ERROR);
+        }
+        if (r->accept_limiter) {
+            uint8_t key[16];
+            int length = rn_raw_peer(&peer, key);
+            uint64_t now = rn_now_ms();
+            if (length < 0 || !now || ln_rl_acquire(r->accept_limiter, r->accept_lane,
+                    0, 0, key, (size_t)(length < 0 ? 0 : length), now) != 0) {
+                int closed = rn_close_fd(fd);
+                if (closed) return rn_emit(r, RN_ERROR, listener_token, 0, 0,
+                                           0, 0, closed, RN_CLOSE_ERROR);
+                continue;
+            }
         }
         int error = rn_nonblocking(fd);
         if (!error) error = rn_sigpipe(fd);
@@ -1304,6 +1324,15 @@ int rn_set_accept_targets(rn_reactor *acceptor, rn_reactor *const *workers,
     (void)acceptor; (void)workers; (void)count; (void)queue_capacity;
     return -ENOTSUP;
 #endif
+}
+int rn_set_accept_limiter(rn_reactor *r, ln_rl *limiter, uint32_t lane) {
+    if (!r || !limiter || lane >= limiter->workers || limiter->rule_count != 1 ||
+        limiter->rules[0].kind != LN_RL_KEYED) return -EINVAL;
+    if (r->has_polled || r->accept_limiter ||
+        r->free_connection_count != r->config.max_connections) return -EBUSY;
+    r->accept_limiter = limiter;
+    r->accept_lane = lane;
+    return 0;
 }
 int rn_free(rn_reactor *r) {
     if (r == NULL) return -EINVAL;

@@ -80,6 +80,23 @@ Both public executables accept `--gate POLICY`:
 tls/.lake/build/bin/lean-net-tls chain.pem key.pem --metrics --gate ./gate.policy 8443
 ```
 
+`--connection-rate TOKENS/PERIOD_MS/BURST` adds an independent per-peer-IP
+budget for completed inbound TCP accepts. For example,
+`--connection-rate 20/1000/10` allows a ten-connection burst, then about
+twenty new connections per second per address. The native listener checks
+the binary peer address before handing a socket to a worker or starting its
+TLS handshake; a rejected socket is closed without allocating HTTP state.
+The default is off. Library programs can set
+`ReactorServerConfig.connectionRate := some { tokens := 20, periodMs := 1000,
+burst := 10 }` and tune `keyedSlots` (default 65,536). The fixed table denies
+new peers when its probe set is saturated, rather than resetting an active
+peer's budget. IPv4-mapped IPv6 shares the IPv4 key.
+
+This limits accepted connections and TLS handshake work. It does not stop
+SYN packets before the kernel completes the TCP handshake; use the load
+balancer and operating system for SYN flood controls. Behind a load balancer,
+the key is the balancer's source IP unless it preserves the client source IP.
+
 For HTTPS backends, the TLS executable verifies the upstream certificate
 chain and the backend's configured `verify` name (or its target host). It uses
 OpenSSL's configured default trust roots unless `--upstream-ca roots.pem` is
@@ -132,6 +149,11 @@ body limit is 16 MiB; the wire limit is 32 MiB. Configure these and
 pool/timeout bounds through
 `Gateway.Config` in library programs.
 
+The request serializer removes client `Connection` options and the fields
+they nominate, then creates its own `Connection` field. It rejects options
+that nominate routing, forwarding identity, framing or `Upgrade` fields;
+client certificate identity headers are never forwarded as proxy attestations.
+
 The gateway forwards HTTP requests and responses. It does not tunnel
 WebSocket upgrades or CONNECT to backends; WebSocket routes invoke the local
 server handler. `--upstream-ca` applies only to outbound HTTPS and is separate
@@ -158,7 +180,23 @@ What keeps the overhead low:
 - Bodyless HTTP/2 heads are decided in batches. The frame loop pauses only
   for heads that may carry a body.
 - Paths without escapes are normalised as one slice.
-- Header-name checks do not allocate.
+
+### Gate allocation microbenchmark
+
+Build `lean-net-gate-perf`, then run
+`python3 test/bench_gate.py --output /tmp/gate-allocations.json` to record
+the disabled reference, host-only gate, and routed gate on one owner thread.
+The report includes monotonic nanoseconds and `IO.getNumHeartbeats` small
+allocations per request, with warmup and prebuilt heads/policies. CI uploads a
+Linux report named `gate-allocations-linux` for each build. These counts omit
+large allocations, socket parsing, TLS and GC pauses; they do not predict
+server throughput.
+
+The gate does allocate Lean objects. `Admitted` has eight runtime fields and
+three erased `Prop` proofs; its constructor and route selection still allocate
+heap objects. The generated-C proof-erasure regression checks the runtime
+field count. `lean --profile` measures elaboration and type checking, not
+per-request runtime allocations.
 
 ## Policy language
 

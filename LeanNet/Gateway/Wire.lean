@@ -67,6 +67,13 @@ private def untrustedIdentityField (name : String) : Bool :=
 private def barredRequestField (name : String) : Bool :=
   hopField name || untrustedIdentityField name
 
+/-- A client cannot nominate a field that the gateway must construct from
+    trusted transport or routing state. An upgrade also needs a separate
+    tunnel path, which this HTTP/1.1 proxy serializer does not provide. -/
+private def forbiddenConnectionOption (name : String) : Bool :=
+  ["host", "content-length", "transfer-encoding", "upgrade"].contains name ||
+  untrustedIdentityField name
+
 private def responseHopField (name : String) : Bool :=
   ["connection", "keep-alive", "proxy-connection", "proxy-authenticate",
    "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade",
@@ -124,6 +131,7 @@ def encodeRequest (a : Admitted) (request : Request) : Except WireError (Array B
   let nominated ← match connectionTokens request.headers with
     | .ok values => pure values
     | .error _ => throw .invalidConnection
+  if nominated.any forbiddenConnectionOption then throw .invalidConnection
   let mut head := a.head.method.toUTF8.append " ".toUTF8
   head := (head.append (canonicalTarget a.path)).append " HTTP/1.1\r\n".toUTF8
   head := appendHeader head "Host" a.authority.render

@@ -113,6 +113,11 @@ structure Config where
   maxFramesPerStep : Nat := 256
   maxDataPerDrain : Nat := 65536
   maxResetHistory : Nat := 256
+  /-- Per-connection reset budgets. A burst above either limit emits
+      GOAWAY(ENHANCE_YOUR_CALM); peer resets after that close the connection. -/
+  maxPeerResetsPerWindow : Nat := 256
+  maxLocalResetsPerWindow : Nat := 256
+  resetWindowMs : Nat := 1000
   maxPushes : Nat := 128
   enablePush : Bool := false
   enableConnectProtocol : Bool := false
@@ -140,6 +145,9 @@ def Config.validate (config : Config) : Except String Unit := do
       config.maxOutputBatchBytes < 16393 || config.maxRequestBatch == 0 ||
       config.maxFramesPerStep == 0 || config.maxDataPerDrain == 0 ||
       config.maxDataPerDrain + 9 > config.maxOutputBatchBytes || config.maxResetHistory == 0 ||
+      config.maxPeerResetsPerWindow == 0 || config.maxPeerResetsPerWindow > 1000000 ||
+      config.maxLocalResetsPerWindow == 0 || config.maxLocalResetsPerWindow > 1000000 ||
+      config.resetWindowMs == 0 || config.resetWindowMs > 9223372036854775807 ||
       config.maxPushes > 1000000 || config.pingIntervalMs > 9223372036854775807 ||
       config.pingTimeoutMs > 9223372036854775807 ||
       (config.pingIntervalMs != 0 && config.pingTimeoutMs == 0) then throw "invalid HTTP/2 connection budgets"
@@ -170,6 +178,10 @@ structure Connection where
   private streams : Array Exchange := #[]
   private highestStream : UInt32 := 0
   private resetStreams : Array UInt32 := #[]
+  private peerResetWindowStart : Option Nat := none
+  private peerResetsInWindow : Nat := 0
+  private localResetWindowStart : Option Nat := none
+  private localResetsInWindow : Nat := 0
   private incrementalCursors : Array UInt32 := #[0,0,0,0,0,0,0,0]
   private nonIncrementalBytes : Array Nat := #[0,0,0,0,0,0,0,0]
   private discardThrough : UInt32 := 0
@@ -285,24 +297,38 @@ def Connection.canRespond (connection : Connection) (id : UInt32) : Bool :=
   | some entry => entry.delivered && entry.pending.isNone && !entry.streaming
   | none => false
 
-private def markReset (connection : Connection) (id : UInt32) : Except ProtocolError Connection := do
+private def markReset (connection : Connection) (id : UInt32) :
+    Except ProtocolError (Connection × ByteArray) := do
   let connection := removeStream connection id
-  if connection.resetStreams.contains id then return connection
+  if connection.resetStreams.contains id then return (connection, ByteArray.empty)
   let history := if connection.resetStreams.size >= connection.config.maxResetHistory then
     connection.resetStreams.extract 1 connection.resetStreams.size else connection.resetStreams
   let discarded := if connection.resetStreams.size >= connection.config.maxResetHistory then
     max connection.discardThrough (connection.resetStreams[0]!) else connection.discardThrough
-  return { connection with resetStreams := history.push id, discardThrough := discarded }
+  let (started, count) := match connection.localResetWindowStart with
+    | some started =>
+      if connection.now - started < connection.config.resetWindowMs then
+        (started, connection.localResetsInWindow + 1)
+      else (connection.now, 1)
+    | none => (connection.now, 1)
+  let connection := { connection with resetStreams := history.push id, discardThrough := discarded, localResetWindowStart := some started, localResetsInWindow := count }
+  if count <= connection.config.maxLocalResetsPerWindow || connection.localGoAway.isSome then
+    return (connection, ByteArray.empty)
+  let cutoff := connection.highestStream
+  let goAway ← wire ⟨7, 0, 0, (u32 cutoff).append (u32 ErrorCode.enhanceYourCalm.toUInt32)⟩
+  return ({ connection with localGoAway := some cutoff, pendingPriorities := #[] }, goAway)
 
 private def resetStream (connection : Connection) (id : UInt32) (code : ErrorCode) :
     Except ProtocolError (Connection × ByteArray × Array RequestEvent) := do
-  return (← markReset connection id, ← rst id code, #[])
+  let (connection, goAway) ← markReset connection id
+  return (connection, (← rst id code).append goAway, #[])
 
 /-- Cancel one active application exchange without closing independent streams. -/
 def Connection.cancel (connection : Connection) (id : UInt32) (code : ErrorCode := .cancel) :
     Except ProtocolError (Connection × ByteArray) := do
   if (findStream connection id).isNone then return (connection, ByteArray.empty)
-  return (← markReset connection id, ← rst id code)
+  let (connection, goAway) ← markReset connection id
+  return (connection, (← rst id code).append goAway)
 
 private def appendBody (entry : Exchange) (data : ByteArray) : Exchange := Id.run do
   let mut blocks := entry.bodyBlocks
@@ -409,8 +435,8 @@ private def expectationResponse (connection : Connection) (entry : Exchange)
   let connection := putStream { connection with encoder } { entry with stream }
   if !endStream then return (connection, output, #[])
   if remoteEnded then return (removeStream connection stream.id, output, #[])
-  let connection ← markReset connection stream.id
-  return (connection, output.append (← rst stream.id .noError), #[])
+  let (connection, goAway) ← markReset connection stream.id
+  return (connection, (output.append (← rst stream.id .noError)).append goAway, #[])
 
 /-- Continue after a validated head: extended CONNECT delivery, expectations
     and completion of an already-ended request. Shared by the ungated path
@@ -556,7 +582,9 @@ private def closedStream (connection : Connection) (id : UInt32) : Bool :=
 
 private def discardedStream (connection : Connection) (id : UInt32) : Bool :=
   connection.resetStreams.contains id ||
-    (id != 0 && id <= connection.discardThrough && closedStream connection id)
+    (id != 0 && id <= connection.discardThrough && closedStream connection id) ||
+    (id.toNat % 2 == 1 && id <= connection.highestStream &&
+      connection.localGoAway.any (id > ·))
 
 private def receiveHeaders (connection : Connection) (frame : Frame) :
     Except ProtocolError (Connection × ByteArray × Array RequestEvent) := do
@@ -569,6 +597,17 @@ private def receiveHeaders (connection : Connection) (frame : Frame) :
   let ended := flag frame.flags 1
   if (findStream connection id).isNone && discardedStream connection id then
     let assembly : HeaderAssembly := { streamId := id, fragments := [block], blockSize := block.size, endStream := ended, discard := true }
+    if flag frame.flags 4 then return ← finishHeaders connection assembly
+    return ({ connection with assembly := some assembly }, ByteArray.empty, #[])
+  -- GOAWAY has already told the peer that larger stream IDs were not
+  -- processed. Decode their bounded HPACK blocks to keep the shared table
+  -- synchronized, but do not allocate an exchange or send another reset.
+  if (findStream connection id).isNone && connection.localGoAway.isSome &&
+      id.toNat % 2 == 1 && id > connection.highestStream then
+    let assembly : HeaderAssembly :=
+      { streamId := id, fragments := [block], blockSize := block.size,
+        endStream := ended, discard := true }
+    connection := { connection with highestStream := id }
     if flag frame.flags 4 then return ← finishHeaders connection assembly
     return ({ connection with assembly := some assembly }, ByteArray.empty, #[])
   let entry ← match findStream connection id with
@@ -618,9 +657,9 @@ private def consumeStream (connection : Connection) (entry : Exchange) (size : N
 
 private def discardData (connection : Connection) (id : UInt32) (code : ErrorCode)
     (size : Nat) : Except ProtocolError (Connection × ByteArray × Array RequestEvent) := do
-  let connection ← markReset connection id
+  let (connection, goAway) ← markReset connection id
   let (connection, output) ← consumeConnection connection size
-  return (connection, output.append (← rst id code), #[])
+  return (connection, (output.append (← rst id code)).append goAway, #[])
 
 private def receiveData (connection : Connection) (frame : Frame) :
     Except ProtocolError (Connection × ByteArray × Array RequestEvent) := do
@@ -717,21 +756,23 @@ def Connection.setDate (connection : Connection) (date : ByteArray) : Connection
 
 /-- Supply current monotonic milliseconds before feeding a new network read. -/
 def Connection.setTime (connection : Connection) (now : Nat) : Connection :=
-  { connection with now }
+  { connection with now := max connection.now now }
 
 /-- Reset requests whose absolute deadline expired. A timed-out incomplete
     header block terminates the connection because discarding it would desync HPACK. -/
 def Connection.expireRequests (connection : Connection) (now timeoutMs : Nat) :
     Except ProtocolError (Connection × ByteArray) := do
-  let mut connection := { connection with now }
+  let mut connection := connection.setTime now
   let mut output := ByteArray.empty
   for entry in connection.streams do
-    if output.size + 13 > connection.config.maxOutputBatchBytes then break
-    if !entry.delivered && now - entry.startedAt >= timeoutMs then
+    -- A reset may also carry the 17-byte flood GOAWAY.
+    if output.size + 30 > connection.config.maxOutputBatchBytes then break
+    if !entry.delivered && connection.now - entry.startedAt >= timeoutMs then
       if connection.assembly.any (fun block => block.streamId == entry.stream.id) then
         throw (connError .enhanceYourCalm "incomplete header block timed out")
-      output := output.append (← rst entry.stream.id .cancel)
-      connection ← markReset connection entry.stream.id
+      let (next, goAway) ← markReset connection entry.stream.id
+      connection := next
+      output := (output.append (← rst entry.stream.id .cancel)).append goAway
   return (connection, output)
 
 /-- A fragmented preface, frame, or header block still needs an absolute
@@ -748,11 +789,14 @@ private def receiveWindow (connection : Connection) (frame : Frame) : Except Pro
     if !closedStream connection frame.streamId then throw (connError .protocolError "WINDOW_UPDATE on idle stream")
     else return (connection, ByteArray.empty)
   match entry.stream.updateSend increment with
-  | .error error => return (← markReset connection frame.streamId, ← rst frame.streamId error.code)
+  | .error error =>
+    let (connection, goAway) ← markReset connection frame.streamId
+    return (connection, (← rst frame.streamId error.code).append goAway)
   | .ok stream => return (putStream connection { entry with stream }, ByteArray.empty)
 
 private def receivePriority (connection : Connection) (frame : Frame) : Except ProtocolError Connection := do
   let update ← PriorityUpdate.decode frame
+  if connection.localGoAway.any (update.target > ·) then return connection
   let some entry := findStream connection update.target |
     if closedStream connection update.target then return connection
     if update.target.toNat % 2 == 0 then throw (connError .protocolError "priority update on idle push stream")
@@ -767,6 +811,26 @@ private def receivePriority (connection : Connection) (frame : Frame) : Except P
   match Priority.parse update.fieldValue with
   | .ok priority => return putStream connection { entry with priority }
   | .error _ => return connection
+
+/-- Count peer-initiated resets in a bounded monotonic window. The first
+    over-budget frame starts a graceful drain; continued abuse after GOAWAY
+    terminates it so a peer cannot keep the reactor busy indefinitely. -/
+private def observePeerReset (connection : Connection) :
+    Except ProtocolError (Connection × ByteArray) := do
+  let (started, count) := match connection.peerResetWindowStart with
+    | some started =>
+      if connection.now - started < connection.config.resetWindowMs then
+        (started, connection.peerResetsInWindow + 1)
+      else (connection.now, 1)
+    | none => (connection.now, 1)
+  let connection := { connection with peerResetWindowStart := some started, peerResetsInWindow := count }
+  if count <= connection.config.maxPeerResetsPerWindow then
+    return (connection, ByteArray.empty)
+  if connection.localGoAway.isSome then
+    throw (connError .enhanceYourCalm "peer reset flood continued after GOAWAY")
+  let cutoff := connection.highestStream
+  let output ← wire ⟨7, 0, 0, (u32 cutoff).append (u32 ErrorCode.enhanceYourCalm.toUInt32)⟩
+  return ({ connection with localGoAway := some cutoff, pendingPriorities := #[] }, output)
 
 private def handleFrame (connection : Connection) (frame : Frame) :
     Except ProtocolError (Connection × ByteArray × Array RequestEvent) := do
@@ -788,7 +852,8 @@ private def handleFrame (connection : Connection) (frame : Frame) :
   | 3 =>
     if (findStream connection frame.streamId).isNone && !closedStream connection frame.streamId then
       throw (connError .protocolError "RST_STREAM on idle stream")
-    return (removeStream connection frame.streamId, ByteArray.empty, #[])
+    let (connection, output) ← observePeerReset (removeStream connection frame.streamId)
+    return (connection, output, #[])
   | 4 =>
     let (connection, output) ← settings connection frame
     return (connection, output, #[])
@@ -847,9 +912,11 @@ def Connection.drainParts (connection : Connection) : Except ProtocolError (Conn
     let some entry := choosePending connection | break
     let some pending := entry.pending | break
     if headerListSize pending.trailers > connection.peerHeaderListBytes then
-      if outputSize + 13 > connection.config.maxOutputBatchBytes then break
-      connection ← markReset connection entry.stream.id
-      let bytes ← rst entry.stream.id .internalError
+      -- Reserve space for a reset and its optional flood GOAWAY.
+      if outputSize + 30 > connection.config.maxOutputBatchBytes then break
+      let (next, goAway) ← markReset connection entry.stream.id
+      connection := next
+      let bytes := (← rst entry.stream.id .internalError).append goAway
       output := output.push (.bytes bytes)
       outputSize := outputSize + bytes.size
       continue
@@ -1272,7 +1339,9 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
     connection := { connection with prefaceRead := connection.prefaceRead + 1 }
     consumed := consumed + 1
   for _ in [:connection.config.maxFramesPerStep] do
-    if consumed == length || requests.size >= connection.config.maxRequestBatch || outputSize >= connection.config.maxOutputBatchBytes then break
+    -- A locally generated reset can append a 17-byte flood GOAWAY.
+    if consumed == length || requests.size >= connection.config.maxRequestBatch ||
+        outputSize + 30 > connection.config.maxOutputBatchBytes then break
     match connection.parser.feedSlice input (offset + consumed) (length - consumed) with
     | .needMore parser used =>
       connection := { connection with parser }

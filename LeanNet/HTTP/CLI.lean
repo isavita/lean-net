@@ -17,6 +17,8 @@ structure Options where
   pingTimeoutMs : Option Nat := none
   workers : Nat := 0
   maxClients : Nat := 32
+  /-- Per-peer-IP completed TCP accepts: tokens/period-ms/burst. -/
+  connectionRate : Option Reactor.AcceptRateConfig := none
   positional : List String := []
   /-- Listening address; the default stays loopback-only for safety. -/
   host : Option String := none
@@ -116,6 +118,19 @@ private def collect (args : List String) (options : Options) : Except String Opt
       else collect rest { options with maxClients := value }
     | none => .error "--max-clients requires a decimal count"
   | "--max-clients" :: [] => .error "--max-clients requires a count"
+  | "--connection-rate" :: value :: rest =>
+    if options.connectionRate.isSome then .error "--connection-rate may be supplied once"
+    else match value.splitOn "/" with
+      | [rawTokens, rawPeriod, rawBurst] =>
+        match rawTokens.toNat?, rawPeriod.toNat?, rawBurst.toNat? with
+        | some tokens, some periodMs, some burst =>
+          if tokens == 0 || tokens > 4294967295 || periodMs == 0 ||
+              periodMs > 4294967295 || burst == 0 || burst > 4294967295 then
+            .error "--connection-rate values must be between 1 and 4294967295"
+          else collect rest { options with connectionRate := some { tokens, periodMs, burst } }
+        | _, _, _ => .error "--connection-rate requires TOKENS/PERIOD_MS/BURST"
+      | _ => .error "--connection-rate requires TOKENS/PERIOD_MS/BURST"
+  | "--connection-rate" :: [] => .error "--connection-rate requires TOKENS/PERIOD_MS/BURST"
   | "--access-log" :: path :: rest =>
     if options.accessLog.isSome then .error "--access-log may be supplied once"
     else if path.isEmpty || path.startsWith "--" then .error "--access-log requires a path"
@@ -203,6 +218,7 @@ def Options.httpConfig (options : Options) : IO ReactorServerConfig := do
   return {
     workers := options.workers
     server := { maxClients := options.maxClients }
+    connectionRate := options.connectionRate
     http2 := {
       enablePush := options.enablePush
       enableConnectProtocol := options.websocketOrigin.isSome

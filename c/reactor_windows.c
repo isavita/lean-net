@@ -9,6 +9,8 @@
 #define _WIN32_WINNT 0x0602
 #endif
 #include "reactor.h"
+#define LN_RL_NO_LEAN
+#include "ratelimit.h"
 #include "windows_error.h"
 #include "reactor_file_internal.h"
 #include <errno.h>
@@ -138,11 +140,14 @@ struct rn_reactor {
   rn_accept_channel *incoming_accepts;
   /* Descriptor/memory exhaustion pauses AcceptEx reposting for a short time. */
   uint64_t accept_backoff_until;
+  ln_rl *accept_limiter;
+  uint32_t accept_lane;
 };
 #include "reactor_file_impl.h"
 
 static int rn_error(DWORD error) { return ln_windows_errno(error); }
 static int rn_close_connection_impl(rn_reactor *, uint64_t);
+static int rn_raw_peer(const struct sockaddr_storage *, uint8_t out[16]);
 
 static uint32_t rn_channel_count(const rn_accept_channel *channel,
                                  uint32_t head, uint32_t tail) {
@@ -282,6 +287,18 @@ int rn_set_accept_targets(rn_reactor *acceptor, rn_reactor *const *workers,
     workers[i]->incoming_accepts = channels[i];
   acceptor->accept_targets = channels;
   acceptor->accept_target_count = count;
+  return 0;
+}
+
+int rn_set_accept_limiter(rn_reactor *r, ln_rl *limiter, uint32_t lane) {
+  if (!r || !limiter || lane >= limiter->workers || limiter->rule_count != 1 ||
+      limiter->rules[0].kind != LN_RL_KEYED)
+    return -EINVAL;
+  if (r->started || r->polled || r->outstanding || r->accept_limiter ||
+      r->free_connection_count != r->config.max_connections)
+    return -EBUSY;
+  r->accept_limiter = limiter;
+  r->accept_lane = lane;
   return 0;
 }
 
@@ -829,6 +846,7 @@ static void rn_completed(rn_reactor *r, rn_operation *op, DWORD bytes,
       SOCKET listener_socket = l->socket;
       int one = 1;
       int option_failure = 0;
+      int limited = 0;
       if (setsockopt(c->socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
                      (const char *)&listener_socket,
                      sizeof(listener_socket)) == SOCKET_ERROR ||
@@ -836,11 +854,26 @@ static void rn_completed(rn_reactor *r, rn_operation *op, DWORD bytes,
                      sizeof(one)) == SOCKET_ERROR) {
         error = rn_error(WSAGetLastError());
         option_failure = 1;
-      } else if (!r->accept_target_count &&
+      }
+      if (!error && r->accept_limiter) {
+        struct sockaddr_storage peer;
+        int peer_length = sizeof(peer);
+        uint8_t key[16];
+        int length = getpeername(c->socket, (struct sockaddr *)&peer,
+                                 &peer_length) == SOCKET_ERROR
+                         ? -rn_error(WSAGetLastError()) : rn_raw_peer(&peer, key);
+        uint64_t now = rn_now_ms();
+        limited = length < 0 || !now || ln_rl_acquire(r->accept_limiter,
+                  r->accept_lane, 0, 0, key,
+                  (size_t)(length < 0 ? 0 : length), now) != 0;
+      }
+      if (!error && !limited && !r->accept_target_count &&
                  CreateIoCompletionPort((HANDLE)c->socket, r->port, 0, 0) ==
                      NULL)
         error = rn_error(GetLastError());
-      if (error) {
+      if (limited) {
+        rn_close_native(r, index);
+      } else if (error) {
         uint32_t flags = RN_SETUP_ERROR;
         int pending = 0, pending_size = sizeof(pending);
         if (option_failure &&

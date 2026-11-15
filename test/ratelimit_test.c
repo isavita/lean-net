@@ -115,6 +115,18 @@ int main(void) {
   free(oversized_key);
   ln_rl_free(extended);
 
+  /* The accept filter uses the same keyed table with raw peer IP bytes.
+   * Both listener lanes share one budget; a second IP has its own quota. */
+  ln_rl *accepts = NULL;
+  const uint32_t accept_rule[1][5] = {{1, 60000, 2, LN_RL_KEYED, 1}};
+  const uint8_t ip_a[4] = {127, 0, 0, 1}, ip_b[4] = {127, 0, 0, 2};
+  REQUIRE(ln_rl_create(accept_rule, 1, 2, 1024, RANDOM, 0, &accepts) == 0);
+  REQUIRE(ln_rl_acquire(accepts, 0, 0, 0, ip_a, 4, 0) == 0);
+  REQUIRE(ln_rl_acquire(accepts, 1, 0, 0, ip_a, 4, 0) == 0);
+  REQUIRE(ln_rl_acquire(accepts, 0, 0, 0, ip_a, 4, 0) != 0);
+  REQUIRE(ln_rl_acquire(accepts, 1, 0, 0, ip_b, 4, 0) == 0);
+  ln_rl_free(accepts);
+
   /* Packed keyed timestamps never wrap into a fresh budget. Recreate the
    * limiter before the horizon; this instance fails closed instead. */
   ln_rl *horizon = NULL;

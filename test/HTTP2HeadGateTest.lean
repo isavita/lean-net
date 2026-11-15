@@ -154,6 +154,79 @@ private def canceledHead : IO Unit := do
   check (step.error.isNone && step.consumed == input.size) "reset after head failed"
   check (step.heads.isEmpty && step.requests.isEmpty) "canceled head reached admission"
 
+private def fragmentedRejectionDrain : IO Unit := do
+  let config : Connection.Config := { headGate := true }
+  let connection ← connect config
+  let (_, siblingBlock) ← hp (HPACK.encode HPACK.Context.new (head "/sibling"))
+  let sibling ← wire ⟨1, 5, 1, siblingBlock⟩
+  let siblingStep := connection.feedSlice sibling 0 sibling.size
+  let (connection, _, siblingEvents) ← ok (siblingStep.connection.admitHead 1)
+  check (siblingEvents.size == 1 && connection.canRespond 1)
+    "sibling request did not remain active"
+  let (_, block) ← hp (HPACK.encode HPACK.Context.new (head "/reject"))
+  let split := block.size / 2
+  let first ← wire ⟨1, 0, 3, block.extract 0 split⟩
+  let pending := connection.feedSlice first 0 first.size
+  check (pending.error.isNone && pending.heads.isEmpty && pending.connection.hasPartialInput)
+    "fragmented rejected head was admitted before END_HEADERS"
+  let last ← wire ⟨9, 4, 3, block.extract split block.size⟩
+  let completed := pending.connection.feedSlice last 0 last.size
+  check (completed.error.isNone && completed.heads.size == 1 &&
+      !completed.connection.hasPartialInput)
+    "completed header block retained its assembly"
+  let (connection, rejection) ← ok (completed.connection.rejectHead 3 429)
+  let frames ← frames rejection
+  check (frames.size == 2 && frames[0]!.kind == 1 && frames[0]!.flags == 5 &&
+      frames[1]!.kind == 3 && !connection.hasAdmittedStream 3 &&
+      connection.activeRequestIds == #[1] && !connection.hasPartialInput)
+    "rejection emitted a reset before terminal HEADERS or retained stream state"
+  let reset ← wire ⟨3, 0, 3, ByteArray.mk #[0, 0, 0, 8]⟩
+  let resetStep := connection.feedSlice reset 0 reset.size
+  check (resetStep.error.isNone && resetStep.peerResets.isEmpty &&
+      resetStep.connection.activeRequestIds == #[1])
+    "late peer reset after head rejection resurrected an exchange"
+  let goAway ← wire ⟨7, 0, 0, ByteArray.mk #[0, 0, 0, 0, 0, 0, 0, 0]⟩
+  let peerDrain := resetStep.connection.feedSlice goAway 0 goAway.size
+  check (peerDrain.error.isNone && peerDrain.connection.canRespond 1 &&
+      !peerDrain.connection.drainComplete)
+    "peer GOAWAY after rejection discarded the sibling"
+  let (draining, _) ← ok peerDrain.connection.beginGoAway
+  let (drained, _) ← ok (draining.queueResponse 1 {})
+  check (drained.drainComplete) "accepted sibling did not complete the GOAWAY drain"
+  let setup := "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toUTF8.append
+    (← wire ⟨4, 0, 0, ByteArray.empty⟩)
+  let ready := (Machine.State.new config).feedSlice setup 0 setup.size
+  let headWire ← wire ⟨1, 4, 1, block⟩
+  let paused := ready.state.feedSlice headWire 0 headWire.size
+  let rejected := paused.state.rejectHead 1 429
+  check (rejected.actions.any (fun | .responseAborted 1 .error => true | _ => false) &&
+      !rejected.state.hasAdmittedStream 1)
+    "head rejection did not emit the dispatch cleanup action"
+
+private def rejectedHeadFlood : IO Unit := do
+  let config : Connection.Config :=
+    { headGate := true, maxLocalResetsPerWindow := 1, resetWindowMs := 1000 }
+  let connection ← connect config
+  let (_, siblingBlock) ← hp (HPACK.encode HPACK.Context.new (head "/sibling"))
+  let sibling ← wire ⟨1, 5, 1, siblingBlock⟩
+  let sibling := connection.feedSlice sibling 0 sibling.size
+  let (connection, _, events) ← ok (sibling.connection.admitHead 1)
+  check (events.size == 1 && connection.canRespond 1) "flood test sibling was lost"
+  let (_, rejectedBlock) ← hp (HPACK.encode HPACK.Context.new (head "/reject"))
+  let firstWire ← wire ⟨1, 4, 3, rejectedBlock⟩
+  let first := connection.feedSlice firstWire 0 firstWire.size
+  let (connection, firstReply) ← ok (first.connection.rejectHead 3 429)
+  check ((← frames firstReply).size == 2 && !connection.draining)
+    "first rejected head exceeded the configured reset budget"
+  let secondWire ← wire ⟨1, 4, 5, rejectedBlock⟩
+  let second := connection.feedSlice secondWire 0 secondWire.size
+  let (connection, secondReply) ← ok (second.connection.rejectHead 5 429)
+  let output ← frames secondReply
+  check (output.size == 3 && output[0]!.kind == 1 && output[0]!.flags == 5 &&
+      output[1]!.kind == 3 && output[2]!.kind == 7 &&
+      connection.canRespond 1 && !connection.drainComplete)
+    "gated rejection flood did not cap resets while preserving the sibling"
+
 private def ungated : IO Unit := do
   let connection ← connect {}
   let (_, block) ← hp (HPACK.encode HPACK.Context.new (head "/plain"))
@@ -191,6 +264,8 @@ def main : IO Unit := do
   immediateHeadOutcomes
   resetWithoutOutputTracking
   canceledHead
+  fragmentedRejectionDrain
+  rejectedHeadFlood
   ungated
   http1Limit
   IO.println "HTTP/2 head gate and per-request body limit tests passed"

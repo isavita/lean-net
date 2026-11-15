@@ -109,6 +109,7 @@ jobs:
         run: |
           lake env ${{ matrix.python }} tls/test/test_tls_gateway.py -v
           lake env ${{ matrix.python }} tls/test/test_tls_gateway_e2e.py -v
+          lake env ${{ matrix.python }} tls/test/test_tls_connection_rate.py -v
       - name: Production TLS policy (mTLS, OCSP, ciphers, curl matrix)
         run: lake env ${{ matrix.python }} tls/test/test_tls_production.py -v
       - name: HTTP/2 frame isolation, priorities, push and TLS acceptance

@@ -52,6 +52,9 @@ lean_exe «lean-net-echo» where
 lean_exe «lean-net-http1-perf» where
   root := `test.HTTP1Perf
 
+lean_exe «lean-net-gate-perf» where
+  root := `test.GatePerf
+
 lean_exe «lean-net-ffi-live» where
   root := `test.FFILive
 
@@ -187,6 +190,7 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   let backend := if System.Platform.isWindows then "reactor_windows.c" else "reactor_posix.c"
   let native ← inputTextFile (pkg.dir / "c" / backend)
   let mut native := native.zipWith (fun source _ => source) reactorHeader
+  native := native.zipWith (fun source _ => source) rateLimit
   native := native.zipWith (fun source _ => source) transportImpl
   native := native.zipWith (fun source _ => source) fileHeader
   native := native.zipWith (fun source _ => source) fileInternal

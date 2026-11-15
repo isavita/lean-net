@@ -81,7 +81,7 @@ static uint64_t ln_rl_siphash(uint64_t k0, uint64_t k1, const uint8_t *data, siz
 }
 
 /* specs: per rule {tokens, period_ms, burst, kind, scopes}. random: 16 bytes. */
-static int ln_rl_create(const uint32_t (*specs)[5], uint32_t rule_count, uint32_t workers,
+static inline int ln_rl_create(const uint32_t (*specs)[5], uint32_t rule_count, uint32_t workers,
                         uint32_t keyed_slots, const uint8_t random[16], uint64_t now_ms, ln_rl **out) {
   *out = NULL;
   if (!specs || !random || !rule_count || rule_count > 1024 || !workers || workers > 256 ||
@@ -154,7 +154,7 @@ static int ln_rl_create(const uint32_t (*specs)[5], uint32_t rule_count, uint32_
   return 0;
 }
 
-static void ln_rl_free(ln_rl *l) {
+static inline void ln_rl_free(ln_rl *l) {
   if (!l) return;
   free(l->counter_storage); free(l->slots); free(l->leases); free(l->bucket_storage); free(l->rules); free(l);
 }

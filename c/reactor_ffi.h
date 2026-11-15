@@ -54,6 +54,13 @@ lean_object *shim_reactor_set_accept_targets(uint64_t handle, b_lean_obj_arg han
     free(workers);
     return rn_io_number(rc);
 }
+lean_object *shim_reactor_set_accept_limiter(uint64_t handle, uint64_t limiter,
+                                            uint32_t lane) {
+    if (!handle || !limiter || handle > INT64_MAX || limiter > INT64_MAX)
+        return rn_io_number(-EINVAL);
+    return rn_io_number(rn_set_accept_limiter(rn_handle(handle),
+        (ln_rl *)(uintptr_t)limiter, lane));
+}
 lean_object *shim_reactor_socket_new(uint64_t handle) {
     if (handle == 0) return rn_io_number(-EINVAL);
     uint64_t token = 0;
