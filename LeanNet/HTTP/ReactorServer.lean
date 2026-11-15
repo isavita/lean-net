@@ -2,6 +2,7 @@ import Std.Data.HashMap
 import LeanNet.Reactor.Basic
 import LeanNet.HTTP1.Handlers
 import LeanNet.HTTP2.Machine
+import LeanNet.HTTP2.Upgrade
 import LeanNet.HTTP.WorkerPool
 import LeanNet.HTTP.Transport
 import LeanNet.HTTP.Observability
@@ -47,6 +48,9 @@ structure ReactorServerConfig where
       generate one and inject it into the application request. The trace-id
       is recorded in access logs. -/
   tracing : Bool := true
+  /-- Accept HTTP/1.1 `Upgrade: h2c` on cleartext connections (RFC 7540
+      §3.2). Never offered over TLS, where ALPN selects h2. -/
+  h2cUpgrade : Bool := true
 
 namespace ReactorServer
 
@@ -157,6 +161,8 @@ private structure Client where
   retirementOutcome : Option Observability.Outcome := none
   /-- Peer IP text, captured once at admission when observability is on. -/
   remote : ByteArray := ByteArray.empty
+  /-- Accepted h2c upgrade awaiting its 101 write barrier. -/
+  h2cUpgrade : Option (ByteArray × HTTP2.RequestHead × RequestHead) := none
 
 private structure WorkerState where
   clients : Std.HashMap Reactor.SocketId Client := {}
@@ -551,6 +557,18 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
       if !(← driver.startObservation id requestId (some head) machine.startedAt) then
         driver.closeNow id
         return
+      let h2c := if driver.config.h2cUpgrade && !driver.transport.secure && !machine.isStopping then
+          HTTP2.Upgrade.candidate head framing driver.config.http2.maxRequestBodyBytes
+        else none
+      if let some (settings, h2head) := h2c then
+        -- Observe the request once, as HTTP/2 stream 1, after the switch.
+        driver.cancelRequest id
+        let some client ← driver.client? id | return
+        if client.retired then return
+        driver.put id { client with h2cUpgrade := some (settings, h2head, head) }
+        let reply : Reply := { response := { status := 101, headers := #[{ name := "upgrade", value := "h2c".toUTF8 }] } }
+        driver.applyStep id (machine.decideHead requestId (.upgrade reply))
+        return
       let decision ← try
           if metricTarget driver head.target then pure (.accept none)
           else driver.handlers.onHeaders head framing
@@ -578,7 +596,13 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
       let .http1 machine := client.protocol | return
       driver.applyStep id (machine.respond requestId (limitedReply driver.config reply))
     | .upgraded _ =>
-      if client.pipe.isNone then driver.closeNow id
+      if client.h2cUpgrade.isSome then
+        -- The 101 barrier completed; `pump` switches this client to HTTP/2.
+        let state ← driver.state.get
+        let machine := ((HTTP2.Machine.State.new driver.config.http2).setTime state.now.toNat).setDate state.date
+        driver.put id { client with protocol := .http2 machine, kick := true, finishSent := false }
+        driver.setReading id true
+      else if client.pipe.isNone then driver.closeNow id
       else
         driver.put id { client with protocol := .raw, kick := true, finishSent := false }
         driver.setReading id true
@@ -863,6 +887,17 @@ private def Driver.detectProtocol (driver : Driver) (id : Reactor.SocketId)
     driver.consume id consumed
     let state ← driver.state.get
     let some current := state.clients[id]? | return
+    if matched >= 16 then
+      -- "PRI * HTTP/2.0\r\n" is never a valid HTTP/1 request: this peer speaks
+      -- HTTP/2 with a corrupt preface. Let the HTTP/2 machine reject it with
+      -- GOAWAY(PROTOCOL_ERROR) (RFC 9113 §3.4) instead of an HTTP/1 error.
+      let machine := ((HTTP2.Machine.State.new driver.config.http2).setTime state.now.toNat).setDate state.date
+      driver.put id { current with protocol := .http2 machine, kick := true }
+      driver.applyH2Step id machine.start
+      if let some client ← driver.client? id then
+        if let .http2 machine := client.protocol then
+          driver.applyH2Step id (machine.feedSlice preface 0 matched)
+      return
     let client := normalizedInput current
     let prefixChunk : InputChunk := { view := (ByteSlice.full preface).take matched, arrived := chunk.arrived }
     let input := if matched == 0 then client.inputFront else prefixChunk :: client.inputFront
@@ -917,6 +952,10 @@ private def Driver.pump (driver : Driver) (id : Reactor.SocketId) : IO Unit := d
   unless ← id.isLive driver.reactor do
     driver.nativeGone id
     return
+  if let some client ← driver.client? id then
+    if let (some (settings, h2head, head), .http2 machine) := (client.h2cUpgrade, client.protocol) then
+      driver.put id { client with h2cUpgrade := none }
+      driver.applyH2Step id (machine.upgrade settings h2head head)
   for _ in [:driver.config.workPerClient] do
     let some current ← driver.client? id | return
     if current.closing then return

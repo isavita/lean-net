@@ -129,6 +129,9 @@ private def outputReply (state : State) (wire : EncodedFileResponse) (after : Af
     state := { state with phase := .output, outputId := id, afterOutput := after }
     actions := [.readEnabled false, .writeObserved id (observation state parts ranges status true) waitForWrite] }
 
+/-- True once graceful shutdown began; new upgrades are no longer accepted. -/
+def State.isStopping (state : State) : Bool := state.stopping
+
 private def fail (state : State) (status : Nat) : Step :=
   let response : Response := { status }
   match response.encodeFor (context state) { forceClose := true } with

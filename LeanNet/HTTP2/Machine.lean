@@ -224,6 +224,18 @@ def State.start (state : State) : Step :=
     | .error message => fatal state ⟨.internalError, .connection, message⟩
     | .ok () => { state := { state with started := true }, actions := writes #[state.connection.settingsFrame] }
 
+/-- Begin HTTP/2 after an accepted `Upgrade: h2c` 101: send server SETTINGS,
+    apply the client's HTTP2-Settings and deliver the request as stream 1. -/
+def State.upgrade (state : State) (settings : ByteArray) (head : RequestHead)
+    (http1Head : HTTP1.RequestHead) : Step :=
+  let initial := state.start
+  if initial.state.closing then initial
+  else match initial.state.connection.upgrade settings head http1Head with
+    | .error error => fatal initial.state error
+    | .ok (connection, started, requests) =>
+      let result := connectionStep initial.state { connection, requests, started }
+      { result with actions := initial.actions ++ result.actions }
+
 def State.feedSlice (state : State) (bytes : ByteArray) (offset length : Nat) : Step := Id.run do
   if state.closing then return { state }
   let initial := state.start

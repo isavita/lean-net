@@ -452,6 +452,25 @@ private def settings (connection : Connection) (frame : Frame) : Except Protocol
       connection := { connection with peerNoPriorities := value == 1 }
   return ({ connection with peerSettings := true }, ← wire ⟨4, 1, 0, ByteArray.empty⟩)
 
+/-- RFC 7540 §3.2 cleartext upgrade. The client's HTTP2-Settings payload is
+    applied as its first SETTINGS (implicitly acknowledged, so no ACK is sent)
+    and the upgraded request becomes stream 1, half-closed (remote). The
+    client's connection preface and an explicit SETTINGS frame must follow. -/
+def Connection.upgrade (connection : Connection) (settingsPayload : ByteArray) (head : RequestHead)
+    (http1Head : HTTP1.RequestHead) : Except ProtocolError (Connection × Array RequestStarted × Array RequestEvent) := do
+  if connection.prefaceRead != 0 || connection.highestStream != 0 || connection.peerSettings then
+    throw (connError .internalError "upgrade requires a fresh connection")
+  if settingsPayload.size % 6 != 0 then throw (connError .protocolError "invalid HTTP2-Settings")
+  let (connection, _) ← settings connection ⟨4, 0, 0, settingsPayload⟩
+  let connection := { connection with peerSettings := false }
+  let stream ← Stream.new 1 connection.peerInitialWindow defaultWindow
+  let (stream, _) ← stream.apply .server (.headers .inbound true)
+  let entry : Exchange := { stream, head := some head, startedAt := connection.now,
+                            priority := requestPriority head.headers }
+  let connection := { connection with highestStream := 1, streams := connection.streams.push entry }
+  let (connection, events) ← finishRequest connection entry
+  return (connection, #[⟨1, http1Head, connection.now⟩], events)
+
 private def activeRequests (connection : Connection) : Nat :=
   (connection.streams.filter (fun entry => entry.stream.id.toNat % 2 == 1)).size
 

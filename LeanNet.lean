@@ -28,6 +28,7 @@ import LeanNet.HTTP2.Stream
 import LeanNet.HTTP2.Priority
 import LeanNet.HTTP2.Push
 import LeanNet.HTTP2.Machine
+import LeanNet.HTTP2.Upgrade
 import LeanNet.HTTP2.Connection
 import LeanNet.HTTP2.Server
 import LeanNet.HTTP.Static

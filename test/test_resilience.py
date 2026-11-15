@@ -347,6 +347,68 @@ class AccessLogAndTracing(ServerCase):
         self.assertNotEqual(first["trace_id"], third["trace_id"])
 
 
+class H2CUpgrade(ServerCase):
+    args = ["--workers", "1"]
+    # Base64url SETTINGS payload: MAX_CONCURRENT_STREAMS=100, INITIAL_WINDOW=65535.
+    SETTINGS = b"AAMAAABkAAQAAP__"
+
+    def test_curl_upgrade_serves_http2(self):
+        curl = os.environ.get("LEAN_NET_TEST_CURL", "curl")
+        result = subprocess.run([curl, "-sS", "--noproxy", "*", "--http2", "-v",
+                                 "-w", "\n%{http_version} %{http_code}", f"http://127.0.0.1:{self.port}/"],
+                                capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b"101 Switching Protocols", result.stderr)
+        self.assertTrue(result.stdout.endswith(b"Hello from lean-net!\n\n2 200"), result.stdout)
+
+    def test_raw_upgrade_switches_after_101(self):
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+            sock.sendall(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade, HTTP2-Settings\r\n"
+                         b"Upgrade: h2c\r\nHTTP2-Settings: " + self.SETTINGS + b"\r\n\r\n")
+            data = b""
+            while b"\r\n\r\n" not in data:
+                data += sock.recv(4096)
+            head, _, rest = data.partition(b"\r\n\r\n")
+            self.assertTrue(head.startswith(b"HTTP/1.1 101 "), head)
+            self.assertIn(b"upgrade: h2c", head.lower())
+            # Server SETTINGS must be the first HTTP/2 frame.
+            sock.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" + b"\x00\x00\x00\x04\x00\x00\x00\x00\x00")
+            frames, buffer, deadline = [], rest, time.monotonic() + 5
+            while time.monotonic() < deadline and not any(k == 0 and f & 1 and sid == 1 for k, f, sid, _ in frames):
+                while len(buffer) >= 9 and len(buffer) >= 9 + int.from_bytes(buffer[:3], "big"):
+                    length = int.from_bytes(buffer[:3], "big")
+                    frames.append((buffer[3], buffer[4], int.from_bytes(buffer[5:9], "big") & 0x7fffffff, buffer[9:9 + length]))
+                    buffer = buffer[9 + length:]
+                if any(k == 0 and f & 1 and sid == 1 for k, f, sid, _ in frames):
+                    break
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                buffer += chunk
+            self.assertEqual(frames[0][0], 4, "first frame after 101 must be SETTINGS")
+            self.assertTrue(any(k == 1 and sid == 1 for k, _, sid, _ in frames), "stream 1 HEADERS")
+            body = b"".join(p for k, _, sid, p in frames if k == 0 and sid == 1)
+            self.assertEqual(body, b"Hello from lean-net!\n")
+
+    def test_ineligible_upgrades_stay_on_http11(self):
+        cases = [
+            # Missing HTTP2-Settings nomination in Connection.
+            b"GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: h2c\r\nHTTP2-Settings: " + self.SETTINGS + b"\r\n",
+            # Invalid base64url settings.
+            b"GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade, HTTP2-Settings\r\nUpgrade: h2c\r\nHTTP2-Settings: !!!\r\n",
+            # Request with a body.
+            b"POST / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade, HTTP2-Settings\r\nUpgrade: h2c\r\nHTTP2-Settings: " + self.SETTINGS + b"\r\nContent-Length: 1\r\n\r\nx",
+        ]
+        for raw in cases:
+            with self.subTest(raw=raw[:60]):
+                if not raw.endswith(b"x"):
+                    raw += b"\r\n"
+                with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+                    sock.sendall(raw)
+                    status, _, _ = read_response(sock)
+                    self.assertIn(status, (200, 404))
+
+
 @unittest.skipIf(sys.platform == "win32", "POSIX signals")
 class Signals(ServerCase):
     args = ["--workers", "2", "--max-clients", "64"]
