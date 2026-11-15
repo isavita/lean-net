@@ -4,6 +4,17 @@ import LeanNet.HTTP.Static.Catalog
 
 namespace LeanNetTLS.ReactorServer
 
+/-- When certificate reloading is configured (including interval zero), each
+    SIGHUP asks the off-loop loader to publish a fresh certificate generation.
+    Existing sessions keep their generation; failures keep the last valid one. -/
+private def withReloadSignal (bundle : Reactor.Bundle) (tls : Reactor.Config)
+    (http : LeanNet.HTTP.ReactorServerConfig) : LeanNet.HTTP.ReactorServerConfig :=
+  if tls.reload.isNone then http
+  else { http with onReload := do
+    http.onReload
+    let _ ← bundle.requestReload
+    pure () }
+
 /-- TLS encrypts file regions on its dedicated worker, using the catalog's
     resident immutable source while preserving normal ciphertext fences. -/
 def serveStaticRoot (root : System.FilePath) (tls : Reactor.Config)
@@ -16,7 +27,7 @@ def serveStaticRoot (root : System.FilePath) (tls : Reactor.Config)
         (fun _ maxClients reactor use => do
           let bound ← catalog.bind reactor
           Reactor.withWorker bundle tls reactor maxClients fun transport => do
-            use transport (← bound.handlers)) http host port
+            use transport (← bound.handlers)) (withReloadSignal bundle tls http) host port
 
 /-- Build independent application handlers on each reactor owner, sharing only
     the sealed certificate bundle across the dedicated TLS workers. -/
@@ -26,7 +37,7 @@ def serveFactory (factory : Nat → IO LeanNet.HTTP1.Handlers)
   Reactor.withBundle tls fun bundle =>
     LeanNet.HTTP.ReactorServer.serveFactoryWithTransport
       (fun _ maxClients reactor use => Reactor.withWorker bundle tls reactor maxClients use)
-      factory http host port
+      factory (withReloadSignal bundle tls http) host port
 
 /-- Diagnostics are scoped to the same owner as its application callbacks. -/
 def serveFactoryWithDiagnostics (factory : Nat → IO Reactor.Stats → IO LeanNet.HTTP1.Handlers)
@@ -38,7 +49,7 @@ def serveFactoryWithDiagnostics (factory : Nat → IO Reactor.Stats → IO LeanN
         Reactor.withWorkerStats bundle tls reactor maxClients fun transport diagnostics => do
           let handlers ← factory workerId diagnostics
           use transport handlers)
-      http host port
+      (withReloadSignal bundle tls http) host port
 
 /-- Compatibility callbacks retain one worker's ownership. -/
 def serveWithHandlers (handlers : LeanNet.HTTP1.Handlers)

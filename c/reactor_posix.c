@@ -49,6 +49,8 @@ extern int sendfile(int, int, off_t, off_t *, struct sf_hdtr *, int);
 #define RN_READ_BYTES_BUDGET 65536u
 #define RN_WRITE_BUDGET 16u
 #define RN_ACCEPT_BUDGET 64u
+/* Descriptor/memory exhaustion pauses listeners instead of failing the loop. */
+#define RN_ACCEPT_BACKOFF_MS 100u
 #define RN_GENERATION_MAX ((uint32_t)INT32_MAX)
 
 struct rn_waker {
@@ -126,6 +128,7 @@ struct rn_reactor {
     int pending_wait_error;
     uint32_t closed_head, closed_tail;
     uint8_t has_polled;
+    uint64_t accept_backoff_until;
 #if defined(__APPLE__)
     rn_accept_queue **accept_targets;
     uint32_t accept_target_count, next_accept_target;
@@ -234,6 +237,18 @@ static int rn_interest(rn_reactor *r, uint32_t index, uint8_t mask) {
     if (mask & 2u) event.events |= EPOLLOUT;
     event.data.u64 = token;
     int operation = c->interest == 0 ? EPOLL_CTL_ADD : mask == 0 ? EPOLL_CTL_DEL : EPOLL_CTL_MOD;
+#ifdef EPOLLEXCLUSIVE
+    /* Listener interest only alternates between ADD and DEL (never MOD), the
+     * one pattern EPOLLEXCLUSIVE permits. It prevents a thundering herd if an
+     * application shares one listening descriptor between several loops. */
+    if (operation == EPOLL_CTL_ADD && (c->state == 2 || c->state == 3)) {
+        struct epoll_event exclusive = event;
+        /* EPOLLEXCLUSIVE accepts only IN/OUT/ET/WAKEUP; RDHUP is meaningless here. */
+        exclusive.events = EPOLLIN | EPOLLEXCLUSIVE;
+        if (epoll_ctl(r->queue_fd, operation, c->fd, &exclusive) == 0) { c->interest = mask; return 0; }
+        if (errno != EINVAL) return -errno;
+    }
+#endif
     if (epoll_ctl(r->queue_fd, operation, c->fd, &event) < 0) return -errno;
 #else
     struct kevent changes[2];
@@ -644,6 +659,9 @@ static int rn_adopt_accepts(rn_reactor *r) {
     return 0;
 }
 #endif
+static int rn_accept_exhausted(int e) {
+    return e == EMFILE || e == ENFILE || e == ENOBUFS || e == ENOMEM;
+}
 static int rn_accept_ready(rn_reactor *r, uint32_t index) {
     rn_conn *listener = &r->connections[index];
     uint64_t listener_token = rn_token(index, listener->generation);
@@ -662,6 +680,16 @@ static int rn_accept_ready(rn_reactor *r, uint32_t index) {
         if (fd < 0) {
             int e = errno;
             if (e == EAGAIN || e == EWOULDBLOCK) return 0;
+            if (rn_accept_exhausted(e)) {
+                /* Level-triggered readiness would otherwise spin on the same
+                 * backlog entry. Leave pending clients queued in the kernel,
+                 * stop watching the listener and retry after a short backoff. */
+                r->accept_backoff_until = rn_now_ms() + RN_ACCEPT_BACKOFF_MS;
+                rn_pause(r, index);
+                int error = rn_interest(r, index, 0);
+                if (error) return error;
+                return rn_emit(r, RN_ERROR, listener_token, 0, 0, 0, 0, -e, RN_ACCEPT_ERROR);
+            }
             return rn_emit(r, RN_ERROR, listener_token, 0, 0, 0, 0, -e, RN_ACCEPT_ERROR);
         }
         int error = rn_nonblocking(fd);
@@ -957,7 +985,8 @@ static int rn_resume_paused(rn_reactor *r) {
             c->paused = 0; r->paused_connections[position] = r->paused_connections[--r->paused_count];
             continue;
         }
-        int enabled = c->state == 3 ? r->free_connection_count != 0 : available && !c->read_disabled;
+        int enabled = c->state == 3 ? r->free_connection_count != 0 && rn_now_ms() >= r->accept_backoff_until
+                                    : available && !c->read_disabled;
 #if defined(__APPLE__)
         if (c->state == 3 && r->accept_target_count) {
             int error = c->pending_accept_fd >= 0 ? rn_forward_accept(r, c) : 0;
@@ -1025,6 +1054,14 @@ int rn_step(rn_reactor *r, int timeout_ms) {
     rn_due_timers(r, rn_now_ms());
     error = rn_resume_paused(r); if (error) return rn_step_failed(r, error);
     if (r->event_count) timeout_ms = 0;
+    if (r->accept_backoff_until) {
+        uint64_t now = rn_now_ms();
+        if (now >= r->accept_backoff_until) r->accept_backoff_until = 0;
+        else {
+            int remaining = (int)(r->accept_backoff_until - now);
+            if (timeout_ms < 0 || remaining < timeout_ms) timeout_ms = remaining;
+        }
+    }
     if (r->active_timers) {
         uint32_t tick_ms = r->config.timer_tick_ms;
         int until_tick = (int)(tick_ms - rn_now_ms() % tick_ms);

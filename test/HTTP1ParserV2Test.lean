@@ -86,6 +86,13 @@ private def reject (label wire : String) (limits : Limits := {}) (options : Pars
   | .error _ => pure ()
   | _ => throw (IO.userError s!"{label}: malformed request accepted")
 
+private def rejectStatus (label wire : String) (status : Nat) (limits : Limits := {}) : IO Unit := do
+  match (Parser.new limits).feed wire.toUTF8 with
+  | .error message =>
+    check (Parser.errorStatus message == status)
+      s!"{label}: expected {status}, got {Parser.errorStatus message} ({message})"
+  | _ => throw (IO.userError s!"{label}: malformed request accepted")
+
 private def decisions : IO Unit := do
   let head := "POST / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 4\r\n\r\n".toUTF8
   let wire := head.append "dataNEXT".toUTF8
@@ -192,7 +199,23 @@ def main : IO Unit := do
   reject "fold framing ambiguity" "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\n 0\r\n\r\n" {} { allowObsFold := true }
   reject "folded field wire bound" folded { maxHeaderBytes := folded.toUTF8.size - 1 } { allowObsFold := true }
   reject "HTTP/0.9" "GET /\r\n"
-  reject "HTTP/1.2" "GET / HTTP/1.2\r\nHost: x\r\n\r\n"
+  -- RFC 9110 §6.2: a higher HTTP/1 minor version is processed as HTTP/1.1.
+  match (Parser.new).feed "GET / HTTP/1.2\r\nHost: x\r\n\r\n".toUTF8 with
+  | .complete request _ => check (request.version == "HTTP/1.1") "HTTP/1.2 is served as HTTP/1.1"
+  | _ => throw (IO.userError "HTTP/1.2 was rejected")
+  rejectStatus "HTTP/2.0 major" "GET / HTTP/2.0\r\nHost: x\r\n\r\n" 505
+  rejectStatus "HTTP/3.0 absolute" "GET http://x/ HTTP/3.0\r\nHost: x\r\n\r\n" 505
+  rejectStatus "garbage version" "GET / HTTX/1.1\r\nHost: x\r\n\r\n" 400
+  rejectStatus "oversized content-length" "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 99\r\n\r\n" 413 { maxBodyBytes := 10 }
+  rejectStatus "oversized content-length with 100-continue" "POST / HTTP/1.1\r\nHost: x\r\nExpect: 100-Continue\r\nContent-Length: 99\r\n\r\n" 417 { maxBodyBytes := 10 }
+  rejectStatus "oversized chunked body" "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\nff\r\n" 413 { maxBodyBytes := 10 }
+  rejectStatus "oversized header block" ("GET / HTTP/1.1\r\nHost: x\r\nX: " ++ String.ofList (List.replicate 200 'a') ++ "\r\n\r\n") 431 { maxHeaderBytes := 100 }
+  rejectStatus "too many headers" "GET / HTTP/1.1\r\nHost: x\r\nA: 1\r\nB: 2\r\n\r\n" 431 { maxHeaderCount := 2 }
+  rejectStatus "oversized request line" ("GET /" ++ String.ofList (List.replicate 200 'a') ++ " HTTP/1.1\r\nHost: x\r\n\r\n") 414 { maxHeaderBytes := 100 }
+  rejectStatus "unknown transfer coding" "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\n\r\n" 501
+  rejectStatus "CL.TE smuggling" "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n" 400
+  rejectStatus "TE.TE obfuscation" "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: identity\r\n\r\n0\r\n\r\n" 400
+  rejectStatus "duplicate content-length" "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab" 400
   reject "HTTP/1.0 transfer coding" "POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
   reject "HTTP/1.1 missing host" "GET / HTTP/1.1\r\n\r\n"
   reject "HTTP/1.0 duplicate host" "GET / HTTP/1.0\r\nHost: a\r\nHost: b\r\n\r\n"

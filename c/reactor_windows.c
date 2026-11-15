@@ -134,6 +134,8 @@ struct rn_reactor {
   rn_accept_channel **accept_targets;
   uint32_t accept_target_count, accept_target_next;
   rn_accept_channel *incoming_accepts;
+  /* Descriptor/memory exhaustion pauses AcceptEx reposting for a short time. */
+  uint64_t accept_backoff_until;
 };
 #include "reactor_file_impl.h"
 
@@ -739,8 +741,12 @@ static void rn_post_accept(rn_reactor *r, uint32_t listener) {
   c->socket = WSASocketW(address.ss_family, SOCK_STREAM, IPPROTO_TCP, NULL, 0,
                          WSA_FLAG_OVERLAPPED);
   if (c->socket == INVALID_SOCKET) {
+    int socket_error = rn_error(WSAGetLastError());
+    if (socket_error == EMFILE || socket_error == ENFILE || socket_error == ENOBUFS ||
+        socket_error == ENOMEM)
+      r->accept_backoff_until = rn_now_ms() + 100;
     rn_emit(r, RN_ERROR, rn_token(listener, l->generation), 0, 0,
-            -rn_error(WSAGetLastError()), RN_ACCEPT_ERROR, 0, 0);
+            -socket_error, RN_ACCEPT_ERROR, 0, 0);
     c->state = RN_UNUSED;
     if (c->generation < RN_GENERATION_MAX)
       r->free_connections[r->free_connection_count++] = index;
@@ -764,6 +770,8 @@ static void rn_post_accept(rn_reactor *r, uint32_t listener) {
                              &op->overlapped);
   if (!result && WSAGetLastError() != ERROR_IO_PENDING) {
     int error = rn_error(WSAGetLastError());
+    if (error == EMFILE || error == ENFILE || error == ENOBUFS || error == ENOMEM)
+      r->accept_backoff_until = rn_now_ms() + 100;
     op->pending = 0;
     --c->pending;
     --l->pending;
@@ -779,8 +787,10 @@ static void rn_resume(rn_reactor *r) {
   while (position < r->paused_count) {
     uint32_t i = r->paused_connections[position];
     rn_connection *c = &r->connections[i];
-    if (c->state == RN_LISTENING && c->pending == 0)
-      rn_post_accept(r, i);
+    if (c->state == RN_LISTENING && c->pending == 0) {
+      if (rn_now_ms() >= r->accept_backoff_until)
+        rn_post_accept(r, i);
+    }
     else if (c->state == RN_CONNECTED) {
       if (c->write_head != RN_NONE && !r->writes[c->write_head].op.pending)
         rn_post_write(r, i);

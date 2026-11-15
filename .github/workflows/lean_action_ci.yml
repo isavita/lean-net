@@ -52,6 +52,7 @@ jobs:
           python3 test/test_transport_scheduler.py -v
           python3 test/test_http1_faults.py -v
           python3 test/test_http2_e2e.py -v
+          python3 test/test_resilience.py -v
       - name: Short deterministic protocol fuzz and controller invariants
         run: |
           lake build lean-net-protocol-fuzz

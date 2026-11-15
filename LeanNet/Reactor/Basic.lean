@@ -77,10 +77,19 @@ def SocketId.isLive (id : SocketId) (reactor : Reactor) : IO Bool := do
   if value > 1 then throw (IO.userError "invalid reactor connection liveness result")
   return value == 1
 
-/-- Peer failures reported by an accept operation do not invalidate the listener.
-    Resource exhaustion, configuration failures and invalid owned descriptors
-    remain fatal. Apply only after checking setup/close error flags. -/
+/-- Descriptor or kernel memory exhaustion while accepting. The native
+    reactor has already paused its listener and resumes after a short backoff;
+    pending clients stay in the kernel backlog instead of crashing the loop. -/
+def isAcceptExhaustion (code : Int) : IO Bool := do
+  let codes ← [LeanNet.FFI.errnoEmfile, LeanNet.FFI.errnoEnfile,
+    LeanNet.FFI.errnoEnobufs, LeanNet.FFI.errnoEnomem].mapM id
+  return codes.any (fun value => value != 0 && code == -(Int.ofNat value.toNat))
+
+/-- Peer failures and descriptor/memory exhaustion reported by an accept
+    operation do not invalidate the listener. Configuration failures and invalid
+    owned descriptors remain fatal. Apply only after checking setup/close flags. -/
 def isRecoverableAcceptError (code : Int) : IO Bool := do
+  if ← isAcceptExhaustion code then return true
   if ← LeanNet.Errno.isInterrupted code then return true
   if ← LeanNet.Errno.isWouldBlock code then return true
   let codes ← [LeanNet.FFI.errnoEconnaborted, LeanNet.FFI.errnoEconnreset,
@@ -437,6 +446,13 @@ def Group.stopping (group : Group) : IO Bool := do
   if value > 1 then throw (IO.userError "invalid reactor group stop result")
   return value == 1
 
+/-- Process-wide count of SIGHUP deliveries observed by installed groups.
+    Control code compares it with the last value it served. Always zero on
+    Windows, which has no hang-up signal. -/
+def reloadRequests : IO UInt64 := do
+  let value ← checked "reactor reload requests" (← FFI.Reactor.groupReloadRequests)
+  return value
+
 /-- Workers must be joined before returning from this bracket. -/
 def withGroup (reactors : Array Reactor) (use : Group → IO α) : IO α := do
   let mut handles := #[]
@@ -465,6 +481,28 @@ def cpuCount : IO Nat := do
   let value ← checked "reactor cpu count" (← FFI.Reactor.cpuCount)
   if value == 0 then throw (IO.userError "reactor cpu count returned zero")
   return value.toNat
+
+/-- Pin the calling worker thread to the `index`-th CPU (modulo) of the
+    process's allowed CPU set. Returns the CPU, or `none` where the platform
+    offers no binding (macOS on Apple silicon). Call from the worker itself. -/
+def pinCurrentThread (index : Nat) : IO (Option Nat) := do
+  let raw := LeanNet.Errno.decode (← FFI.Reactor.pinCurrentThread index.toUInt32)
+  if raw >= 0 then return some raw.toNat
+  if raw == -(Int.ofNat (← LeanNet.FFI.errnoEopnotsupp).toNat) then return none
+  throw (← LeanNet.Errno.error "reactor pin worker" raw)
+
+/-- Resident set size of this process in bytes, if the platform reports it. -/
+def processResidentBytes : IO (Option Nat) := do
+  let raw := LeanNet.Errno.decode (← FFI.Reactor.processResidentBytes)
+  return if raw >= 0 then some raw.toNat else none
+
+/-- Open descriptors (POSIX) or kernel handles (Windows), if reported. -/
+def processOpenFds : IO (Option Nat) := do
+  let raw := LeanNet.Errno.decode (← FFI.Reactor.processOpenFds)
+  return if raw >= 0 then some raw.toNat else none
+
+/-- True once the process's installed worker group has been asked to stop. -/
+def processStopping : IO Bool := do return (← FFI.Reactor.processStopping) == 1
 
 def nowMs : IO UInt64 := FFI.Reactor.now
 

@@ -265,6 +265,46 @@ class TLSReload(unittest.TestCase):
                 time.sleep(.01)
             self.stop()
 
+    @unittest.skipIf(sys.platform == "win32", "SIGHUP is POSIX-only")
+    def test_public_cli_sighup_reload_without_polling(self):
+        self.assertTrue(PUBLIC_BINARY.is_file(), f"missing public TLS executable: {PUBLIC_BINARY}")
+        self.stop()
+        self.publish(1); self.port = unused_port()
+        self.server = subprocess.Popen([str(PUBLIC_BINARY), str(self.paths[0][0]), str(self.paths[0][1]),
+                                        str(self.port)], stdout=self.log, stderr=self.log)
+
+        def fingerprint():
+            with self.connect() as sock:
+                value = hashlib.sha256(sock.getpeercert(binary_form=True)).hexdigest()
+                sock.sendall(request(b"/", close=True)); reader = Reader(sock)
+                reply = reader.response(); reader.eof()
+                self.assertEqual(reply.status, 200)
+                return value
+
+        deadline = time.monotonic() + 15
+        while True:
+            if self.server.poll() is not None:
+                self.fail("public TLS startup failed: " + self.output())
+            try:
+                self.assertEqual(fingerprint(), self.certificates.fingerprints[0]); break
+            except (ConnectionError, OSError):
+                if time.monotonic() >= deadline: raise
+                time.sleep(.025)
+        # Without --reload-certs-ms nothing polls: the replacement stays unseen.
+        self.publish(2); time.sleep(.3)
+        self.assertEqual(fingerprint(), self.certificates.fingerprints[0])
+        with self.connect() as retained:
+            self.server.send_signal(signal.SIGHUP)
+            deadline = time.monotonic() + 8
+            while fingerprint() != self.rotated_fingerprints[0]:
+                if time.monotonic() >= deadline: self.fail("SIGHUP did not publish replacement certificate")
+                time.sleep(.01)
+            # An established connection survives the reload.
+            retained.sendall(request(b"/", close=True)); reader = Reader(retained)
+            self.assertEqual(reader.response().status, 200)
+        self.assertIsNone(self.server.poll())
+        self.stop()
+
     def test_hundred_rotations_keep_file_handles_and_retired_versions_flat(self):
         for _ in range(24): self.get()
         before = resource_count(self.server.pid)

@@ -117,6 +117,7 @@ jobs:
           python3 test/test_reactor_echo.py -v
           python3 test/test_http1_reactor.py -v
           python3 test/test_graceful_shutdown.py -v
+          python3 test/test_resilience.py -v
       - name: Worker echo and FFI setup ownership (Windows)
         if: runner.os == 'Windows'
         run: |

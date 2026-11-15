@@ -193,7 +193,12 @@ private def parseRequestLine (line : List UInt8) : Except String (String × Byte
       if schemeText == "http" || schemeText == "https" ||
           schemeRest.contains 91 || schemeRest.contains 93 then
         throw "invalid absolute request target"
-  if version != "HTTP/1.1".toUTF8.toList && version != "HTTP/1.0".toUTF8.toList then throw "unsupported HTTP version"
+  let digit := fun (c : UInt8) => c >= 48 && c <= 57
+  match version with
+  | [72, 84, 84, 80, 47, major, 46, minor] =>
+    if !digit major || !digit minor then throw "invalid HTTP version"
+    if major != 49 then throw "unsupported HTTP version"
+  | _ => throw "invalid HTTP version"
   let some methodText := String.fromUTF8? (bytes method) | throw "invalid method"
   return (methodText, bytes target, if version == "HTTP/1.0".toUTF8.toList then "HTTP/1.0" else "HTTP/1.1")
 
@@ -291,7 +296,15 @@ private def requestLineSpan (input : ByteArray) (start stop : Nat) : Except Stri
       !allSpan input start first tokenByte then throw "invalid request line"
   let version := if spanAscii input (second + 1) stop "HTTP/1.1" then "HTTP/1.1"
     else if spanAscii input (second + 1) stop "HTTP/1.0" then "HTTP/1.0" else ""
-  if version.isEmpty then throw "unsupported HTTP version"
+  let version ← if !version.isEmpty then pure version else
+    -- RFC 9112 §2.3: HTTP-version = "HTTP/" DIGIT "." DIGIT. A higher 1.x
+    -- minor is served as HTTP/1.1; another major version receives 505.
+    let digit := fun (c : UInt8) => c >= 48 && c <= 57
+    let vs := second + 1
+    if stop - vs == 8 && spanAscii input vs (vs + 5) "HTTP/" && digit input[vs + 5]! &&
+        input[vs + 6]! == 46 && digit input[vs + 7]! then
+      if input[vs + 5]! == 49 then pure "HTTP/1.1" else throw "unsupported HTTP version"
+    else throw "invalid HTTP version"
   let some method := String.fromUTF8? (input.extract start first) | throw "invalid method"
   if method == "CONNECT" || (input[first + 1]! != 47 && input[first + 1]! != 42) then
     return ← parseRequestLine (input.extract start stop).toList
@@ -306,6 +319,25 @@ private def requestLineSpan (input : ByteArray) (start stop : Nat) : Except Stri
     if !allSpan input targetStart second valid || !percentSpan input targetStart second then
       throw "invalid request target"
   return (method, input.extract targetStart second, version)
+
+private def asciiLowerBytes (bytes : ByteArray) : ByteArray :=
+  ⟨bytes.data.map fun c => if c >= 65 && c <= 90 then c + 32 else c⟩
+
+private def expectsContinue (version : String) (headers : Array Header) : Bool :=
+  version == "HTTP/1.1" && headers.any fun header =>
+    header.name == "expect" && asciiLowerBytes header.value == "100-continue".toUTF8
+
+/-- RFC 9110/9112 status for a request the parser rejected. Every rejection
+    still closes the connection: the remaining bytes are never reinterpreted. -/
+def Parser.errorStatus (message : String) : Nat :=
+  match message with
+  | "body limit exceeded" | "body wire limit exceeded" => 413
+  | "expectation body limit exceeded" => 417
+  | "request line limit exceeded" => 414
+  | "header limit exceeded" | "trailer limit exceeded" | "too many headers" | "too many trailers" => 431
+  | "unsupported transfer-encoding" => 501
+  | "unsupported HTTP version" => 505
+  | _ => 400
 
 private def inferFraming (version : String) (headers : Array Header) (limits : Limits) : Except String BodyFraming := do
   let hosts := headers.filter (·.name == "host")
@@ -332,7 +364,10 @@ private def inferFraming (version : String) (headers : Array Header) (limits : L
   for c in value do
     if c < 48 || c > 57 then throw "invalid content length"
     n := n * 10 + c.toNat - 48
-    if n > min limits.maxBodyBytes limits.maxBodyWireBytes then throw "body limit exceeded"
+    if n > min limits.maxBodyBytes limits.maxBodyWireBytes then
+      -- RFC 9110 §10.1.1: a client awaiting 100 Continue learns of the
+      -- refusal with 417 before it transmits the body.
+      throw (if expectsContinue version headers then "expectation body limit exceeded" else "body limit exceeded")
   return .contentLength n
 
 private inductive Stage where
@@ -423,7 +458,8 @@ private def charge (p : Parser) (count : Nat) : Except String Parser := do
     headBytes := p.headBytes + (if isHead then count else 0)
     trailerBytes := p.trailerBytes + (if isTrailer then count else 0)
     wireBytes := p.wireBytes + (if isBody then count else 0) }
-  if p.headBytes > p.limits.maxHeaderBytes then throw "header limit exceeded"
+  if p.headBytes > p.limits.maxHeaderBytes then
+    throw (match p.stage with | .requestLine => "request line limit exceeded" | _ => "header limit exceeded")
   if p.trailerBytes > p.limits.maxTrailerBytes then throw "trailer limit exceeded"
   if p.wireBytes > p.limits.maxBodyWireBytes then throw "body wire limit exceeded"
   return p
@@ -491,7 +527,12 @@ private def lineStep (p : Parser) (input : ByteArray) (start available : Nat) : 
     | .chunkLine => p.limits.maxChunkLineBytes
     | .trailers => p.limits.maxTrailerBytes
     | _ => p.limits.maxHeaderBytes
-  if p.lineBytes + count > lineLimit then return .fail "line limit exceeded" count
+  if p.lineBytes + count > lineLimit then
+    return .fail (match p.stage with
+      | .requestLine => "request line limit exceeded"
+      | .chunkLine => "chunk line limit exceeded"
+      | .trailers => "trailer limit exceeded"
+      | _ => "header limit exceeded") count
   let contentStop := if newline < stop then newline else stop
   if complete then
     if p.sawCR then return handleLine p p.line 0 p.line.size count

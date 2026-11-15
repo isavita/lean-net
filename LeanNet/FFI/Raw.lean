@@ -67,6 +67,10 @@ namespace LeanNet.FFI
 @[extern "shim_errno_enoprotoopt"] opaque errnoEnoprotoopt : IO UInt64
 @[extern "shim_errno_ehostdown"] opaque errnoEhostdown : IO UInt64
 @[extern "shim_errno_eopnotsupp"] opaque errnoEopnotsupp : IO UInt64
+@[extern "shim_errno_emfile"] opaque errnoEmfile : IO UInt64
+@[extern "shim_errno_enfile"] opaque errnoEnfile : IO UInt64
+@[extern "shim_errno_enobufs"] opaque errnoEnobufs : IO UInt64
+@[extern "shim_errno_enomem"] opaque errnoEnomem : IO UInt64
 
 /-- Toggle O_NONBLOCK on an existing socket; success is zero, failure -errno. -/
 @[extern "shim_set_nonblocking"] opaque setNonblocking (fd : Int64) (enabled : UInt8) : IO UInt64

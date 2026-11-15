@@ -359,17 +359,18 @@ class NormalAcceptance:
                 reader.eof()
 
     def test_malformed_and_truncated_requests(self):
-        requests = [b"GET /\r\n", b"GET / HTTP/1.2\r\nHost: x\r\n\r\n",
-                    b"POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
-                    b"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\ndata",
-                    b"GET / HTTP/1.1\r\nHost: x\r\nX: " + b"a" * 16384 + b"\r\n\r\n",
-                    b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\n\r\nda",
-                    b"GET / HTTP/1.1\r\nHost: incomplete"]
-        for data in requests:
+        # HTTP/1.2 is served as HTTP/1.1 (RFC 9110 §6.2); see the parser suite.
+        requests = [(b"GET /\r\n", 400), (b"GET / HTTP/2.0\r\nHost: x\r\n\r\n", 505),
+                    (b"POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n", 400),
+                    (b"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\ndata", 400),
+                    (b"GET / HTTP/1.1\r\nHost: x\r\nX: " + b"a" * 16384 + b"\r\n\r\n", 431),
+                    (b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\n\r\nda", 400),
+                    (b"GET / HTTP/1.1\r\nHost: incomplete", 400)]
+        for data, status in requests:
             with self.subTest(prefix=data[:80]), connect(self.port) as sock:
                 sock.sendall(data); sock.shutdown(socket.SHUT_WR)
                 reader = Reader(sock)
-                self.assertEqual(reader.response().status, 400)
+                self.assertEqual(reader.response().status, status)
                 reader.eof()
 
     def test_h2c_prior_knowledge_preserves_shared_route(self):

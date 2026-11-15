@@ -53,6 +53,10 @@ structure Worker where
       including handshakes which never published an application endpoint. -/
   shutdownComplete : IO Bool := pure true
   reservedBuffers : Nat := 0
+  /-- True for TLS transports: enables Strict-Transport-Security defaults. -/
+  secure : Bool := false
+  /-- Additional Prometheus exposition appended to the metrics endpoint. -/
+  metrics : IO ByteArray := pure ByteArray.empty
 
 private def plainEndpoint (socket : Reactor.Socket .connected) : Endpoint := {
   id := socket.id

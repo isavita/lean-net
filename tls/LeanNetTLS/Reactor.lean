@@ -417,6 +417,7 @@ def withWorkerStats (bundle : Bundle) (config : Config) (reactor : LeanNet.React
   try
     let transport : HTTP.Transport.Worker := {
       deferClosed := true
+      secure := true
       event := fun event => do driver.ensureAlive; driver.nativeEvent event
       poll := do driver.ensureAlive; driver.poll
       hasWork := do driver.ensureAlive; return (← check "TLS pending work" (← FFI.Worker.hasWork handle)) != 0

@@ -1,4 +1,8 @@
 /* Process-level signal coordination. Data path state remains worker-local. */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+/* sched_getaffinity/CPU_SET for cpuset-aware worker counts and pinning. */
+#define _GNU_SOURCE 1
+#endif
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #ifdef __APPLE__
@@ -27,6 +31,20 @@
 #include <signal.h>
 #include <unistd.h>
 #endif
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/thread_policy.h>
+#include <libproc.h>
+#endif
+#if defined(__linux__)
+#include <dirent.h>
+#endif
+#ifdef _WIN32
+#ifndef PSAPI_VERSION
+#define PSAPI_VERSION 2 /* K32GetProcessMemoryInfo lives in kernel32 */
+#endif
+#include <psapi.h>
+#endif
 
 /* Signal handlers must never call an atomic implementation that takes a lock.
  * These are universally lock-free on the supported x86/ARM targets. Fail the
@@ -42,9 +60,17 @@ struct rn_group {
     int installed;
     int restore_error;
 #ifndef _WIN32
-    struct sigaction previous;
+    /* SIGINT/SIGTERM drain gracefully; SIGHUP requests a configuration reload. */
+    struct sigaction previous[3];
 #endif
 };
+#ifndef _WIN32
+static const int group_signals[3] = {SIGINT, SIGTERM, SIGHUP};
+#endif
+/* Monotonic SIGHUP counter. Lean control code compares it with the value it
+ * last served; the handler only performs a lock-free increment. */
+static atomic_uint_fast64_t reload_requests = 0;
+_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "reload requests need lock-free 64-bit counters");
 
 static _Atomic(rn_group *) active_group = NULL;
 static atomic_uint handler_readers = 0;
@@ -84,6 +110,8 @@ static int request_from_handler(void) {
 
 #ifdef _WIN32
 static BOOL WINAPI group_console_handler(DWORD type) {
+    /* CTRL_CLOSE/LOGOFF/SHUTDOWN terminate the process when the handler
+     * returns, so only the interactive stop events start a graceful drain. */
     if (type != CTRL_C_EVENT && type != CTRL_BREAK_EVENT) return FALSE;
     return request_from_handler() ? TRUE : FALSE;
 }
@@ -97,9 +125,9 @@ static int win_error(void) {
 }
 #else
 static void group_signal_handler(int signo) {
-    (void)signo;
     int saved_errno = errno;
-    (void)request_from_handler();
+    if (signo == SIGHUP) atomic_fetch_add_explicit(&reload_requests, 1, memory_order_seq_cst);
+    else (void)request_from_handler();
     errno = saved_errno;
 }
 #endif
@@ -161,8 +189,17 @@ int rn_group_install(rn_group *group) {
         return error;
     }
     action.sa_flags = 0;
-    if (sigaction(SIGINT, &action, &group->previous) < 0) {
-        int error = -errno;
+    int error = 0;
+    int installed = 0;
+    for (; installed < 3; ++installed) {
+        if (sigaction(group_signals[installed], &action, &group->previous[installed]) < 0) {
+            error = -errno;
+            break;
+        }
+    }
+    if (error) {
+        /* Restore every disposition installed before the failure. */
+        while (installed-- > 0) (void)sigaction(group_signals[installed], &group->previous[installed], NULL);
 #endif
         atomic_store_explicit(&active_group, NULL, memory_order_seq_cst);
         wait_for_handlers();
@@ -178,6 +215,19 @@ int rn_group_stopping(const rn_group *group) {
     return atomic_load_explicit(&group->stop, memory_order_seq_cst) != 0;
 }
 
+int rn_group_process_stopping(void) {
+    /* Same lifetime protocol as the signal handler: uninstall waits for us. */
+    atomic_fetch_add_explicit(&handler_readers, 1, memory_order_seq_cst);
+    rn_group *group = atomic_load_explicit(&active_group, memory_order_seq_cst);
+    int stopping = group != NULL && atomic_load_explicit(&group->stop, memory_order_seq_cst) != 0;
+    atomic_fetch_sub_explicit(&handler_readers, 1, memory_order_seq_cst);
+    return stopping;
+}
+
+uint64_t rn_group_reload_requests(void) {
+    return (uint64_t)atomic_load_explicit(&reload_requests, memory_order_seq_cst);
+}
+
 int rn_group_take_wake_error(rn_group *group) {
     if (group == NULL) return -EINVAL;
     return atomic_exchange_explicit(&group->wake_error, 0, memory_order_seq_cst);
@@ -191,7 +241,10 @@ int rn_group_uninstall(rn_group *group) {
 #ifdef _WIN32
     else if (!SetConsoleCtrlHandler(group_console_handler, FALSE)) error = win_error();
 #else
-    else if (sigaction(SIGINT, &group->previous, NULL) < 0) error = -errno;
+    else {
+        for (int index = 2; index >= 0; --index)
+            if (sigaction(group_signals[index], &group->previous[index], NULL) < 0 && error == 0) error = -errno;
+    }
 #endif
     /* Even failed OS restoration must never leave a handler with access to
      * borrowed reactors that outer brackets are about to release. A failed
@@ -220,6 +273,14 @@ int rn_group_cpu_count(uint32_t *out) {
     if (count == 0) return win_error();
     *out = (uint32_t)count;
 #else
+#if defined(__linux__) && defined(CPU_SETSIZE)
+    /* Respect cpusets (containers, taskset): count CPUs this process may use. */
+    cpu_set_t allowed;
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) == 0) {
+        int usable = CPU_COUNT(&allowed);
+        if (usable > 0) { *out = (uint32_t)usable; return 0; }
+    }
+#endif
     errno = 0;
     long count = sysconf(_SC_NPROCESSORS_ONLN);
     if (count <= 0) return errno != 0 ? -errno : -ENOSYS;
@@ -296,4 +357,115 @@ int rn_endpoint_release(rn_endpoint_claim *claim) {
 #endif
     free(claim);
     return error;
+}
+
+#ifndef EOPNOTSUPP
+#define EOPNOTSUPP ENOTSUP
+#endif
+/* Pin the calling thread to the index-th CPU (modulo) of the process's allowed
+ * set. Returns the selected CPU number, or negative errno. macOS exposes only
+ * affinity tags (a scheduling hint; unsupported on Apple silicon). */
+int rn_pin_current_thread(uint32_t index) {
+#if defined(__linux__) && defined(CPU_SETSIZE)
+    cpu_set_t allowed;
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) < 0) return -errno;
+    int count = CPU_COUNT(&allowed);
+    if (count <= 0) return -EINVAL;
+    int wanted = (int)(index % (uint32_t)count), seen = 0;
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+        if (!CPU_ISSET(cpu, &allowed)) continue;
+        if (seen++ != wanted) continue;
+        cpu_set_t one;
+        CPU_ZERO(&one);
+        CPU_SET(cpu, &one);
+        /* pid 0 selects the calling thread on Linux. */
+        if (sched_setaffinity(0, sizeof(one), &one) < 0) return -errno;
+        return cpu;
+    }
+    return -EINVAL;
+#elif defined(__APPLE__)
+    thread_affinity_policy_data_t policy = { (integer_t)index + 1 };
+    mach_port_t thread = mach_thread_self();
+    kern_return_t result = thread_policy_set(thread, THREAD_AFFINITY_POLICY,
+        (thread_policy_t)&policy, THREAD_AFFINITY_POLICY_COUNT);
+    (void)mach_port_deallocate(mach_task_self(), thread);
+    if (result == KERN_NOT_SUPPORTED) return -EOPNOTSUPP;
+    return result == KERN_SUCCESS ? (int)index : -EINVAL;
+#elif defined(_WIN32)
+    DWORD_PTR process = 0, system = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &process, &system)) return win_error();
+    unsigned count = 0;
+    for (unsigned bit = 0; bit < sizeof(process) * 8; ++bit) if (process & ((DWORD_PTR)1 << bit)) ++count;
+    if (count == 0) return -EINVAL;
+    unsigned wanted = index % count, seen = 0;
+    for (unsigned bit = 0; bit < sizeof(process) * 8; ++bit) {
+        if (!(process & ((DWORD_PTR)1 << bit))) continue;
+        if (seen++ != wanted) continue;
+        if (!SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)1 << bit)) return win_error();
+        return (int)bit;
+    }
+    return -EINVAL;
+#else
+    (void)index;
+    return -EOPNOTSUPP;
+#endif
+}
+
+/* Current resident set size in bytes, or negative errno. */
+int64_t rn_process_resident_bytes(void) {
+#if defined(__linux__)
+    /* Plain read/parse: avoids stdio symbol versions newer than Lean's sysroot. */
+    int fd = open("/proc/self/statm", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -errno;
+    char text[128];
+    ssize_t length = read(fd, text, sizeof(text) - 1);
+    int read_error = length < 0 ? errno : 0;
+    if (close(fd) < 0 && read_error == 0) read_error = errno;
+    if (read_error) return -read_error;
+    text[length] = 0;
+    const char *cursor = text;
+    while (*cursor >= '0' && *cursor <= '9') ++cursor; /* total size */
+    if (*cursor != ' ') return -EIO;
+    ++cursor;
+    unsigned long long resident = 0;
+    if (*cursor < '0' || *cursor > '9') return -EIO;
+    while (*cursor >= '0' && *cursor <= '9') resident = resident * 10 + (unsigned long long)(*cursor++ - '0');
+    long page = sysconf(_SC_PAGESIZE);
+    if (page <= 0) return -EINVAL;
+    return (int64_t)(resident * (unsigned long long)page);
+#elif defined(__APPLE__)
+    mach_task_basic_info_data_t info;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) != KERN_SUCCESS) return -EIO;
+    return (int64_t)info.resident_size;
+#elif defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters;
+    if (!K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) return win_error();
+    return (int64_t)counters.WorkingSetSize;
+#else
+    return -ENOSYS;
+#endif
+}
+
+/* Open descriptors (POSIX) or kernel handles (Windows), or negative errno. */
+int64_t rn_process_open_fds(void) {
+#if defined(__linux__)
+    DIR *directory = opendir("/proc/self/fd");
+    if (directory == NULL) return -errno;
+    int64_t count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(directory)) != NULL) if (entry->d_name[0] != '.') ++count;
+    if (closedir(directory) != 0) return -errno;
+    return count > 0 ? count - 1 : 0; /* exclude the directory stream itself */
+#elif defined(__APPLE__)
+    int bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, NULL, 0);
+    if (bytes < 0) return -errno;
+    return (int64_t)bytes / (int64_t)PROC_PIDLISTFD_SIZE;
+#elif defined(_WIN32)
+    DWORD handles = 0;
+    if (!GetProcessHandleCount(GetCurrentProcess(), &handles)) return win_error();
+    return (int64_t)handles;
+#else
+    return -ENOSYS;
+#endif
 }

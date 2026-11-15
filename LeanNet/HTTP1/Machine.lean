@@ -167,7 +167,7 @@ def State.feedSlice (state : State) (bytes : ByteArray) (start length : Nat) : S
       { state := { state with phase := .application, started := true,
                               parser := Parser.new state.config.limits state.config.parserOptions }, consumed,
         actions := [.readEnabled false, .request state.requestId request] }
-    | .error _ consumed => { (fail state 400) with consumed }
+    | .error message consumed => { (fail state (Parser.errorStatus message)) with consumed }
 
 def State.feed (state : State) (bytes : ByteArray) : Step :=
   state.feedSlice bytes 0 bytes.size
@@ -183,7 +183,7 @@ def State.finish (state : State) : Step :=
                               parser := Parser.new state.config.limits state.config.parserOptions },
         actions := [.readEnabled false, .request state.requestId request] }
     | .eof => { state := { state with phase := .closing }, actions := [.drainClose] }
-    | .error _ => fail state 400
+    | .error message => fail state (Parser.errorStatus message)
     | .needMore _ => abort state "invalid parser EOF result"
   else { state }
 

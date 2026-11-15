@@ -25,7 +25,12 @@ int rn_group_stopping(const rn_group *group);
 /* Atomically fetch-and-clear the first signal-handler wake failure, 0 if none.
  * The Lean control thread owns any retry decision. */
 int rn_group_take_wake_error(rn_group *group);
-/* Restores the prior SIGINT handler / removes the Windows console handler,
+/* Process-wide count of SIGHUP deliveries while a group was installed (always
+ * zero on Windows). Callers act when the value differs from the last seen. */
+uint64_t rn_group_reload_requests(void);
+/* 1 while the installed group (if any) is stopping, else 0. Thread-safe. */
+int rn_group_process_stopping(void);
+/* Restores the prior SIGINT/SIGTERM/SIGHUP handlers / removes the Windows console handler,
  * unpublishes the group, then waits for all in-flight readers before return.
  * The registry is deactivated even if OS restoration fails; the error is
  * returned and future registrations are rejected for this process. */
@@ -34,6 +39,9 @@ int rn_group_uninstall(rn_group *group);
  * After return no handler can access this group or its borrowed reactors. */
 int rn_group_free(rn_group *group);
 int rn_group_cpu_count(uint32_t *out);
+int rn_pin_current_thread(uint32_t index);
+int64_t rn_process_resident_bytes(void);
+int64_t rn_process_open_fds(void);
 
 /* One process-level claim encloses all SO_REUSEPORT workers. Claims are scoped
  * to the TCP port (all addresses), per effective user on POSIX. POSIX lockfiles

@@ -389,6 +389,10 @@ lean_object *shim_errno_ehostdown(void) {
     return mk_i64_ok(0);
 #endif
 }
+lean_object *shim_errno_emfile(void) { return mk_i64_ok(EMFILE); }
+lean_object *shim_errno_enfile(void) { return mk_i64_ok(ENFILE); }
+lean_object *shim_errno_enobufs(void) { return mk_i64_ok(ENOBUFS); }
+lean_object *shim_errno_enomem(void) { return mk_i64_ok(ENOMEM); }
 lean_object *shim_errno_eopnotsupp(void) {
 #ifdef EOPNOTSUPP
     return mk_i64_ok(EOPNOTSUPP);

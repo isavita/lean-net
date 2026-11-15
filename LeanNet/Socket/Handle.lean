@@ -280,6 +280,11 @@ def ConnectionPool.accept (pool : ConnectionPool) (listener : Listener) : IO Acc
       if ← Errno.isInterrupted result then return .interrupted
       if ← Errno.isWouldBlock result then return .wouldBlock
       if ← acceptTransient result then return .retry
+      -- Descriptor/memory exhaustion: back off briefly instead of crashing;
+      -- queued clients remain in the kernel backlog until capacity returns.
+      if ← matchesErrno result [FFI.errnoEmfile, FFI.errnoEnfile, FFI.errnoEnobufs, FFI.errnoEnomem] then
+        IO.sleep 50
+        return .retry
       throw (← Errno.error "accept" result)
     if stage == 2 then throw (← Errno.error "accepted socket setup" result)
     if stage == 3 then throw (← Errno.error "close" result)

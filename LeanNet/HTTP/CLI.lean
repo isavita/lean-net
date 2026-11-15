@@ -17,6 +17,17 @@ structure Options where
   workers : Nat := 0
   maxClients : Nat := 32
   positional : List String := []
+  /-- Listening address; the default stays loopback-only for safety. -/
+  host : Option String := none
+  securityHeaders : Bool := true
+  health : Bool := false
+  adminPort : Option Nat := none
+  pinWorkers : Bool := false
+  /-- TLS only: PEM CA bundle used to verify client certificates (mTLS). -/
+  clientCA : Option System.FilePath := none
+  requireClientCert : Bool := false
+  /-- TLS only: DER OCSP response stapled for the default certificate. -/
+  ocspResponse : Option System.FilePath := none
   private memoryExplicit : Bool := false
 
 private def collect (args : List String) (options : Options) : Except String Options :=
@@ -24,6 +35,33 @@ private def collect (args : List String) (options : Options) : Except String Opt
   | [] => .ok { options with positional := options.positional.reverse }
   | "--" :: rest => .ok { options with positional := options.positional.reverse ++ rest }
   | "--enable-push" :: rest => collect rest { options with enablePush := true }
+  | "--no-security-headers" :: rest => collect rest { options with securityHeaders := false }
+  | "--health" :: rest => collect rest { options with health := true }
+  | "--pin-workers" :: rest => collect rest { options with pinWorkers := true }
+  | "--require-client-cert" :: rest => collect rest { options with requireClientCert := true }
+  | "--host" :: address :: rest =>
+    if options.host.isSome then .error "--host may be supplied once"
+    else if address.isEmpty || address.startsWith "--" || address.any (· == '\x00') then .error "--host requires an address"
+    else collect rest { options with host := some address }
+  | "--host" :: [] => .error "--host requires an address"
+  | "--admin-port" :: value :: rest =>
+    if options.adminPort.isSome then .error "--admin-port may be supplied once"
+    else match value.toNat? with
+      | some port =>
+        if port == 0 || port > 65535 then .error "--admin-port must be between 1 and 65535"
+        else collect rest { options with adminPort := some port }
+      | none => .error "--admin-port requires a decimal port"
+  | "--admin-port" :: [] => .error "--admin-port requires a port"
+  | "--client-ca" :: path :: rest =>
+    if options.clientCA.isSome then .error "--client-ca may be supplied once"
+    else if path.isEmpty || path.startsWith "--" then .error "--client-ca requires a PEM file"
+    else collect rest { options with clientCA := some (System.FilePath.mk path) }
+  | "--client-ca" :: [] => .error "--client-ca requires a PEM file"
+  | "--ocsp-response" :: path :: rest =>
+    if options.ocspResponse.isSome then .error "--ocsp-response may be supplied once"
+    else if path.isEmpty || path.startsWith "--" then .error "--ocsp-response requires a DER file"
+    else collect rest { options with ocspResponse := some (System.FilePath.mk path) }
+  | "--ocsp-response" :: [] => .error "--ocsp-response requires a DER file"
   | "--metrics" :: rest => collect rest { options with metrics := true }
   | "--http2-ping-ms" :: interval :: rest =>
     if options.pingIntervalMs.isSome then .error "--http2-ping-ms may be supplied once"
@@ -108,7 +146,13 @@ def parse (args : List String) : Except String Options := do
     throw "--access-log-queue-capacity requires --access-log"
   if options.pingTimeoutMs.isSome && options.pingIntervalMs.isNone then
     throw "--http2-ping-timeout-ms requires --http2-ping-ms"
+  if options.requireClientCert && options.clientCA.isNone then
+    throw "--require-client-cert requires --client-ca"
   return options
+
+/-- Listening address chosen by `--host`, else the caller's default. -/
+def Options.listenHost (options : Options) (fallback : String := "127.0.0.1") : String :=
+  options.host.getD fallback
 
 def port (argument : Option String) (fallback : UInt16) : Except String UInt16 := do
   let some text := argument | return fallback
@@ -139,11 +183,17 @@ def Options.httpConfig (options : Options) : IO ReactorServerConfig := do
       pingIntervalMs := options.pingIntervalMs.getD 0
       pingTimeoutMs := options.pingTimeoutMs.getD 10000 }
     metricsPath := if options.metrics then some "/metrics".toUTF8 else none
-    accessLog }
+    accessLog
+    securityHeaders := { enabled := options.securityHeaders }
+    healthPaths := options.health
+    adminPort := options.adminPort.map (·.toUInt16)
+    pinWorkers := options.pinWorkers }
 
 def Options.serve (options : Options) (host : String := "127.0.0.1")
     (port : UInt16 := 8080) : IO Unit := do
   if options.reloadCertsMs.isSome then throw (IO.userError "--reload-certs-ms requires the TLS server")
+  if options.clientCA.isSome || options.ocspResponse.isSome then
+    throw (IO.userError "--client-ca, --require-client-cert and --ocsp-response require the TLS server")
   let http ← options.httpConfig
   if let some root := options.staticRoot then
     let bytes := options.staticMemoryMiB * 1024 * 1024

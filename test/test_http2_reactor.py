@@ -283,13 +283,14 @@ class HTTP2Acceptance(ServerCase, unittest.TestCase):
         self.assertEqual(dict(peer.headers[3][0].headers)[b"x-large"], b"x" * 32000)
 
     def test_peer_header_list_limit_falls_back_without_killing_other_streams(self):
-        peer = self.peer(settings_values=[(6, 256)])
+        # Large enough for ordinary responses with default security headers.
+        peer = self.peer(settings_values=[(6, 1024)])
         peer.request(1, b"/big-headers"); peer.request(3)
         peer.until(lambda: 1 in peer.ended or 1 in peer.resets or bool(peer.goaways))
         self.assertFalse(peer.goaways); self.assertNotIn(1, peer.resets)
         self.assertEqual(dict(peer.headers[1][0].headers)[b":status"], b"500")
         for block in peer.headers[1]:
-            self.assertLessEqual(sum(len(name) + len(value) + 32 for name, value in block.headers), 256)
+            self.assertLessEqual(sum(len(name) + len(value) + 32 for name, value in block.headers), 1024)
         self.assertEqual(peer.response(3), BINARY)
 
     def test_push_is_off_by_default(self):

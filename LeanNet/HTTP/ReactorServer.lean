@@ -5,6 +5,8 @@ import LeanNet.HTTP2.Machine
 import LeanNet.HTTP.WorkerPool
 import LeanNet.HTTP.Transport
 import LeanNet.HTTP.Observability
+import LeanNet.HTTP.SecureHeaders
+import LeanNet.HTTP.Admin
 
 namespace LeanNet.HTTP
 
@@ -25,6 +27,21 @@ structure ReactorServerConfig where
   shutdownDrainMs : Nat := 2000
   metricsPath : Option ByteArray := none
   accessLog : Option Observability.AccessConfig := none
+  /-- Run on worker 0's loop after each SIGHUP (POSIX). TLS servers request a
+      certificate reload here; applications can also swap routing tables or
+      rate limits held in shared, thread-safe references. Must not block. -/
+  onReload : IO Unit := pure ()
+  /-- OWASP default response headers; HSTS is added on TLS transports only. -/
+  securityHeaders : SecurityHeaders := {}
+  /-- Serve `/healthz` (liveness, always 200) and `/readyz` (readiness: 503
+      once draining starts) on every listener. Like the metrics path, these
+      bypass application callbacks and are excluded from request metrics. -/
+  healthPaths : Bool := false
+  /-- Local-only (127.0.0.1) admin port with connection, request and memory
+      statistics as JSON plus Prometheus metrics. -/
+  adminPort : Option UInt16 := none
+  /-- Pin each worker thread to one CPU of the process's allowed set. -/
+  pinWorkers : Bool := false
 
 namespace ReactorServer
 
@@ -160,6 +177,9 @@ private structure Driver where
   state : IO.Ref WorkerState
   observer : Option WorkerObserver := none
   resetErrno : Int := 0
+  /-- Worker 0 serves process-level control: SIGHUP reload requests. -/
+  control : Bool := false
+  reloadSeen : IO.Ref UInt64
 
 private def Driver.client? (driver : Driver) (id : Reactor.SocketId) : IO (Option Client) := do
   return (← driver.state.get).clients[id]?
@@ -176,12 +196,27 @@ private def cleanupActions (actions : Array (IO Unit)) : IO Unit := do
   if !errors.isEmpty then
     throw (IO.userError (String.intercalate "; " (errors.toList.map toString)))
 
+private def targetPath (target : ByteArray) : ByteArray :=
+  let stop := (target.data.findIdx? (fun byte => byte == 63)).getD target.size
+  target.extract 0 stop
+
+private inductive HealthProbe where
+  | liveness | readiness
+
+private def healthTarget (driver : Driver) (target : ByteArray) : Option HealthProbe :=
+  if !driver.config.healthPaths then none else
+  let path := targetPath target
+  if path == "/healthz".toUTF8 then some .liveness
+  else if path == "/readyz".toUTF8 then some .readiness
+  else none
+
+/-- Server-owned endpoints: metrics and health probes bypass application
+    callbacks and are excluded from request counters and access logs. -/
 private def metricTarget (driver : Driver) (target : ByteArray) : Bool :=
+  (healthTarget driver target).isSome ||
   match driver.config.metricsPath with
   | none => false
-  | some path =>
-    let stop := (target.data.findIdx? (fun byte => byte == 63)).getD target.size
-    target.extract 0 stop == path
+  | some path => targetPath target == path
 
 private def Driver.startObservation (driver : Driver) (id : Reactor.SocketId)
     (requestId : Nat) (head : Option RequestHead) (startedAt : Nat) : IO Bool := do
@@ -445,6 +480,16 @@ private def Driver.beginDrain (driver : Driver) (id : Reactor.SocketId) : IO Uni
     client.socket.closeAfterWrites
 
 private def Driver.reply (driver : Driver) (request : Request) : IO Reply := do
+  if let some probe := healthTarget driver request.target then
+    if request.method != "GET" && request.method != "HEAD" then
+      return { response := { status := 405, headers := #[{ name := "allow", value := "GET, HEAD".toUTF8 }] } }
+    let draining := (← driver.state.get).draining || (← driver.group.stopping)
+    let (status, body) := match probe with
+      | .liveness => (200, "ok\n")
+      | .readiness => if draining then (503, "draining\n") else (200, "ready\n")
+    return { response := { status, body := body.toUTF8, headers := #[
+      { name := "content-type", value := "text/plain; charset=utf-8".toUTF8 },
+      { name := "cache-control", value := "no-store".toUTF8 }] } }
   if metricTarget driver request.target then
     if request.method != "GET" && request.method != "HEAD" then
       return { response := { status := 405, headers := #[{ name := "Allow", value := "GET, HEAD".toUTF8 }] } }
@@ -454,7 +499,7 @@ private def Driver.reply (driver : Driver) (request : Request) : IO Reply := do
     let snapshot ← observer.hub.snapshot
     return { response := {
       headers := #[{ name := "Content-Type", value := Observability.metricsContentType }]
-      body := snapshot.renderPrometheus } }
+      body := snapshot.renderPrometheus ++ (← Admin.processPrometheus) ++ (← driver.transport.metrics) } }
   driver.handlers.onRequest request
 
 private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (step : Machine.Step) : IO Unit := do
@@ -1144,8 +1189,17 @@ private def Driver.pollEvents (driver : Driver) (timeout : Int32) (admitting : B
       events := events ++ (← driver.transport.event native)
     driver.events events
 
+private def Driver.serveReloads (driver : Driver) : IO Unit := do
+  if !driver.control then return
+  let requested ← Reactor.reloadRequests
+  if requested != (← driver.reloadSeen.get) then
+    driver.reloadSeen.set requested
+    try driver.config.onReload
+    catch error => IO.eprintln s!"lean-net: reload hook failed: {error}"
+
 private partial def Driver.loop (driver : Driver) : IO Unit := do
   if ← driver.group.stopping then return
+  driver.serveReloads
   driver.refresh
   driver.events (← driver.transport.poll)
   driver.pumpAll
@@ -1216,7 +1270,10 @@ abbrev WithWorkerResources := Nat → Nat → Reactor.Reactor →
 private def runWorker (resources : WithWorkerResources) (config : ReactorServerConfig)
     (hub : Option Observability.Hub)
     (workerId clientLimit : Nat) (reactor : Reactor.Reactor) (group : Reactor.Group) : IO Unit := do
+  if config.pinWorkers then
+    let _ ← Reactor.pinCurrentThread workerId
   resources workerId clientLimit reactor fun transport handlers => do
+   let handlers := config.securityHeaders.wrap transport.secure handlers
    let pool := config.native.buffers4k.toNat + config.native.buffers16k.toNat + config.native.buffers64k.toNat
    let available := pool - transport.reservedBuffers
    let count := min config.outputBuffers (min (clientLimit * 4) (min config.native.maxWrites.toNat (available - 1)))
@@ -1231,7 +1288,9 @@ private def runWorker (resources : WithWorkerResources) (config : ReactorServerC
         let lane ← hub.lane workerId
         pure (some { hub, lane : WorkerObserver })
     let resetErrno := -(Errno.decode (← FFI.errnoEconnreset))
-    let driver : Driver := { reactor, group, config, handlers, transport, clientLimit, state, observer, resetErrno }
+    let reloadSeen ← IO.mkRef (← Reactor.reloadRequests)
+    let driver : Driver := { reactor, group, config, handlers, transport, clientLimit, state, observer,
+                             resetErrno, control := workerId == 0, reloadSeen }
     try
       driver.loop
       driver.drain
@@ -1240,6 +1299,29 @@ private def runWorker (resources : WithWorkerResources) (config : ReactorServerC
       let cleanup := state.clients.toArray.map fun (id, _) => driver.forget id
       cleanupActions (cleanup.push (do
         if let some observer := driver.observer then observer.lane.publish (← driver.state.get).counters))
+
+/-- Run the optional local admin port on its own dedicated thread for the
+    lifetime of the worker pool. It reads only published snapshots. -/
+private def withAdmin (config : ReactorServerConfig) (workers : Nat)
+    (hub : Option Observability.Hub) (serve : IO Unit) : IO Unit := do
+  let some port := config.adminPort | serve
+  let stop ← IO.mkRef false
+  let finished ← IO.mkRef false
+  let source : Admin.Source := {
+    workers, startedAtMs := ← Reactor.nowMs
+    snapshot := match hub with
+      | some hub => do return some (← hub.snapshot)
+      | none => pure none
+    -- Draining begins when the pool stops; readiness then reports 503.
+    draining := do return (← finished.get) || (← Reactor.processStopping) }
+  let task ← IO.asTask (Admin.serve port source stop) Task.Priority.dedicated
+  try serve
+  finally
+    finished.set true
+    stop.set true
+    match ← IO.wait task with
+    | .ok _ => pure ()
+    | .error error => IO.eprintln s!"lean-net: admin port stopped: {error}"
 
 /-- Construct independent callbacks and state inside each dedicated worker.
     The global client limit is partitioned, rather than multiplied by workers. -/
@@ -1260,15 +1342,16 @@ def serveWorkerFactory (resources : WithWorkerResources) (config : ReactorServer
         path.data.any (fun byte => byte <= 32 || byte >= 127 || byte == 63 || byte == 35) then
       throw (IO.userError "metrics path must be a bounded origin path without query or fragment")
   let workers ← workerCount config.workers config.server.maxClients
-  let observing := config.metricsPath.isSome || config.accessLog.isSome
+  let observing := config.metricsPath.isSome || config.accessLog.isSome || config.adminPort.isSome
   let config := { config with
     workers
     machine := { config.machine with trackOutput := observing || config.machine.trackOutput }
     http2 := { config.http2 with trackOutput := observing || config.http2.trackOutput } }
   if observing then
     Observability.withHub workers config.accessLog fun hub =>
-      withWorkerPool host port workers config.server.maxClients config.native
-        (runWorker resources config (some hub))
+      withAdmin config workers (some hub) <|
+        withWorkerPool host port workers config.server.maxClients config.native
+          (runWorker resources config (some hub))
   else
     withWorkerPool host port workers config.server.maxClients config.native
       (runWorker resources config none)

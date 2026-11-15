@@ -88,6 +88,10 @@ lean_object *shim_errno_enonet(void);
 lean_object *shim_errno_eproto(void);
 lean_object *shim_errno_enoprotoopt(void);
 lean_object *shim_errno_ehostdown(void);
+lean_object *shim_errno_emfile(void);
+lean_object *shim_errno_enfile(void);
+lean_object *shim_errno_enobufs(void);
+lean_object *shim_errno_enomem(void);
 lean_object *shim_errno_eopnotsupp(void);
 
 /* Scoped single-threaded SIGINT wakeup and interruptible blocking I/O.

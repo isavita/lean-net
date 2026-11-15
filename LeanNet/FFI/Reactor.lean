@@ -56,6 +56,11 @@ opaque cancelTimer (handle connection : UInt64) (kind : UInt32) : IO UInt64
 @[extern "shim_reactor_group_stop"] opaque groupStop (handle : UInt64) : IO UInt64
 @[extern "shim_reactor_group_stopping"] opaque groupStopping (handle : UInt64) : IO UInt64
 @[extern "shim_reactor_group_wake_error"] opaque groupWakeError (handle : UInt64) : IO UInt64
+@[extern "shim_reactor_group_reload_requests"] opaque groupReloadRequests : IO UInt64
+@[extern "shim_reactor_pin_current_thread"] opaque pinCurrentThread (index : UInt32) : IO UInt64
+@[extern "shim_reactor_process_resident_bytes"] opaque processResidentBytes : IO UInt64
+@[extern "shim_reactor_process_open_fds"] opaque processOpenFds : IO UInt64
+@[extern "shim_reactor_process_stopping"] opaque processStopping : IO UInt64
 @[extern "shim_reactor_group_uninstall"] opaque groupUninstall (handle : UInt64) : IO UInt64
 @[extern "shim_reactor_group_free"] opaque groupFree (handle : UInt64) : IO UInt64
 @[extern "shim_reactor_cpu_count"] opaque cpuCount : IO UInt64

@@ -42,11 +42,31 @@ lean_object *shim_reactor_group_stopping(uint64_t handle) {
 lean_object *shim_reactor_group_wake_error(uint64_t handle) {
     return rn_io_number(handle == 0 ? -EINVAL : rn_group_take_wake_error(rn_group_handle(handle)));
 }
+lean_object *shim_reactor_group_reload_requests(lean_object *unit) {
+    (void)unit;
+    uint64_t value = rn_group_reload_requests();
+    return rn_io_number(value > INT64_MAX ? INT64_MAX : (int64_t)value);
+}
 lean_object *shim_reactor_group_uninstall(uint64_t handle) {
     return rn_io_number(handle == 0 ? -EINVAL : rn_group_uninstall(rn_group_handle(handle)));
 }
 lean_object *shim_reactor_group_free(uint64_t handle) {
     return rn_io_number(handle == 0 ? -EINVAL : rn_group_free(rn_group_handle(handle)));
+}
+lean_object *shim_reactor_pin_current_thread(uint32_t index) {
+    return rn_io_number(rn_pin_current_thread(index));
+}
+lean_object *shim_reactor_process_resident_bytes(lean_object *unit) {
+    (void)unit;
+    return rn_io_number(rn_process_resident_bytes());
+}
+lean_object *shim_reactor_process_open_fds(lean_object *unit) {
+    (void)unit;
+    return rn_io_number(rn_process_open_fds());
+}
+lean_object *shim_reactor_process_stopping(lean_object *unit) {
+    (void)unit;
+    return rn_io_number(rn_group_process_stopping());
 }
 lean_object *shim_reactor_cpu_count(void) {
     uint32_t count = 0;
