@@ -31,6 +31,10 @@ private partial def sendSlice (fd : Int64) (data : ByteArray) (offset : Nat) : I
 
 private def run (port : UInt16) : IO Unit := withInterruptHandler do
   let nulHost := "127.0.0.1" ++ String.singleton '\x00' ++ "ignored"
+  let rawInvalid := Errno.decode (← FFI.rawTcpListen nulHost port)
+  if rawInvalid >= 0 then
+    let _ ← FFI.rawClose (Int64.ofInt rawInvalid)
+    throw (IO.userError "raw listener accepted a host with an embedded NUL")
   let rejected ← try
     withListener nulHost port fun _ => pure false
   catch _ => pure true

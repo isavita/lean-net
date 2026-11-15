@@ -132,6 +132,8 @@ static void close_pair_after_failure(const int fds[2], int *error) {
 /* shim_tcp_listen(host, port) -> fd >= 0 | -errno | -(100000 + EAI_*) */
 lean_object *shim_tcp_listen(b_lean_obj_arg host_lean, uint16_t port) {
     const char *host = lean_string_cstr(host_lean);
+    if (strlen(host) + 1 != lean_string_size(host_lean))
+        return mk_i64_ok(-EINVAL);
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
