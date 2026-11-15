@@ -2,7 +2,7 @@
 
 Lean 4 libraries for TCP, HTTP/1.0, HTTP/1.1, HTTP/2, and WebSocket servers. The optional [`lean-net-tls`](tls/README.md) package adds TLS, mTLS, SNI, and ALPN. Both packages use the same HTTP handlers and native reactor on Linux, macOS, and Windows.
 
-[API reference](https://isavita.github.io/lean-net/LeanNet.html).
+[API reference](https://isavita.github.io/lean-net/).
 
 ## Install
 
@@ -55,7 +55,7 @@ flowchart LR
 | Metrics, access logs, health, tracing, graceful drain | `HTTP.ReactorServerConfig` | [Server options](docs/server.md) |
 | Benchmarks | Reproducible commands and results | [Benchmarks](docs/benchmarks.md) |
 
-The default listener is `127.0.0.1`; pass an explicit bind address to expose it. HTTP/2 is selected by the cleartext preface or h2c upgrade, and by ALPN on TLS. The gateway forwards to HTTP/1.1 backends over HTTP or verified HTTPS.
+The default listener is `127.0.0.1`; pass an explicit bind address to expose it. One listener serves HTTP/1 and HTTP/2 clients using the same handlers. Configure HTTP/1 through `machine` and HTTP/2 through `http2`; protocol selection uses the cleartext preface or h2c upgrade, and ALPN on TLS. See [combined protocol configuration](docs/server.md). The gateway forwards to HTTP/1.1 backends over HTTP or verified HTTPS.
 
 ## Build and test
 

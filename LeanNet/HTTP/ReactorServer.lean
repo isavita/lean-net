@@ -18,7 +18,10 @@ namespace LeanNet.HTTP
 open HTTP1
 
 structure ReactorServerConfig where
+  /-- Shared connection admission, response bounds and connection deadlines. -/
   server : ServerConfig := {}
+  /-- HTTP/1.0 and HTTP/1.1 parsing, body limits and streaming settings.
+      HTTP/2 uses `http2`; both protocols share the application's handlers. -/
   machine : Machine.Config := {}
   native : Reactor.Config := {}
   workers : Nat := 0
@@ -30,7 +33,12 @@ structure ReactorServerConfig where
   maxOutputBytes : Nat := 16 * 1024 * 1024
   maxQueuedFileBytes : Nat := 4 * 1024 * 1024 * 1024
   workPerClient : Nat := 64
+  /-- HTTP/2 stream, frame, header, body and flow-control settings. -/
   http2 : HTTP2.Connection.Config := {}
+  /-- Initial cleartext parser selection per connection. `.detect` accepts
+      HTTP/1 or the HTTP/2 prior-knowledge preface on the same listener.
+      TLS uses ALPN instead. To force cleartext HTTP/1 only, also set
+      `h2cUpgrade := false`. -/
   cleartextProtocol : Transport.Protocol := .detect
   shutdownDrainMs : Nat := 2000
   metricsPath : Option ByteArray := none

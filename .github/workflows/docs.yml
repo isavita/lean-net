@@ -35,10 +35,12 @@ jobs:
         run: lake -d docs build LeanNetDocs:docs
       - name: Verify both public package references
         run: |
+          test -s docs/.lake/build/doc/LeanNetDocs.html
           test -s docs/.lake/build/doc/LeanNet.html
           test -s docs/.lake/build/doc/LeanNetTLS.html
           test -s docs/.lake/build/doc/LeanNet/HTTP/ReactorServer.html
           test -s docs/.lake/build/doc/LeanNetTLS/ReactorServer.html
+          python3 docs/prepare_site.py
           touch docs/.lake/build/doc/.nojekyll
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4

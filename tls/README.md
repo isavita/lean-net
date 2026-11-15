@@ -41,6 +41,8 @@ def main : IO Unit :=
 
 `certificateChain` is a PEM certificate chain and `privateKey` is its matching unencrypted PEM key. The default minimum protocol is TLS 1.2. TLS ALPN selects `h2` or `http/1.1`; clients without ALPN use HTTP/1.1.
 
+One TLS listener serves both protocols with the same handlers. Pass HTTP/1 settings in `http.machine` and HTTP/2 settings in `http.http2`, where `http` is the HTTP configuration argument. See the [combined configuration example](../docs/server.md#http1-and-http2-on-one-listener).
+
 | `LeanNetTLS.Reactor.Config` field | Use |
 | --- | --- |
 | `hosts := #[{ name, certificateChain, privateKey, ocspResponse }]` | Exact SNI host certificates; the default certificate serves absent or unknown SNI |

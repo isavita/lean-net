@@ -500,6 +500,41 @@ class MixedAcceptance(ServerCase, unittest.TestCase):
         self.assertEqual(peer.response(1), b"A" * (256 * 1024))
 
 
+class MixedLimitAcceptance(ServerCase, unittest.TestCase):
+    mode = "mixed-limits"
+
+    def http1_echo(self, body):
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+            sock.sendall(b"POST /echo HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+                         + b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+            return Reader(sock).response()
+
+    def test_protocol_body_limits_apply_independently_on_one_listener(self):
+        peer = self.peer()
+        payload = b"abcdefghijkl"
+        # The same /echo application is bounded to 8 bytes for HTTP/1 and 16
+        # bytes for HTTP/2; rejecting one connection leaves its peer live.
+        self.assertEqual(self.http1_echo(payload).status, 413)
+        http1 = self.http1_echo(payload[:8])
+        self.assertEqual((http1.status, http1.body), (200, payload[:8]))
+        peer.request(1, b"/echo", method=b"POST", headers=[(b"content-length", b"12")], end_stream=False)
+        peer.send(frame(0, 1, 1, payload))
+        self.assertEqual(peer.response(1), payload)
+
+        # Exceed the HTTP/2 DATA bound without a declared Content-Length so
+        # this exercises body accounting, preserving accepted sibling streams.
+        peer.request(3, b"/echo", method=b"POST", end_stream=False)
+        peer.request(5)
+        peer.send(frame(0, 1, 3, b"x" * 17))
+        self.assert_rst(peer, 3, 11)
+        self.assertEqual(peer.response(5), BINARY)
+        peer.request(7, b"/echo", method=b"POST", headers=[(b"content-length", b"16")], end_stream=False)
+        peer.send(frame(0, 1, 7, b"y" * 16))
+        self.assertEqual(peer.response(7), b"y" * 16)
+        self.assertFalse(peer.goaways)
+        self.assertEqual(self.http1_echo(b"healthy").body, b"healthy")
+
+
 class FourWorkers(ServerCase, unittest.TestCase):
     workers = 4
 

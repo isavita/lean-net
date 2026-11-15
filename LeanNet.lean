@@ -51,3 +51,17 @@ import LeanNet.HTTP.Observability
 import LeanNet.Socket.State
 import LeanNet.Reactor.Basic
 import LeanNet.Echo.ReactorServer
+
+/-!
+# lean-net
+
+Import `LeanNet` for TCP, HTTP/1, HTTP/2, WebSocket, static-file and gateway APIs.
+Start an HTTP server with
+[`HTTP.ReactorServer.serveFactory`](LeanNet/HTTP/ReactorServer.html#LeanNet.HTTP.ReactorServer.serveFactory).
+[`HTTP.ReactorServerConfig`](LeanNet/HTTP/ReactorServer.html#LeanNet.HTTP.ReactorServerConfig)
+holds HTTP/1 settings in `machine` and HTTP/2 settings in `http2`; one listener
+selects the protocol per client and uses the same application handlers.
+
+See the [API overview](LeanNetDocs.html) and
+[server configuration guide](https://github.com/isavita/lean-net/blob/main/docs/server.md).
+-/

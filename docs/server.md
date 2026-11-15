@@ -2,6 +2,10 @@
 
 `LeanNet.HTTP.ReactorServer.serveFactory factory config host port` serves HTTP/1.0, HTTP/1.1 and h2c on one cleartext listener. `factory : Nat → IO HTTP1.Handlers` runs once for each worker. Use `LeanNetTLS.ReactorServer.serveFactory` for TLS and ALPN. All servers bind `127.0.0.1` unless given another address.
 
+## HTTP/1 and HTTP/2 on one listener
+
+Set HTTP/1 options in `machine`, HTTP/2 options in `http2`, and shared connection budgets and deadlines in `server`. Each client selects its protocol; both protocols call the same handlers.
+
 ```lean
 import LeanNet
 
@@ -10,11 +14,46 @@ open LeanNet
 def config : HTTP.ReactorServerConfig := {
   workers := 0
   server := { maxClients := 128, requestTimeoutMs := 15000 }
-  http2 := { maxConcurrentStreams := 128, pingIntervalMs := 10000 }
+  machine := { limits := { maxHeaderBytes := 16384, maxBodyBytes := 1048576 } }
+  http2 := {
+    maxConcurrentStreams := 128
+    maxHeaderListBytes := 32768
+    maxRequestBodyBytes := 2097152
+    pingIntervalMs := 10000
+  }
+  cleartextProtocol := .detect
+  h2cUpgrade := true
   healthPaths := true
   metricsPath := some "/metrics".toUTF8
 }
+
+def app (_ : Nat) : IO HTTP1.Handlers := pure {
+  onRequest := fun _ => pure { response := { body := "ok\n".toUTF8 } }
+}
+
+def main : IO Unit :=
+  HTTP.ReactorServer.serveFactory app config "127.0.0.1" 8080
 ```
+
+This configuration allows a 1 MiB HTTP/1 body and a 2 MiB HTTP/2 body. For HTTPS, import `LeanNetTLS` and pass the same `app` and `config` to:
+
+```lean
+LeanNetTLS.ReactorServer.serveFactory app
+  { certificateChain := "./chain.pem", privateKey := "./key.pem" }
+  config "127.0.0.1" 8443
+```
+
+| Client connection | Selected protocol |
+| --- | --- |
+| TLS with `h2` offered through ALPN | HTTP/2 (preferred when both are offered) |
+| TLS with only `http/1.1`, or without ALPN | HTTP/1.1 |
+| Cleartext HTTP/2 preface | HTTP/2 (h2c) |
+| Cleartext HTTP/1 request | HTTP/1.0 or HTTP/1.1 |
+| Cleartext HTTP/1.1 h2c upgrade | HTTP/2 after a successful upgrade |
+
+Ordinary browser HTTP/2 uses HTTPS and ALPN. `cleartextProtocol` applies only to cleartext connections; TLS always follows its negotiated protocol. For a cleartext HTTP/1-only listener, set `cleartextProtocol := .http1` and `h2cUpgrade := false`. A client offering only unsupported ALPN protocols is rejected during the handshake.
+
+Check one running cleartext listener with `curl --http1.1 http://127.0.0.1:8080/` and `curl --http2-prior-knowledge http://127.0.0.1:8080/`. For TLS, use `curl --cacert roots.pem --http1.1 https://HOST:8443/` and `curl --cacert roots.pem --http2 https://HOST:8443/`.
 
 `workers := 0` uses the available CPU count, capped by `server.maxClients`. `maxClients` is the total inbound client budget. The worker factory must create separate mutable application state per worker. Callbacks are synchronous on the worker.
 

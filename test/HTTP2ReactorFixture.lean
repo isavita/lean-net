@@ -52,10 +52,10 @@ private def handlers (worker : Nat) : IO Handlers := do
   }
 
 def main (args : List String) : IO UInt32 := do
-  let some port := args[0]?.bind String.toNat? | throw (IO.userError "usage: fixture PORT [mixed|h2-only|push|limits|bench|bench-observe] [WORKERS]")
+  let some port := args[0]?.bind String.toNat? | throw (IO.userError "usage: fixture PORT [mixed|mixed-limits|h2-only|push|limits|bench|bench-observe] [WORKERS]")
   if port == 0 || port > 65535 then throw (IO.userError "invalid port")
   let mode := args[1]?.getD "mixed"
-  unless ["mixed", "h2-only", "push", "limits", "bench", "bench-observe"].contains mode do throw (IO.userError "invalid HTTP/2 fixture mode")
+  unless ["mixed", "mixed-limits", "h2-only", "push", "limits", "bench", "bench-observe"].contains mode do throw (IO.userError "invalid HTTP/2 fixture mode")
   let benchmark := mode == "bench" || mode == "bench-observe"
   let accessLog ← if mode == "bench-observe" then do
       let executable ← IO.appPath
@@ -71,9 +71,12 @@ def main (args : List String) : IO UInt32 := do
       maxConcurrentStreams := 2, initialWindowSize := 1024, maxHeaderListBytes := 2048,
       maxHeaderFields := 16, maxHeaderBlockBytes := 4096, maxContinuationFrames := 4,
       maxRequestBodyBytes := 4096, maxBufferedRequestBytes := 8192 }
+    else if mode == "mixed-limits" then { maxRequestBodyBytes := 16 }
     else { enablePush := mode == "push" }
   let config : HTTP.ReactorServerConfig := {
-    workers, http2 := connection, cleartextProtocol := if mode == "mixed" then .detect else .http2,
+    workers, http2 := connection,
+    machine := if mode == "mixed-limits" then { limits := { maxBodyBytes := 8 } } else {},
+    cleartextProtocol := if mode == "mixed" || mode == "mixed-limits" then .detect else .http2,
     server := { maxClients := if benchmark then 128 else 64,
                 maxResponseBytes := 8 * 1024 * 1024, maxResponseHeaderBytes := 65536 },
     outputBuffers := if benchmark then 512 else 128,
