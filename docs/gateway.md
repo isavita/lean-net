@@ -198,6 +198,13 @@ heap objects. The generated-C proof-erasure regression checks the runtime
 field count. `lean --profile` measures elaboration and type checking, not
 per-request runtime allocations.
 
+The [three-round macOS ARM64 report](../test/benchmarks/gate-allocations-macos-4eeaa6b.json)
+measured 48 small allocations and 827–830 ns per host-only decision, and 59
+small allocations and 933–940 ns per routed decision (100,000 requests per
+round). The disabled reference loop measured one small allocation and about
+10 ns per iteration. These are measurements of a prebuilt head and policy on
+one machine; they do not establish the end-to-end 1 µs overhead target.
+
 ## Policy language
 
 ```
