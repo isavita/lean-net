@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from email.utils import format_datetime, parsedate_to_datetime
 import os
 from pathlib import Path
+import select
 import signal
 import socket
 import struct
@@ -554,7 +555,10 @@ class Deadlines(ServerCase, unittest.TestCase):
             started = time.monotonic()
             sock.sendall(b"GET / HTTP/1.1\r\nHost: x\r\nX: ")
             for _ in range(4):
-                time.sleep(.12)
+                # Observe a ready timeout response during the trickle interval.
+                # Delayed client sleeps must not hide an on-time server reply.
+                if select.select([sock], [], [], .12)[0]:
+                    break
                 try:
                     sock.sendall(b"x")
                 except OSError:
