@@ -93,6 +93,12 @@ the server cannot claim strict Host/SNI matching. A TLS gateway must fail
 closed on absent or mismatched SNI, including when certificate selection falls
 back to a default certificate. Verified mTLS identity must likewise be passed
 from the transport's trusted state for any principal-specific rule.
+An mTLS authorization rule should match an exact, typed SAN (for example a
+specific URI or DNS identity) from a verified peer certificate. The printable
+subject DN is diagnostic metadata and should not be parsed as a comma-delimited
+authorization key. Exact SNI/Host equality is deliberately stricter than
+HTTP/2 origin coalescing; any permitted cross-origin reuse needs an explicit
+configured SNI-to-authority relationship and a matching certificate policy.
 
 The integrated signature should replace the public prototype facts with an
 opaque value constructed by the transport provider:
