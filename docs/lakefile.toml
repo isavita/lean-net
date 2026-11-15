@@ -1,0 +1,21 @@
+name = "lean-net-docs"
+reservoir = false
+version = "0.1.0"
+defaultTargets = ["LeanNetDocs"]
+
+[[lean_lib]]
+name = "LeanNetDocs"
+
+[[require]]
+name = "doc-gen4"
+git = "https://github.com/leanprover/doc-gen4"
+# doc-gen4 v4.35.0, matching the repository's Lean toolchain.
+rev = "0e1ffe2e4ba5ecfdfaf15c65b8d3805dbb7134ae"
+
+[[require]]
+name = "lean-net"
+path = ".."
+
+[[require]]
+name = "lean-net-tls"
+path = "../tls"

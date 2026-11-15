@@ -2,6 +2,12 @@ import Lake
 open Lake DSL
 
 package «lean-net-tls» where
+  version := v!"0.1.0"
+  description := "TLS, mTLS, SNI and verified HTTPS upstreams for lean-net"
+  keywords := #["networking", "http", "http2", "tls", "mtls", "openssl", "ffi"]
+  homepage := "https://isavita.github.io/lean-net/LeanNetTLS.html"
+  license := "Apache-2.0"
+  licenseFiles := #["../LICENSE", "../NOTICE"]
   moreLinkArgs := run_io do
     let version ← IO.Process.output { cmd := "pkg-config", args := #["--atleast-version=1.1.1", "openssl"] }
     if version.exitCode != 0 then throw <| IO.userError "OpenSSL 1.1.1 or newer is required"
