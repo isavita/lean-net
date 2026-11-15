@@ -1,174 +1,66 @@
 # lean-net
 
-A Lean 4 TCP and HTTP library under development. TCP echo and cleartext HTTP use
-the native epoll/kqueue/IOCP reactor. HTTP/1.0 and HTTP/1.1 use a pure connection
-machine; a pure HTTP/2 action machine serves prior-knowledge HTTP/2 (h2c) and
-negotiated TLS connections. The separate
-`tls/` package uses dedicated native TLS workers connected to the reactor by
-bounded queues. Immutable static catalogs serve the same files across all
-three HTTP versions and both transports.
+Lean 4 libraries for TCP, HTTP/1.0, HTTP/1.1, HTTP/2, and WebSocket servers. The optional [`lean-net-tls`](tls/README.md) package adds TLS, mTLS, SNI, and ALPN. Both packages use the same HTTP handlers and native reactor on Linux, macOS, and Windows.
 
-The expanded production brief is being implemented phase by phase.
-[The acceptance ledger](docs/production-roadmap.md) retains
-completed phase gates and the remaining hardening and actual
-24-hour soak work. The new native-reactor echo and its ownership model are described
-in [docs/reactor.md](docs/reactor.md). The HTTP machine, advanced handlers and
-transport boundaries are documented in [docs/http1-machine.md](docs/http1-machine.md).
-See [docs/http2-machine.md](docs/http2-machine.md) for HTTP/2 configuration,
-priority scheduling, push and draining, and [docs/static-files.md](docs/static-files.md)
-for immutable static catalogs, file transports and resource limits. Phases 1–5
-passed acceptance; production hardening and the actual 24-hour soak remain open
-in Phase 6.
-The [production controls guide](docs/production-hardening.md) covers metrics,
-access logs, graceful shutdown and opt-in certificate reload. The
-[production checklist status](docs/production-checklist.md) maps every
-production-readiness requirement to its implementation, tests and open gaps.
-The optional [request gate and gateway](docs/gateway.md) adds host and path
-policies, typed rejections, rate limits and configuration-bound upstream
-HTTP/1.1 forwarding. The separate TLS package provides verified HTTPS
-backends and secure per-worker connection reuse; the plain core server
-rejects HTTPS backends without that provider.
+## Install
+
+Use the Lean version in [`lean-toolchain`](lean-toolchain). Install `pkg-config`, zlib, and Brotli development libraries (`zlib`, `libbrotlienc`, `libbrotlicommon`); Windows builds also need MinGW GCC and matching import libraries. In a consumer `lakefile.lean`:
+
+```lean
+require «lean-net» from git "https://github.com/isavita/lean-net" @ "main"
+```
+
+For macOS with Homebrew zlib, set `PKG_CONFIG_PATH="$(brew --prefix zlib)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"` before building. The TLS package also needs OpenSSL 1.1.1 or newer; see [TLS setup](tls/README.md).
+
+## Use
+
+```lean
+import LeanNet
+
+open LeanNet
+
+def main : IO Unit :=
+  HTTP.ReactorServer.serveFactory
+    (fun _ => pure {
+      onRequest := fun _ =>
+        pure { response := { status := 200, body := "ok\n".toUTF8 } }
+    })
+    { workers := 0, server := { maxClients := 4096 } }
+    "127.0.0.1" 8080
+```
+
+`serveFactory` creates handlers once per worker. Set `workers := 0` for the available CPU count; callbacks run on their owning worker and should not block. `serveWithHandlers` and `serveWithConfig` are single-worker entry points. `LeanNet.withListener` and `LeanNet.withConnection` provide bracketed socket ownership for lower-level applications.
+
+```mermaid
+flowchart LR
+  A[TCP accept] --> B[Reactor worker]
+  B --> C[TLS and ALPN when enabled]
+  C --> D[HTTP/1 or HTTP/2 parser]
+  D --> E[Optional admission gate]
+  E --> F[Application handler]
+  E --> G[Static catalog]
+  E --> H[Upstream gateway]
+```
+
+## Features and configuration
+
+| Feature | Library configuration | Guide |
+| --- | --- | --- |
+| HTTP/1.x, HTTP/2, h2c, keep-alive, WebSocket | `HTTP.ReactorServerConfig`, `HTTP1.Handlers`; HTTP/2 uses `http2`, `h2cUpgrade` | [Server options](docs/server.md) |
+| TLS, mTLS, SNI, certificate reload | `LeanNetTLS.Reactor.Config` and `LeanNetTLS.ReactorServer.serveFactory` | [TLS](tls/README.md) |
+| Static files, compression, ranges, validators | `HTTP.Static.serveRoot` and `HTTP.Static.Catalog.Config` | [Static files](docs/static-files.md) |
+| Host routing, validation, rate limits, reverse proxy | `Gate.Spec`, `Gate.factory`, `ReactorServerConfig.admission` and `gateway` | [Gate and gateway](docs/gateway.md) |
+| Metrics, access logs, health, tracing, graceful drain | `HTTP.ReactorServerConfig` | [Server options](docs/server.md) |
+| Benchmarks | Reproducible commands and results | [Benchmarks](docs/benchmarks.md) |
+
+The default listener is `127.0.0.1`; pass an explicit bind address to expose it. HTTP/2 is selected by the cleartext preface or h2c upgrade, and by ALPN on TLS. The gateway forwards to HTTP/1.1 backends over HTTP or verified HTTPS.
 
 ## Build and test
 
-Install the Lean toolchain selected by `lean-toolchain`, `pkg-config`, and zlib
-and Brotli development libraries. Linux packages are `pkg-config zlib1g-dev
-libbrotli-dev`; Windows requires matching MinGW GCC, zlib and Brotli import
-libraries/DLLs. On macOS, select an installed zlib explicitly:
-
-```sh
-brew install zlib brotli pkgconf
-export PKG_CONFIG_PATH="$(brew --prefix zlib)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-```
-
-Then run:
-
 ```sh
 lake build
-lake build lean-net-http1-fixture lean-net-http2-fixture lean-net-event-ffi-test lean-net-transport-test lean-net-ffi-live lean-net-pool-lifetime-test
-lake env lean test/LeanNetTest.lean
-lake env lean --run test/HTTP1Test.lean
-lake env lean --run test/HTTP1HeaderEventTest.lean
-lake env lean --run test/HTTP1ResponseTest.lean
-lake env lean --run test/HTTP1ParserV2Test.lean
-lake env lean --run test/HTTP1EncodingTest.lean
-lake env lean --run test/HTTP1MachineTest.lean
-lake env lean --run test/HTTP2PrefaceTest.lean
-lake env lean --run test/HTTP2FrameTest.lean
-lake env lean --run test/HTTP2FrameV2Test.lean
-lake env lean --run test/PriorityTest.lean
-lake env lean --run test/HTTP2MachineTest.lean
-lake env lean --run test/HPACKTest.lean
-lake env lean --run test/HTTP2RequestTest.lean
-lake env lean --run test/HTTP2StreamTest.lean
-lake env lean --run test/HTTP2ConnectionTest.lean
-lake env lean --run test/HTTP2ConnectionV2Test.lean
-python3 test/test_echo.py -v
-python3 test/test_http1_server.py -v
-.lake/build/bin/lean-net-event-ffi-test
-python3 test/test_ffi_live.py -v
-python3 test/test_pool_lifetime.py -v
-python3 test/test_http1_event.py -v
-python3 test/test_transport_scheduler.py -v
-python3 test/test_http1_faults.py -v
-python3 test/test_http2_e2e.py -v
-python3 test/test_resilience.py -v
+lake -d tls build lean-net-tls
+python3 test/soak.py --count 10000
 ```
 
-The native build uses `-Wall -Wextra -Wpedantic -Werror`. Windows native builds
-require MinGW GCC for the system SDK headers.
-The acceptance suite uses loopback sockets and checks descriptor counts using
-`/proc` on Linux or `lsof` on macOS. The echo server takes a port argument:
-
-```sh
-.lake/build/bin/lean-net-echo 8080
-# Choose an explicit worker count (the default is the active logical CPU count):
-# .lake/build/bin/lean-net-echo 8080 4
-# Or run the HTTP server and request its default route:
-.lake/build/bin/lean-net-http1 8080
-# In another terminal:
-# curl -v --http1.1 http://localhost:8080/
-# curl -v --http2-prior-knowledge http://localhost:8080/
-# Optional demo push (off by default; the peer must also permit it):
-# .lake/build/bin/lean-net-http1 --enable-push 8080
-# Serve a startup snapshot of a directory (8 MiB packed/resident budget):
-# .lake/build/bin/lean-net-http1 8080 --static ./public --static-memory 8
-```
-
-Static preparation includes compressed variants and directory pages in the
-budget and requires enough OS locked-memory capacity. Originals can change
-after startup without changing the served snapshot. See the
-[static-file guide](docs/static-files.md) for library APIs and failure policies.
-
-The native reactor has additional ownership, concurrency and allocation checks:
-
-```sh
-lake build lean-net-reactor-native-test
-lake build lean-net-http1-reactor-fixture
-.lake/build/bin/lean-net-reactor-native-test
-lake env lean test/ReactorStateTest.lean
-python3 -m unittest discover -s test -p 'test_reactor_*.py' -v
-python3 test/test_http1_reactor.py -v
-# Windows IOCP/Winsock fixtures (use lake env to resolve native tool paths):
-# lake env python test/test_reactor_setup.py -v
-# lake env python test/test_reactor_echo.py -v
-# lake env python test/test_windows_native.py -v
-```
-
-The optional stdlib-only connection soak starts its own loopback server,
-validates alternating HTTP/1.1 and prior-knowledge h2c responses, and samples
-quiescent RSS and descriptor counts after each batch:
-
-```sh
-python3 test/soak.py
-# Adjust workload or resource thresholds; see all options with --help:
-python3 test/soak.py --count 10000 --warmup 500 --batch 1000 --concurrency 16
-```
-
-By default it allows no descriptor growth over baseline and at most 8192 KiB
-RSS growth over the warmup sample. Use `--max-fd-growth` and
-`--max-rss-growth-kib` to set thresholds for a different environment. RSS is
-sampled with `ps`; descriptor counts use `/proc` or `lsof`. The check measures
-connection churn over the run, not long-duration sustained-load performance.
-
-## FFI and resource ownership
-
-The C functions return Lean `IO` objects. Socket syscall results encode
-non-negative descriptors and byte counts or negative `-errno` values; the
-listener encodes `getaddrinfo` failures as `-(100000 + EAI_code)` (the native
-EAI code may itself be negative). The Lean layer interprets results and owns
-retry policy; C does not retry interrupted syscalls. `close` is called once,
-never retried, and `EBADF` indicates a library defect. Socket resources are
-managed with explicit brackets rather than finalizers.
-
-Native echo, HTTP and TLS use a signal group that wakes and joins every
-dedicated worker before freeing native state. TLS threads are also joined while
-their reactor resources remain alive. Unix listeners use `SO_REUSEADDR`; Windows uses
-`SO_EXCLUSIVEADDRUSE`. Accepted sockets use `TCP_NODELAY` and platform SIGPIPE
-suppression by default.
-
-`lakefile.lean` supplies the native build recipe: Lake cannot express this
-custom C compilation step in the static TOML manifest. Socket handles are
-borrowed for the lifetime of their bracket callback; callers must not retain
-or close them again after the callback returns.
-
-The HTTP/1.1 parser retains its progress across input fragments, enforces
-configurable size limits, and returns unconsumed bytes for pipelined requests.
-Parsing errors must close the connection; a caller must not resume parsing the
-remaining bytes as a new request after a framing error.
-
-The default cleartext server uses one protocol worker per core. Its global
-client budget is partitioned across workers. `serveWithConfig` preserves the
-original single-worker ownership of an arbitrary `Router`; multicore
-applications use a per-worker handler factory. Callbacks execute synchronously
-and should not block. Responses have explicit framing and a per-worker cached
-Date header. The default router serves `/`.
-
-HTTP/2 supports request multiplexing, HPACK with static and dynamic tables
-and Huffman coding, stream and connection flow control, RFC 9218 priorities,
-and optional push. Cleartext HTTP/2 works with prior knowledge or with
-an HTTP/1.1 `Upgrade: h2c` (bodyless requests). WebSocket applications can use
-HTTP/1.1 Upgrade or RFC 8441 extended CONNECT on HTTP/2; both are disabled in
-the demo unless `--websocket-origin` names one exact allowed Origin. For
-TLS setup, certificate requirements, and verified-client tests, see
-[tls/README.md](tls/README.md).
+Run the focused suites in [test/README.md](test/README.md). The executable entry points `lean-net-http1` and `lean-net-tls` use the same library APIs; their flags are listed in the [server](docs/server.md) and [TLS](tls/README.md) guides.

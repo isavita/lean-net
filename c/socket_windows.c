@@ -130,6 +130,9 @@ static int ln_close_failure(SOCKET socket, int error) {
              : error;
 }
 lean_object *shim_tcp_listen(b_lean_obj_arg host, uint16_t port) {
+  const char *name = lean_string_cstr(host);
+  if (strlen(name) + 1 != lean_string_size(host))
+    return mk_i64_ok(-EINVAL);
   int error = ln_wsa_initialize();
   if (error)
     return mk_i64_ok(-error);
@@ -141,7 +144,6 @@ lean_object *shim_tcp_listen(b_lean_obj_arg host, uint16_t port) {
   char service[6];
   snprintf(service, sizeof(service), "%u", (unsigned)port);
   ADDRINFOA *addresses = NULL;
-  const char *name = lean_string_cstr(host);
   error = getaddrinfo(name[0] ? name : NULL, service, &hints, &addresses);
   if (error)
     return mk_i64_ok(-(100000 + (int64_t)error));

@@ -10,6 +10,8 @@ import LeanNet.HTTP1.Date
 import LeanNet.HTTP1.Response
 import LeanNet.HTTP1.Protocol
 import LeanNet.HTTP1.Encoding
+import LeanNet.HTTP1.Streaming
+import LeanNet.HTTP1.ClientResponse
 import LeanNet.HTTP1.Config
 import LeanNet.HTTP1.Router
 import LeanNet.HTTP1.Machine
@@ -19,6 +21,11 @@ import LeanNet.HTTP.Transport
 import LeanNet.HTTP.Admission
 import LeanNet.HTTP.ReactorServer
 import LeanNet.Gate
+import LeanNet.Gateway.Transport
+import LeanNet.Gateway.Resolve
+import LeanNet.Gateway.Wire
+import LeanNet.Gateway.Pool
+import LeanNet.Gateway.Engine
 import LeanNet.HTTP.SecureHeaders
 import LeanNet.HTTP.Admin
 import LeanNet.HTTP.TraceContext

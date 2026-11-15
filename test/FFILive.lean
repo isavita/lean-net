@@ -30,11 +30,29 @@ private partial def sendSlice (fd : Int64) (data : ByteArray) (offset : Nat) : I
     sendSlice fd data (offset + n.toNat)
 
 private def run (port : UInt16) : IO Unit := withInterruptHandler do
+  let nulHost := "127.0.0.1" ++ String.singleton '\x00' ++ "ignored"
+  let rawInvalid := Errno.decode (← FFI.rawTcpListen nulHost port)
+  if rawInvalid >= 0 then
+    let _ ← FFI.rawClose (Int64.ofInt rawInvalid)
+    throw (IO.userError "raw listener accepted a host with an embedded NUL")
+  let rejected ← try
+    withListener nulHost port fun _ => pure false
+  catch _ => pure true
+  check rejected "listener accepted a host with an embedded NUL"
   let listenResult := Errno.decode (← FFI.rawTcpListen "127.0.0.1" port)
   check (listenResult >= 0) "listen failed"
   let listener := Int64.ofInt listenResult
   try
     check (Errno.decode (← FFI.setNonblocking listener 1) == 0) "nonblocking listener failed"
+    -- The 64-bit FFI ABI must reject values that would truncate to a live fd.
+    let alias := Int64.ofInt (listenResult + 4294967296)
+    let badFd := -(Int.ofNat (← FFI.errnoEbadf).toNat)
+    check (Errno.decode (← FFI.rawClose alias) == badFd) "truncated close alias reached live listener"
+    check (Errno.decode (← FFI.rawTcpAccept alias) == badFd) "truncated accept alias reached live listener"
+    let (badRead, _) ← FFI.rawTcpRecv alias 1
+    check (Errno.decode badRead == badFd) "truncated read alias reached live listener"
+    check (Errno.decode (← FFI.rawTcpSend alias "x".toUTF8 1) == badFd)
+      "truncated send alias reached live listener"
     let (acceptedRaw, acceptedStage) ← FFI.acceptStaged listener
     let accepted := Errno.decode acceptedRaw
     check (acceptedStage == 1 && (← Errno.isWouldBlock accepted))

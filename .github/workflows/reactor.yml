@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      compare_http1:
+        description: Compare HTTP/1.1 with Go, Uvicorn and Puma on Linux and upload raw results
+        type: boolean
+        default: false
 
 jobs:
   native:
@@ -151,6 +156,9 @@ jobs:
       - name: Echo acceptance
         if: runner.os != 'Windows'
         run: python3 test/test_echo.py -v
+      - name: HTTP/1.1 and h2c connection churn
+        if: runner.os != 'Windows'
+        run: python3 test/soak.py --count 10000 --warmup 500 --batch 1000 --concurrency 16
       - name: Native signal and endpoint ownership
         if: runner.os != 'Windows'
         run: |
@@ -167,3 +175,43 @@ jobs:
       - name: IOCP operations and cancellation lifetime
         if: runner.os == 'Windows'
         run: lake env python test/test_windows_native.py -v
+      - name: Set up Go for optional HTTP/1.1 comparison
+        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.compare_http1
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Set up Python for optional HTTP/1.1 comparison
+        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.compare_http1
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14.10'
+      - name: Set up Ruby for optional HTTP/1.1 comparison
+        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.compare_http1
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0.9'
+      - name: Install pinned HTTP/1.1 reference servers
+        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.compare_http1
+        run: |
+          python3 -m venv "$RUNNER_TEMP/http1-python"
+          "$RUNNER_TEMP/http1-python/bin/python" -m pip install --requirement test/benchmarks/python-http1-requirements.txt
+          bash test/benchmarks/install_ruby_http1.sh "$RUNNER_TEMP/http1-ruby"
+      - name: Compare HTTP/1.1 with Go, Uvicorn and Puma
+        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.compare_http1
+        run: |
+          go version
+          python3 test/benchmarks/compare_http1.py --workers 4 --rounds 3 \
+            --references go uvicorn puma \
+            --uvicorn-python "$RUNNER_TEMP/http1-python/bin/python" \
+            --puma-exe "$RUNNER_TEMP/http1-ruby/bin/puma" \
+            --ruby-gem-home "$RUNNER_TEMP/http1-ruby" \
+            --output "$RUNNER_TEMP/http1-comparison-linux.json"
+      - name: Preserve HTTP/1.1 comparison
+        if: success() && runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.compare_http1
+        uses: actions/upload-artifact@v4
+        with:
+          name: http1-comparison-linux-four-way
+          path: ${{ runner.temp }}/http1-comparison-linux.json
+          if-no-files-found: error
+          retention-days: 30
