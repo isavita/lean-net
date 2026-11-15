@@ -12,4 +12,3 @@ Run from the repository root. Reports in this directory contain the executable h
 | Gateway gate allocations | `python3 test/bench_gate.py --output /tmp/gate.json` |
 
 The HTTP/1.1 comparison uses the same C client for every server and verifies every response body. It measures a five-byte endpoint over persistent loopback connections, without TLS or proxying.
-The `http1-preliminary-*` report predates matching response headers and is excluded from the comparison.
