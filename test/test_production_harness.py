@@ -6,7 +6,7 @@ import subprocess
 import sys
 import unittest
 
-from soak24 import ClockGuard, assess_sample, counter, log_health, parse_load, sample_process_family, validate, DAY, LOG_HEALTH_METRICS, LOG_MAX_PENDING_RECORDS
+from soak24 import ClockGuard, assess_sample, counter, loader_command, loader_completion_bounds, log_health, parse_load, sample_process_family, validate, DAY, LOG_HEALTH_METRICS, LOG_MAX_PENDING_RECORDS
 
 
 def config():
@@ -182,6 +182,26 @@ status codes: 10000 2xx, 0 3xx, 0 4xx, 0 5xx
 traffic: 1MB (1000000) total, 1KB (1000) headers, 20KB (20000) data
 '''
         self.assertTrue(parse_load(text, 2)['valid'])
+        self.assertTrue(parse_load(text, 2, 10000)['valid'])
+        self.assertFalse(parse_load(text, 2, 10001)['valid'])
+        server = dict(name='tls', scheme='https', authority='alpha.test', port=443, path='/binary', connections=10, rps_per_client=510)
+        command, plan = loader_command('/snapshot/h2load', server, 300, DAY, 30)
+        self.assertEqual(plan['planned_requests'], 442374000)
+        self.assertEqual(command[command.index('-n') + 1], str(plan['planned_requests']))
+        self.assertIn('--rps=510', command)
+        self.assertNotIn('-D', command)
+        self.assertNotIn('--duration', command)
+        self.assertLess(plan['planned_requests'], 2**32)
+        bound = loader_completion_bounds([dict(server, name='plain'), server], [plan, plan])
+        self.assertEqual(bound['loaders'][0]['minimum_feasible_rps'], 4900)
+        self.assertEqual(bound['deadline_seconds_from_load_start'], 442374000 / 4900 + 30)
+        self.assertAlmostEqual(bound['loaders'][0]['maximum_extra_seconds_over_nominal'], 3570.4081632653106)
+        asymmetric = loader_completion_bounds([dict(server, rps_per_client=500), dict(server, rps_per_client=520)], [plan, plan])
+        self.assertEqual([row['minimum_feasible_rps'] for row in asymmetric['loaders']], [4800, 5000])
+        with self.assertRaisesRegex(ValueError, 'minimum feasible'):
+            loader_completion_bounds([dict(server, connections=1, rps_per_client=100), dict(server, connections=1, rps_per_client=10100)], [plan, plan])
+        with self.assertRaisesRegex(ValueError, '64-bit'):
+            loader_command('/snapshot/h2load', server, 300, 2**64, 30)
         for bad in [text.replace('(20000) data', '(19999) data'), text.replace('0 failed', '1 failed'),
                     text.replace('10000 2xx', '9999 2xx'), text.replace('10000 started', '10001 started'),
                     text.replace('protocol: h2', 'protocol: http/1.1')]:

@@ -144,7 +144,7 @@ def counter(text, selector):
     return result
 
 
-def parse_load(text, expected_size):
+def parse_load(text, expected_size, planned_requests=None):
     count = re.search(r'requests:\s*(\d+) total,\s*(\d+) started,\s*(\d+) done,\s*(\d+) succeeded,\s*(\d+) failed,\s*(\d+) errored,\s*(\d+) timeout', text)
     status = re.search(r'status codes:\s*(\d+) 2xx,\s*(\d+) 3xx,\s*(\d+) 4xx,\s*(\d+) 5xx', text)
     data = re.search(r'\((\d+)\) data', text)
@@ -154,12 +154,49 @@ def parse_load(text, expected_size):
         raise ValueError('unrecognized h2load summary')
     total, started, done, succeeded, failed, errored, timeout = map(int, count.groups())
     valid = (total == started == done == succeeded and done > 0 and failed == errored == timeout == 0
+             and (planned_requests is None or total == planned_requests)
              and list(map(int, status.groups())) == [done, 0, 0, 0]
              and int(data[1]) == succeeded * expected_size and proto[1] in ('h2', 'h2c'))
     return {'total': total, 'started': started, 'done': done, 'succeeded': succeeded,
             'failed': failed, 'errored': errored, 'timeouts': timeout,
             'data_bytes': int(data[1]), 'status_counts': list(map(int, status.groups())),
             'protocol': proto[1], 'reported_rps': float(rate[2]), 'valid': valid}
+
+
+def loader_command(binary, server, warmup, duration, tail):
+    """Finite requests let final active streams finish instead of canceling."""
+    pacing_seconds = math.ceil(warmup + duration + tail + 10)
+    connections, rps = server.get('connections', 10), server.get('rps_per_client', 510)
+    requests = pacing_seconds * connections * rps
+    if not 0 < requests <= 2**64 - 1:
+        raise ValueError('planned h2load request count exceeds unsigned 64-bit range')
+    command = [str(binary), '-n', str(requests), '-c', str(connections),
+               '-m', '100', '-t', '1', '--rps=' + str(rps), '-N', '10s',
+               '--alpn-list=h2', '--connect-to=127.0.0.1:' + str(server['port']),
+               f"{server['scheme']}://{server['authority']}:{server['port']}{server['path']}"]
+    return command, {'planned_requests': requests, 'planned_requests_per_client': requests // connections,
+                     'planned_pacing_seconds': pacing_seconds, 'termination': 'finite_count_drain'}
+
+
+def loader_completion_bounds(servers, plans):
+    if len(servers) != len(plans):
+        raise ValueError('loader completion plan count mismatch')
+    offered = [server.get('connections', 10) * server.get('rps_per_client', 510) for server in servers]
+    rows = []
+    for server, plan, rate in zip(servers, plans, offered):
+        other_offered = sum(offered) - rate
+        minimum = FLOOR_RPS - other_offered
+        if minimum <= 0:
+            raise ValueError('offered split lacks a positive minimum feasible per-loader completion rate')
+        deadline = plan['planned_requests'] / minimum + 30
+        rows.append({'name': server['name'], 'offered_rps': rate, 'other_loaders_offered_rps': other_offered,
+                     'minimum_feasible_rps': minimum, 'planned_requests': plan['planned_requests'],
+                     'nominal_pacing_seconds': plan['planned_pacing_seconds'],
+                     'deadline_seconds_from_load_start': deadline,
+                     'maximum_extra_seconds_over_nominal': deadline - plan['planned_pacing_seconds']})
+    return {'formula': 'minimum_feasible_rps = required aggregate floor - other loaders offered RPS; deadline = max(planned requests / minimum feasible RPS +30 seconds)',
+            'measured_window_and_rate_gate_unchanged': True, 'loaders': rows,
+            'deadline_seconds_from_load_start': max(row['deadline_seconds_from_load_start'] for row in rows)}
 
 
 def process_resources(pid):
@@ -475,6 +512,10 @@ def validate(config, smoke):
         aggregate += connections * rps
     if aggregate != OFFERED_RPS:
         raise ValueError('predeclared offered aggregate must be exactly 10,200 RPS')
+    for server in servers:
+        rate = server.get('connections', 10) * server.get('rps_per_client', 510)
+        if FLOOR_RPS - (aggregate - rate) <= 0:
+            raise ValueError('offered split lacks a positive minimum feasible per-loader completion rate')
     return duration, warmup, tail, sample
 
 
@@ -650,16 +691,15 @@ def run(args):
         load_start = time.monotonic()
         clock_guard = ClockGuard(time.time(), load_start)
         for server in report['servers']:
-            # This duration covers startup skew, warmup, the common window and
-            # an unmeasured tail. Per-request logs and raw-sample JSON are off.
-            command = [str(h2snapshot), '-D', f'{math.ceil(warmup + duration + tail + 10)}s', '-c', str(server.get('connections', 10)),
-                       '-m', '100', '-t', '1', '--rps=' + str(server.get('rps_per_client', 510)), '-N', '10s',
-                       '--alpn-list=h2', '--connect-to=127.0.0.1:' + str(server['port']),
-                       f"{server['scheme']}://{server['authority']}:{server['port']}{server['path']}"]
+            # Preserve pacing past the common measured window, then finish
+            # every requested stream naturally. Duration mode cancels its
+            # last active streams and violates strict started==completed QA.
+            command, plan = loader_command(h2snapshot, server, warmup, duration, tail)
             log_path = args.output / (server['name'] + '-h2load.log')
             stream = log_path.open('w'); streams.append(stream)
             loaders.append(subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT))
-            report['loaders'].append({'name': server['name'], 'command': command, 'log': str(log_path)})
+            report['loaders'].append({'name': server['name'], 'command': command, 'log': str(log_path), **plan})
+        report['loader_completion_bound'] = loader_completion_bounds(report['servers'], report['loaders'])
         report['load_started_utc'] = utc(); persist()
         next_heartbeat = time.monotonic() + 5
         while time.monotonic() < load_start + warmup:
@@ -721,7 +761,7 @@ def run(args):
                        'successful_load_requests_conservative': conservative_successful,
                        'achieved_rps': conservative_successful / rate_seconds})
         persist()
-        wait_deadline = load_start + warmup + duration + tail + 30
+        wait_deadline = load_start + report['loader_completion_bound']['deadline_seconds_from_load_start']
         while any(p.poll() is None for p in loaders):
             clock_guard.check(time.time(), time.monotonic())
             if time.monotonic() >= next_heartbeat:
@@ -731,7 +771,7 @@ def run(args):
             time.sleep(.25)
         for server, loader, record in zip(report['servers'], loaders, report['loaders']):
             text = Path(record['log']).read_text()
-            result = parse_load(text, len(bytes.fromhex(server['body_hex'])))
+            result = parse_load(text, len(bytes.fromhex(server['body_hex'])), record['planned_requests'])
             record['result'] = result; record['exit_code'] = loader.returncode
             if loader.returncode or not result['valid'] or re.search(r'ECONNRESET|connection reset|RST_STREAM|error:', text, re.I):
                 raise RuntimeError('h2load reports errors, resets, bad statuses or aggregate body bytes')

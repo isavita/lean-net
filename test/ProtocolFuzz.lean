@@ -408,6 +408,8 @@ def main (args : List String) : IO UInt32 := do
   let maximum := ((args[2]?).bind String.toNat?).getD 2048
   if seed > 18446744073709551615 || cases == 0 || cases > 1000000 || maximum < 256 || maximum > 16384 then
     throw (IO.userError "usage: ProtocolFuzz.lean [seedUInt64] [cases1..1000000] [maxBytes256..16384]")
+  IO.println s!"FUZZ_START seed={seed} cases={cases} max_input_bytes={maximum} phase=adversarial"
+  (← IO.getStdout).flush
   adversarial
   for index in [:cases] do
     let caseSeed := UInt64.ofNat seed + UInt64.ofNat index * 11400714819323198485

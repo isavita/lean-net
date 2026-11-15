@@ -357,15 +357,22 @@ int main(int argc, char **argv) {
   REQUIRE(ob_stop(hub, 100) == -EIO && !injected_clock);
 #endif
   REQUIRE(finish(hub, 100) == 1 && ob_free(hub) == 0);
+#ifdef _WIN32
+  REQUIRE(fputs("logger Windows resource diagnostics begin\n", stderr) >= 0 && fflush(stderr) == 0);
+#endif
   unsigned failed_before = handles();
 #ifdef _WIN32
+  unsigned sdk_before = failed_before;
   trace_snapshot failed_snapshot_before, failed_snapshot_after;
   trace_snapshot_take(&failed_snapshot_before);
   trace_capture = trace_stages = 1;
   trace_missing_sdk();
   unsigned control_after = handles();
   fprintf(stderr, "logger direct SDK baseline=%u after=%u owned_created=%u owned_closed=%u owned_open=%u\n",
-          failed_before, control_after, trace_created, trace_closed, trace_open);
+          sdk_before, control_after, trace_created, trace_closed, trace_open);
+  /* Actual Windows CI traced a one-time increase inside this direct SDK call,
+     outside Hub ownership. Every following failed lifetime must stay flat. */
+  failed_before = control_after;
   unsigned failed_min = UINT_MAX, failed_max = 0;
   for (unsigned i = 0; i < 1000; ++i) {
     trace_iteration = i + 1; trace_stages = i < 2 || i == 999;
@@ -374,6 +381,7 @@ int main(int argc, char **argv) {
     unsigned current = handles();
     if (current < failed_min) failed_min = current;
     if (current > failed_max) failed_max = current;
+    REQUIRE(current <= failed_before);
     REQUIRE(trace_open == 0 && trace_created == trace_closed && trace_views == 0 && trace_view_created == trace_view_closed);
     if (i < 4 || i == 999)
       fprintf(stderr, "logger failed startup iteration=%u handles=%u owned=%u/%u/%u views=%u/%u/%u\n",
@@ -382,13 +390,14 @@ int main(int argc, char **argv) {
   trace_capture = 0;
   trace_snapshot_take(&failed_snapshot_after);
   fprintf(stderr, "logger failed1000 before=%u direct_control=%u min=%u max=%u after=%u census=%u/%u\n",
-          failed_before, control_after, failed_min, failed_max, handles(), failed_snapshot_before.count, failed_snapshot_after.count);
+          sdk_before, control_after, failed_min, failed_max, handles(), failed_snapshot_before.count, failed_snapshot_after.count);
   trace_snapshot_diff(&failed_snapshot_before, &failed_snapshot_after);
 #else
   REQUIRE(ob_new(1, 1, path, "/missing/lean-net-access-log-helper", 4096, 3, 1, &hub) == 0);
   REQUIRE(ready(hub) == -ENOENT && finish(hub, 100) == -ENOENT && ob_free(hub) == 0);
 #endif
   REQUIRE(handles() <= failed_before);
+  unsigned failed_after = handles();
   int opened = ob_new(2, 8, path, helper, 4096, 3, 1, &hub);
   int handshaken = opened ? 0 : ready(hub);
   if (opened || handshaken != 1)
@@ -571,8 +580,20 @@ int main(int argc, char **argv) {
 #endif
   printf(
       "{\"accepted\":%llu,\"dropped\":%llu,\"hot_allocations\":%u,\"stop_ms\":%llu,"
-      "\"metrics_cycles\":1000,\"helper_cycles\":30,\"handles_before\":%u,\"handles_after\":%u}\n",
+      "\"metrics_cycles\":1000,\"helper_cycles\":30,\"handles_before\":%u,\"handles_after\":%u,"
+      "\"failed_handles_before\":%u,\"failed_handles_after\":%u"
+#ifdef _WIN32
+      ",\"failed_startup_cycles\":1000,\"sdk_handles_before\":%u,\"sdk_handles_after\":%u,"
+      "\"failed_owned_created\":%u,\"failed_owned_closed\":%u,\"failed_owned_open\":%u,"
+      "\"failed_views_created\":%u,\"failed_views_closed\":%u,\"failed_views_open\":%u"
+#endif
+      "}\n",
       (unsigned long long)accepted, (unsigned long long)dropped, hot_allocations,
-      (unsigned long long)stopped_ms, before, after);
+      (unsigned long long)stopped_ms, before, after, failed_before, failed_after
+#ifdef _WIN32
+      , sdk_before, control_after, trace_created, trace_closed, trace_open,
+      trace_view_created, trace_view_closed, trace_views
+#endif
+      );
   return 0;
 }

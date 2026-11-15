@@ -44,19 +44,24 @@ before execution. Caught failures print generated/mutated input hex. Logs and
 JSON preserve the last case and a one-case replay command. Replaying a seed
 also requires the recorded driver/source version and maximum input size.
 
-The serial child explicitly uses `LEAN_NUM_THREADS=1` and
-`LEAN_STACK_SIZE_KB=65536`, both recorded in its report. Lean v4.35 otherwise
-uses a hardware-concurrency task pool and reserves a 1GiB stack per runtime
-thread. Its generated executable initializes that pool before creating the
-main thread; the bounded main stack prevents startup alone from exhausting the
-unchanged 2GiB Linux address-space cap. These settings bound harness overhead
-without changing cases or protocol limits. See the pinned runtime
+The serial child explicitly uses `LEAN_NUM_THREADS=1`,
+`LEAN_STACK_SIZE_KB=65536` and `LEAN_MAIN_USE_THREAD=0`, all recorded in its
+report. It runs on its existing process thread. Linux sets that thread's lazy
+stack soft limit to 64MiB only when the existing hard limit permits it, while
+retaining the unchanged 2GiB address-space cap. Lean v4.35 defaults to a 1GiB
+stack for a newly created runtime thread. Its task-manager constructor is
+lazy: the earlier assumption that pool initialization preallocated worker
+stacks was not established and is not used to claim mandatory allocator
+overhead. Up to 32 bounded Linux startup samples record actual VA, RSS,
+thread counts and largest mappings. A flushed `FUZZ_START` distinguishes
+startup from the fixed adversarial prelude before the first `FUZZ_CASE`.
+These settings change no cases or protocol limits. See the pinned runtime
 [task-pool source](https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/object.cpp)
 and [thread/stack source](https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/thread.cpp).
 
-The short profile passed 500 interpreted cases locally during implementation;
-compiled final-source execution remains the next coordinator gate. This is not
-exhaustive proof; the long profile and final-source CI remain separate gates.
+Each report records the exact source, binary, seed, limits and runtime settings.
+Short CI runs and the long profile remain separate evidence; neither proves
+exhaustive parser correctness.
 
 ## Actual 24-hour soak
 
@@ -66,8 +71,34 @@ second **per client**. Defaults are two loaders (plain h2c and TLS h2), each wit
 10 persistent connections and 510 RPS per connection: **10,200 offered aggregate
 RPS**, with an unchanged **10,000 achieved-successful-RPS floor**.
 
-The upstream [1.71.0 implementation](https://github.com/nghttp2/nghttp2/blob/v1.71.0/src/h2load.cc)
-uses bounded reservoir sampling. The harness disables per-request log files
+Each loader uses finite count mode: `-n` is
+`ceil(warmup + measured duration + tail + 10) * connections * RPS per client`,
+or **442,374,000 requests per server** for the default full profile. The report
+records this exact plan and command. Rate control stays `--rps=510`; after the
+measured window, all planned requests must finish naturally. Duration mode
+`-D` is excluded because it can cancel active streams at its cutoff. Summary
+validation requires `total == started == done == succeeded == planned` with
+zero failed/errored/timed-out requests; canceled requests receive no tolerance.
+
+The bounded completion phase allows pacing asymmetry without changing the
+24-hour measured window or its 10,000 RPS floor. For each loader, the minimum
+feasible rate is `10,000 - sum(other loaders' offered RPS)`, which must be
+positive. Its deadline from common load start is `planned requests / minimum
+feasible rate + 30 seconds`; the controller uses the maximum of those bounds.
+The symmetric default gives 4,900 RPS, a 90,310.408-second deadline and at most
+3,570.408 seconds beyond nominal pacing. The report records the formula,
+rates, nominal spans and extra allowances. Persistent probes, clock-gap checks
+and log-health checks continue while loaders drain. All measured resource,
+reset, throughput and exact-summary gates remain unchanged.
+
+The upstream [1.71.0 implementation](https://github.com/nghttp2/nghttp2/blob/v1.71.0/src/h2load.cc#L1560-L1608)
+reserves at most `min(request count, max samples)` in count mode; its shared
+[reservoir sampler](https://github.com/nghttp2/nghttp2/blob/v1.71.0/src/h2load.cc#L1674-L1692)
+caps request statistics at 1,000,000 samples for the single loader thread.
+The [request counters](https://github.com/nghttp2/nghttp2/blob/v1.71.0/src/h2load.h#L250-L269)
+use `size_t`; the default planned count fits even 32 bits, and the controller
+rejects plans beyond unsigned 64-bit range. No per-request array proportional
+to the 442 million requests is allocated. The harness disables per-request log files
 and raw-sample JSON dumps. Each loader emits only its normal bounded summary.
 Access logs should target `{null}` during this performance observation; separate
 real-file acceptance tests must establish structured-log content and lifetime.

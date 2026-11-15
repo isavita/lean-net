@@ -41,6 +41,13 @@ class AccessLogNative(unittest.TestCase):
             self.assertGreater(report["dropped"], 0)
             self.assertLessEqual(report["handles_after"], report["handles_before"])
             self.assertLessEqual(report["stop_ms"], 250)
+            self.assertLessEqual(report["failed_handles_after"], report["failed_handles_before"])
+            if sys.platform == "win32":
+                self.assertEqual(report["failed_startup_cycles"], 1000)
+                self.assertEqual((report["failed_owned_created"], report["failed_owned_closed"], report["failed_owned_open"]), (1001, 1001, 0))
+                self.assertEqual((report["failed_views_created"], report["failed_views_closed"], report["failed_views_open"]), (1000, 1000, 0))
+                print("Windows failed-helper resource evidence: " + json.dumps({
+                    key: value for key, value in report.items() if key.startswith(("failed_", "sdk_"))}, sort_keys=True))
             files = list(directory.glob("access.jsonl*"))
             self.assertLessEqual(len(files), 3)
             records = []
