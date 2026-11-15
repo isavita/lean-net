@@ -2,7 +2,7 @@ import Lake
 open Lake DSL
 
 package «lean-net-tls» where
-  version := v!"0.1.0"
+  version := v!"0.1.1"
   description := "TLS, mTLS, SNI and verified HTTPS upstreams for lean-net"
   keywords := #["networking", "http", "http2", "tls", "mtls", "openssl", "ffi"]
   homepage := "https://isavita.github.io/lean-net/LeanNetTLS.html"

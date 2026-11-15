@@ -10,7 +10,7 @@ def main : IO Unit :=
     { residentBytes := 32 * 1024 * 1024,
       builder := { maxPackBytes := 32 * 1024 * 1024,
                    maxFileBytes := 32 * 1024 * 1024 } }
-    { server := { maxClients := 4096 } }
+    { server := { maxClients := 128 } }
     "127.0.0.1" 8080
 ```
 

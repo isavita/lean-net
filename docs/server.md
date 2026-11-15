@@ -9,7 +9,7 @@ open LeanNet
 
 def config : HTTP.ReactorServerConfig := {
   workers := 0
-  server := { maxClients := 4096, requestTimeoutMs := 15000 }
+  server := { maxClients := 128, requestTimeoutMs := 15000 }
   http2 := { maxConcurrentStreams := 128, pingIntervalMs := 10000 }
   healthPaths := true
   metricsPath := some "/metrics".toUTF8
@@ -17,6 +17,8 @@ def config : HTTP.ReactorServerConfig := {
 ```
 
 `workers := 0` uses the available CPU count, capped by `server.maxClients`. `maxClients` is the total inbound client budget. The worker factory must create separate mutable application state per worker. Callbacks are synchronous on the worker.
+
+Reserve at least one `outputBuffers` credit per client assigned to a worker. Higher connection limits also require enough `native` buffer and write credits; TLS reserves two additional native buffers per client.
 
 | Config field | Default | Use |
 | --- | ---: | --- |
@@ -59,7 +61,7 @@ The access-log queue defaults to 1,024 records per worker. `queueCapacity` accep
 
 ```sh
 lake build lean-net-http1
-.lake/build/bin/lean-net-http1 --host 0.0.0.0 --workers 4 --max-clients 4096 \
+.lake/build/bin/lean-net-http1 --host 0.0.0.0 --workers 4 --max-clients 512 \
   --health --metrics --admin-port 9000 --access-log ./access.jsonl 8080
 ```
 

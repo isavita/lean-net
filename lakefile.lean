@@ -2,7 +2,7 @@ import Lake
 open Lake DSL
 
 package «lean-net» where
-  version := v!"0.1.0"
+  version := v!"0.1.1"
   description := "TCP, HTTP/1.1, HTTP/2, WebSocket and reverse proxy libraries for Lean 4"
   keywords := #["networking", "http", "http2", "websocket", "proxy", "tcp", "ffi"]
   homepage := "https://isavita.github.io/lean-net/"
