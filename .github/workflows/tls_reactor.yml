@@ -35,6 +35,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev zlib1g-dev libbrotli-dev pkg-config openssl curl
+          echo "LEAN_CC=cc" >> "$GITHUB_ENV"
           echo "LEAN_NET_TEST_OPENSSL=openssl" >> "$GITHUB_ENV"
           echo "LEAN_NET_TEST_CURL=curl" >> "$GITHUB_ENV"
       - name: Install macOS TLS tools

@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      LEAN_CC: cc
 
     steps:
       - uses: actions/checkout@v7
