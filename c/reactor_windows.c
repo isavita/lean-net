@@ -1465,6 +1465,31 @@ static int rn_set_read_enabled_impl(rn_reactor *r, uint64_t token, int enabled) 
   }
   return 0;
 }
+
+static int rn_format_peer(const struct sockaddr_storage *address, char *out, size_t capacity) {
+    if (address->ss_family == AF_INET) {
+        const struct sockaddr_in *v4 = (const struct sockaddr_in *)address;
+        if (!inet_ntop(AF_INET, &v4->sin_addr, out, capacity)) return -EINVAL;
+    } else if (address->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *v6 = (const struct sockaddr_in6 *)address;
+        const unsigned char *bytes = (const unsigned char *)&v6->sin6_addr;
+        static const unsigned char mapped[12] = {0,0,0,0,0,0,0,0,0,0,0xff,0xff};
+        if (memcmp(bytes, mapped, sizeof(mapped)) == 0) {
+            if (!inet_ntop(AF_INET, bytes + 12, out, capacity)) return -EINVAL;
+        } else if (!inet_ntop(AF_INET6, &v6->sin6_addr, out, capacity)) return -EINVAL;
+    } else return -EAFNOSUPPORT;
+    return (int)strlen(out);
+}
+int rn_peer_address(rn_reactor *r, uint64_t token, char *out, size_t capacity) {
+  if (!r || !out || capacity < 46) return -EINVAL;
+  rn_connection *c = rn_connection_get(r, token);
+  if (!c || c->state != RN_CONNECTED) return -ENOTCONN;
+  struct sockaddr_storage address;
+  int length = sizeof(address);
+  if (getpeername(c->socket, (struct sockaddr *)&address, &length) == SOCKET_ERROR)
+    return -rn_error(WSAGetLastError());
+  return rn_format_peer(&address, out, capacity);
+}
 int rn_connection_live(rn_reactor *r, uint64_t token) {
   if (!r) return -EINVAL;
   rn_connection *c = rn_connection_get(r, token);

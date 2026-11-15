@@ -7,6 +7,8 @@
 #define OB_SNAPSHOT_FIELDS 47u
 #define OB_METHOD_BYTES 32u
 #define OB_TARGET_BYTES 256u
+#define OB_REMOTE_BYTES 64u
+#define OB_TRACE_BYTES 16u
 #define OB_MAX_MEMORY (64u * 1024u * 1024u)
 typedef struct ob_hub ob_hub;
 typedef struct {
@@ -14,6 +16,9 @@ typedef struct {
   uint32_t status, protocol, outcome;
   const uint8_t *method, *target;
   size_t method_length, target_length;
+  /* Optional: textual peer address and a 16-byte W3C trace-id. */
+  const uint8_t *remote, *trace;
+  size_t remote_length, trace_length;
 } ob_record;
 /* All allocation/spawn work occurs before serving. Control operations are
  * serialized. Metrics-only hubs pass empty path/helper and capacity0. Exactly

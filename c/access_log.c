@@ -41,6 +41,8 @@ typedef struct {
   uint64_t timestamp_ms, duration_us, bytes_sent;
   uint32_t status, protocol, outcome, flags, method_length, target_length;
   uint8_t method[OB_METHOD_BYTES], target[OB_TARGET_BYTES];
+  uint32_t remote_length, trace_length;
+  uint8_t remote[OB_REMOTE_BYTES], trace[OB_TRACE_BYTES];
 } ob_cell;
 typedef struct {
   atomic_uint head, tail;
@@ -446,7 +448,9 @@ failure:
 int ob_emit(ob_hub *hub, uint32_t worker, const ob_record *record) {
   if (!hub || hub->init_error || !hub->shared || !record || worker >= hub->shared->workers ||
       (record->method_length && !record->method) || (record->target_length && !record->target) ||
-      record->status > 599 || record->protocol > 2 || record->outcome > 4)
+      record->status > 599 || record->protocol > 2 || record->outcome > 4 ||
+      (record->remote_length && !record->remote) ||
+      (record->trace_length && (!record->trace || record->trace_length != OB_TRACE_BYTES)))
     return -EINVAL;
   if (!hub->logging)
     return 2;
@@ -492,6 +496,13 @@ int ob_emit(ob_hub *hub, uint32_t worker, const ob_record *record) {
   cell->target_length = (uint32_t)n;
   if (n)
     memcpy(cell->target, target, n);
+  size_t remote = record->remote_length < OB_REMOTE_BYTES ? record->remote_length : 0;
+  cell->remote_length = (uint32_t)remote;
+  if (remote)
+    memcpy(cell->remote, record->remote, remote);
+  cell->trace_length = (uint32_t)record->trace_length;
+  if (record->trace_length)
+    memcpy(cell->trace, record->trace, OB_TRACE_BYTES);
   ob_increment(&lane->accepted, 1);
   atomic_store_explicit(&lane->head, head + 1, memory_order_release);
   return 0;
@@ -998,31 +1009,81 @@ static size_t ob_escape(char *out, const uint8_t *bytes, uint32_t n) {
   }
   return offset;
 }
-static int ob_line(const ob_cell *cell, uint32_t worker, char out[4096], size_t *length) {
+/* RFC 3339 UTC timestamp with millisecond precision, without libc time zone
+ * state (days-to-civil conversion from H. Hinnant's chrono algorithms). */
+static void ob_rfc3339(uint64_t unix_ms, char out[64]) {
+  int64_t seconds = (int64_t)(unix_ms / 1000), days = seconds / 86400, rest = seconds % 86400;
+  int64_t z = days + 719468, era = z / 146097;
+  int64_t doe = z - era * 146097;
+  int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100), mp = (5 * doy + 2) / 153;
+  int64_t day = doy - (153 * mp + 2) / 5 + 1, month = mp < 10 ? mp + 3 : mp - 9;
+  int64_t year = yoe + era * 400 + (month <= 2);
+  (void)snprintf(out, 64, "%04lld-%02lld-%02lldT%02lld:%02lld:%02lld.%03lluZ", (long long)year,
+                 (long long)month, (long long)day, (long long)(rest / 3600), (long long)(rest % 3600 / 60),
+                 (long long)(rest % 60), (unsigned long long)(unix_ms % 1000));
+}
+/* Worst case: fixed fields + 6x-escaped method, path, target and remote. */
+#define OB_LINE_BYTES 8192u
+static int ob_line(const ob_cell *cell, uint32_t worker, char out[OB_LINE_BYTES], size_t *length) {
   static const char *protocols[] = {"HTTP/1.0", "HTTP/1.1", "HTTP/2"};
   static const char *outcomes[] = {"completed", "cancelled", "error", "timeout", "shutdown"};
   if (cell->protocol > 2 || cell->outcome > 4 || cell->method_length > OB_METHOD_BYTES ||
       cell->target_length > OB_TARGET_BYTES)
     return -EINVAL;
+  if (cell->remote_length > OB_REMOTE_BYTES || (cell->trace_length && cell->trace_length != OB_TRACE_BYTES))
+    return -EINVAL;
+  char timestamp[64];
+  ob_rfc3339(cell->timestamp_ms, timestamp);
   int n = snprintf(
-      out, 4096,
-      "{\"timestamp_ms\":%llu,\"worker\":%u,\"protocol\":\"%s\","
-      "\"status\":%u,\"outcome\":\"%s\",\"bytes_sent\":%llu,\"duration_us\":%llu,\"method\":\"",
-      (unsigned long long)cell->timestamp_ms, worker, protocols[cell->protocol], cell->status,
+      out, OB_LINE_BYTES,
+      "{\"timestamp\":\"%s\",\"timestamp_ms\":%llu,\"worker\":%u,\"protocol\":\"%s\","
+      "\"status\":%u,\"outcome\":\"%s\",\"bytes_sent\":%llu,\"duration_ms\":%llu.%03llu,"
+      "\"duration_us\":%llu,\"remote_ip\":",
+      timestamp, (unsigned long long)cell->timestamp_ms, worker, protocols[cell->protocol], cell->status,
       outcomes[cell->outcome], (unsigned long long)cell->bytes_sent,
+      (unsigned long long)(cell->duration_us / 1000), (unsigned long long)(cell->duration_us % 1000),
       (unsigned long long)cell->duration_us);
   if (n < 0 || n > 1024)
     return -EOVERFLOW;
   size_t at = (size_t)n;
+  if (cell->remote_length) {
+    out[at++] = '"';
+    at += ob_escape(out + at, cell->remote, cell->remote_length);
+    out[at++] = '"';
+  } else {
+    memcpy(out + at, "null", 4);
+    at += 4;
+  }
+  memcpy(out + at, ",\"trace_id\":", 12);
+  at += 12;
+  if (cell->trace_length) {
+    static const char hex[] = "0123456789abcdef";
+    out[at++] = '"';
+    for (uint32_t i = 0; i < OB_TRACE_BYTES; ++i) {
+      out[at++] = hex[cell->trace[i] >> 4];
+      out[at++] = hex[cell->trace[i] & 15];
+    }
+    out[at++] = '"';
+  } else {
+    memcpy(out + at, "null", 4);
+    at += 4;
+  }
+  memcpy(out + at, ",\"method\":\"", 11);
+  at += 11;
   at += ob_escape(out + at, cell->method, cell->method_length);
+  /* "path" is the sanitized origin path; "target" is kept for compatibility. */
+  memcpy(out + at, "\",\"path\":\"", 10);
+  at += 10;
+  at += ob_escape(out + at, cell->target, cell->target_length);
   memcpy(out + at, "\",\"target\":\"", 12);
   at += 12;
   at += ob_escape(out + at, cell->target, cell->target_length);
-  n = snprintf(out + at, 4096 - at,
+  n = snprintf(out + at, OB_LINE_BYTES - at,
                "\",\"method_truncated\":%s,\"target_truncated\":%s,\"target_redacted\":%s}\n",
                cell->flags & 1 ? "true" : "false", cell->flags & 2 ? "true" : "false",
                cell->flags & 4 ? "true" : "false");
-  if (n < 0 || (size_t)n >= 4096 - at)
+  if (n < 0 || (size_t)n >= OB_LINE_BYTES - at)
     return -EOVERFLOW;
   *length = at + (size_t)n;
   return 0;
@@ -1193,7 +1254,7 @@ int ob_helper_main(int argc, char **argv) {
       if (head == tail)
         continue;
       ob_cell *cell = &ob_cells(shared, worker)[tail & (shared->capacity - 1)];
-      char line[4096];
+      char line[OB_LINE_BYTES];
       size_t length = 0;
       error = ob_line(cell, worker, line, &length);
 #ifdef OB_TESTING
@@ -1251,7 +1312,7 @@ lean_object *lean_ob_new(uint32_t workers, uint32_t capacity, b_lean_obj_arg pat
 lean_object *lean_ob_emit(uint64_t handle, uint32_t worker, uint64_t timestamp_ms,
                           uint64_t duration_us, uint64_t bytes_sent, uint32_t status,
                           uint32_t protocol, uint32_t outcome, b_lean_obj_arg method,
-                          b_lean_obj_arg target) {
+                          b_lean_obj_arg target, b_lean_obj_arg remote, b_lean_obj_arg trace) {
   ob_record record = {timestamp_ms,
                       duration_us,
                       bytes_sent,
@@ -1261,7 +1322,11 @@ lean_object *lean_ob_emit(uint64_t handle, uint32_t worker, uint64_t timestamp_m
                       lean_sarray_cptr(method),
                       lean_sarray_cptr(target),
                       lean_sarray_size(method),
-                      lean_sarray_size(target)};
+                      lean_sarray_size(target),
+                      lean_sarray_cptr(remote),
+                      lean_sarray_cptr(trace),
+                      lean_sarray_size(remote),
+                      lean_sarray_size(trace)};
   return ob_result(ob_emit((ob_hub *)(uintptr_t)handle, worker, &record));
 }
 lean_object *lean_ob_publish(uint64_t handle, uint32_t worker, b_lean_obj_arg array) {

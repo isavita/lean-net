@@ -7,6 +7,7 @@ import LeanNet.HTTP.Transport
 import LeanNet.HTTP.Observability
 import LeanNet.HTTP.SecureHeaders
 import LeanNet.HTTP.Admin
+import LeanNet.HTTP.TraceContext
 
 namespace LeanNet.HTTP
 
@@ -42,6 +43,10 @@ structure ReactorServerConfig where
   adminPort : Option UInt16 := none
   /-- Pin each worker thread to one CPU of the process's allowed set. -/
   pinWorkers : Bool := false
+  /-- W3C Trace Context: accept a valid incoming `traceparent`, otherwise
+      generate one and inject it into the application request. The trace-id
+      is recorded in access logs. -/
+  tracing : Bool := true
 
 namespace ReactorServer
 
@@ -122,6 +127,8 @@ private structure RequestObservation where
   finalQueued : Bool := false
   outcome : Option Observability.Outcome := none
   counted : Bool := true
+  remote : ByteArray := ByteArray.empty
+  traceId : ByteArray := ByteArray.empty
 
 private structure Client where
   socket : Transport.Endpoint
@@ -148,6 +155,8 @@ private structure Client where
   resetCounted : Bool := false
   retired : Bool := false
   retirementOutcome : Option Observability.Outcome := none
+  /-- Peer IP text, captured once at admission when observability is on. -/
+  remote : ByteArray := ByteArray.empty
 
 private structure WorkerState where
   clients : Std.HashMap Reactor.SocketId Client := {}
@@ -162,6 +171,7 @@ private structure WorkerState where
   wallAt : UInt64 := 0
   wallUnixMs : UInt64 := 0
   draining : Bool := false
+  traces : TraceContext.Generator := default
 
 private structure WorkerObserver where
   hub : Observability.Hub
@@ -237,7 +247,7 @@ private def Driver.startObservation (driver : Driver) (id : Reactor.SocketId)
     protocol, method := method.toUTF8.extract 0 33,
     methodClass := Observability.Method.classify method, target := target.extract 0 257,
     startedAt := if startedAt == 0 then state.now else startedAt.toUInt64,
-    counted := !metricTarget driver target }
+    counted := !metricTarget driver target, remote := client.remote }
   driver.put id { client with requests := client.requests.insert requestId request }
   if request.counted then driver.state.modify fun state => { state with counters := state.counters.requestStarted }
   return true
@@ -258,7 +268,8 @@ private def Driver.finishObservation (driver : Driver) (id : Reactor.SocketId) (
     timestampUnixMs := state.wallUnixMs + (state.now - state.wallAt),
     durationUs := duration.toUInt64, bytesSent := request.payloadSent,
     status := request.status.toUInt32, protocol := request.protocol,
-    method := request.method, target := request.target, outcome }
+    method := request.method, target := request.target, outcome,
+    remote := request.remote, traceId := request.traceId }
   pure ()
 
 private def Driver.abortObservation (driver : Driver) (id : Reactor.SocketId)
@@ -479,7 +490,21 @@ private def Driver.beginDrain (driver : Driver) (id : Reactor.SocketId) : IO Uni
     driver.put id { client with closing := true }
     client.socket.closeAfterWrites
 
-private def Driver.reply (driver : Driver) (request : Request) : IO Reply := do
+/-- Establish the request's trace context before application dispatch. -/
+private def Driver.traced (driver : Driver) (id : Reactor.SocketId) (requestId : Nat)
+    (request : Request) : IO Request := do
+  if !driver.config.tracing then return request
+  let state ← driver.state.get
+  let (context, headers, traces) := TraceContext.ensure request.headers state.traces
+  driver.state.set { state with traces }
+  if let some client ← driver.client? id then
+    if let some observation := client.requests[requestId]? then
+      let observation := { observation with traceId := context.traceId }
+      driver.put id { client with requests := client.requests.insert requestId observation }
+  return { request with headers }
+
+private def Driver.reply (driver : Driver) (id : Reactor.SocketId) (requestId : Nat)
+    (request : Request) : IO Reply := do
   if let some probe := healthTarget driver request.target then
     if request.method != "GET" && request.method != "HEAD" then
       return { response := { status := 405, headers := #[{ name := "allow", value := "GET, HEAD".toUTF8 }] } }
@@ -500,7 +525,7 @@ private def Driver.reply (driver : Driver) (request : Request) : IO Reply := do
     return { response := {
       headers := #[{ name := "Content-Type", value := Observability.metricsContentType }]
       body := snapshot.renderPrometheus ++ (← Admin.processPrometheus) ++ (← driver.transport.metrics) } }
-  driver.handlers.onRequest request
+  driver.handlers.onRequest (← driver.traced id requestId request)
 
 private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (step : Machine.Step) : IO Unit := do
   let some client ← driver.client? id | return
@@ -543,7 +568,7 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
       driver.cancelRequest id
       let some client ← driver.client? id | return
       if client.retired then return
-      let reply ← try driver.reply request
+      let reply ← try driver.reply id requestId request
         catch _ => pure { response := { status := 500 }, options := { forceClose := true } }
       let some client ← driver.client? id | return
       if client.retired then return
@@ -750,7 +775,7 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
     | .request event =>
       let .http2 machine := client.protocol | return
       if !machine.canRespond event.streamId then continue
-      let reply ← try driver.reply event.request
+      let reply ← try driver.reply id event.streamId.toNat event.request
         catch _ => pure { response := { status := 500 } }
       let pushes ← if machine.canPush && !metricTarget driver event.request.target then
         try driver.handlers.onPush event.request catch _ => pure #[]
@@ -955,7 +980,8 @@ private def Driver.accepted (driver : Driver) (socket : Transport.Endpoint)
     | .detect => Protocol.detect 0
     | .http1 => .http1 (((Machine.State.new driver.config.machine).setDate state.date).setTime state.now.toNat)
     | .http2 => .http2 (((HTTP2.Machine.State.new driver.config.http2).setTime state.now.toNat).setDate state.date)
-  driver.put id { socket, protocol, idleDeadline := some value }
+  let remote ← if driver.observer.isSome then id.peerAddress driver.reactor else pure ByteArray.empty
+  driver.put id { socket, protocol, idleDeadline := some value, remote }
   if driver.observer.isSome then
     driver.state.modify fun state => { state with counters := state.counters.connectionOpened }
   if let .http2 machine := protocol then driver.applyH2Step id machine.start
@@ -1281,7 +1307,7 @@ private def runWorker (resources : WithWorkerResources) (config : ReactorServerC
    if count < clientLimit then
      throw (IO.userError "HTTP output buffer credits must cover every admitted client")
    withOutputSlots reactor count fun slots => do
-    let state ← IO.mkRef { slots : WorkerState }
+    let state ← IO.mkRef { slots, traces := ← TraceContext.Generator.seeded : WorkerState }
     let observer ← match hub with
       | none => pure none
       | some hub => do

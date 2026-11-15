@@ -19,6 +19,7 @@ import LeanNet.HTTP.Transport
 import LeanNet.HTTP.ReactorServer
 import LeanNet.HTTP.SecureHeaders
 import LeanNet.HTTP.Admin
+import LeanNet.HTTP.TraceContext
 import LeanNet.HTTP2.Preface
 import LeanNet.HTTP2.Frame
 import LeanNet.HTTP2.HPACK

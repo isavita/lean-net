@@ -350,7 +350,11 @@ int main(int argc, char **argv) {
                       (const uint8_t *)"GET",
                       (const uint8_t *)"/safe?private_query=never-log",
                       3,
-                      27};
+                      27,
+                      NULL,
+                      NULL,
+                      0,
+                      0};
   REQUIRE(ob_emit(hub, 0, &record) == 2);
 #ifndef _WIN32
   injected_clock = 1;

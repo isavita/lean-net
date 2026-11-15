@@ -43,6 +43,7 @@ jobs:
           lake env lean --run test/HTTP2ConnectionV2Test.lean
           lake env lean --run test/HTTP2FileTest.lean
           lake env lean --run test/StaticSelectionTest.lean
+          lake env lean --run test/TraceContextTest.lean
           python3 test/test_echo.py -v
           python3 test/test_http1_server.py -v
           .lake/build/bin/lean-net-event-ffi-test

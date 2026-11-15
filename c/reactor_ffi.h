@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 static lean_object *rn_io_number(int64_t value) {
     return lean_io_result_mk_ok(lean_box_uint64((uint64_t)value));
@@ -135,6 +136,15 @@ lean_object *shim_reactor_read_enabled(uint64_t handle, uint64_t connection, uin
 }
 lean_object *shim_reactor_connection_live(uint64_t handle, uint64_t connection) {
     return rn_io_number(handle == 0 ? -EINVAL : rn_connection_live(rn_handle(handle), connection));
+}
+/* Peer IP text, or an empty array when unavailable (never fatal). */
+lean_object *shim_reactor_peer_address(uint64_t handle, uint64_t connection) {
+    char text[64];
+    int length = handle ? rn_peer_address(rn_handle(handle), connection, text, sizeof(text)) : -EINVAL;
+    if (length < 0) length = 0;
+    lean_object *bytes = lean_alloc_sarray(1, (size_t)length, (size_t)length);
+    if (length) memcpy(lean_sarray_cptr(bytes), text, (size_t)length);
+    return lean_io_result_mk_ok(bytes);
 }
 lean_object *shim_reactor_acquire(uint64_t handle, uint32_t minimum) {
     if (handle == 0) return rn_io_number(-EINVAL);

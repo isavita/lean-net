@@ -316,6 +316,37 @@ class SecurityHeadersDisabled(ServerCase):
         self.assertNotIn("x-content-type-options", headers)
 
 
+class AccessLogAndTracing(ServerCase):
+    def extra_args(self):
+        self.log = Path(self.temp.name) / "access.jsonl"
+        return ["--workers", "1", "--access-log", str(self.log)]
+
+    def records(self):
+        self.server.send_signal(signal.SIGTERM)
+        self.assertEqual(self.server.wait(10), 0)
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def test_structured_fields_and_trace_propagation(self):
+        incoming = "4bf92f3577b34da6a3ce929d0e0e4736"
+        request(self.port, b"GET /?token=secret HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        request(self.port, ("GET /missing HTTP/1.1\r\nHost: x\r\nConnection: close\r\n"
+                            f"traceparent: 00-{incoming}-00f067aa0ba902b7-01\r\n\r\n").encode())
+        # Invalid contexts (all-zero trace-id, uppercase hex) are replaced.
+        request(self.port, b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n"
+                           b"traceparent: 00-00000000000000000000000000000000-00f067aa0ba902b7-01\r\n\r\n")
+        first, second, third = self.records()
+        for record in (first, second, third):
+            self.assertEqual(record["remote_ip"], "127.0.0.1")
+            self.assertRegex(record["trace_id"], r"^[0-9a-f]{32}$")
+            self.assertRegex(record["timestamp"], r"Z$")
+            self.assertIn("duration_ms", record)
+        self.assertEqual((first["method"], first["path"], first["status"]), ("GET", "/", 200))
+        self.assertNotIn("secret", json.dumps(first))
+        self.assertEqual((second["path"], second["status"], second["trace_id"]), ("/missing", 404, incoming))
+        self.assertNotEqual(third["trace_id"], "0" * 32)
+        self.assertNotEqual(first["trace_id"], third["trace_id"])
+
+
 @unittest.skipIf(sys.platform == "win32", "POSIX signals")
 class Signals(ServerCase):
     args = ["--workers", "2", "--max-clients", "64"]

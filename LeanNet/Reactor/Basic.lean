@@ -68,6 +68,13 @@ private def checkedZero (operation : String) (raw : UInt64) : IO Unit := do
   let value ← checked operation raw
   unless value == 0 do throw (IO.userError s!"{operation}: invalid native success result")
 
+/-- Numeric peer IP address of a live connection (IPv4-mapped IPv6 rendered
+    as IPv4), or an empty array when unavailable. Never throws for a peer that
+    has already gone away. -/
+def SocketId.peerAddress (id : SocketId) (reactor : Reactor) : IO ByteArray := do
+  if id.owner != reactor.handle || !(← reactor.alive.get) then return ByteArray.empty
+  FFI.Reactor.peerAddress reactor.handle id.token
+
 /-- A historical completion identity does not grant socket access. Query before
     taking protocol actions: CLOSED may still be queued for a later poll. -/
 def SocketId.isLive (id : SocketId) (reactor : Reactor) : IO Bool := do

@@ -18,6 +18,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <arpa/inet.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -396,6 +397,30 @@ int rn_socket_new(rn_reactor *r, uint64_t *out) {
     memset(c, 0, sizeof(*c)); c->fd = c->pending_accept_fd = -1; c->generation = generation; c->state = 1;
     c->head_write = c->tail_write = c->next_closed = RN_NONE;
     *out = rn_token(index, generation); return 0;
+}
+
+static int rn_format_peer(const struct sockaddr_storage *address, char *out, size_t capacity) {
+    if (address->ss_family == AF_INET) {
+        const struct sockaddr_in *v4 = (const struct sockaddr_in *)address;
+        if (!inet_ntop(AF_INET, &v4->sin_addr, out, (socklen_t)capacity)) return -EINVAL;
+    } else if (address->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *v6 = (const struct sockaddr_in6 *)address;
+        const unsigned char *bytes = (const unsigned char *)&v6->sin6_addr;
+        static const unsigned char mapped[12] = {0,0,0,0,0,0,0,0,0,0,0xff,0xff};
+        if (memcmp(bytes, mapped, sizeof(mapped)) == 0) {
+            if (!inet_ntop(AF_INET, bytes + 12, out, (socklen_t)capacity)) return -EINVAL;
+        } else if (!inet_ntop(AF_INET6, &v6->sin6_addr, out, (socklen_t)capacity)) return -EINVAL;
+    } else return -EAFNOSUPPORT;
+    return (int)strlen(out);
+}
+int rn_peer_address(rn_reactor *r, uint64_t token, char *out, size_t capacity) {
+    if (r == NULL || out == NULL || capacity < 46) return -EINVAL;
+    rn_conn *c; int error = rn_conn_get(r, token, &c);
+    if (error) return error;
+    if (c->state != 4 || c->fd < 0) return -ENOTCONN;
+    struct sockaddr_storage address; socklen_t length = sizeof(address);
+    if (getpeername(c->fd, (struct sockaddr *)&address, &length) < 0) return -errno;
+    return rn_format_peer(&address, out, capacity);
 }
 int rn_bind(rn_reactor *r, uint64_t token, const char *host, uint16_t port, int reuse_port) {
     rn_conn *c; int error = rn_conn_get(r, token, &c);

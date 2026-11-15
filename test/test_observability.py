@@ -140,8 +140,14 @@ class Running:
         lines = data.split(b"\n")[:-1]
         records = [json.loads(line) for line in lines]
         for record in records:
-            self.case.assertEqual(set(record), {"timestamp_ms", "worker", "protocol", "status", "outcome",
-                "bytes_sent", "duration_us", "method", "target", "method_truncated", "target_truncated", "target_redacted"})
+            self.case.assertEqual(set(record), {"timestamp", "timestamp_ms", "worker", "protocol", "status", "outcome",
+                "bytes_sent", "duration_ms", "duration_us", "remote_ip", "trace_id", "method", "path", "target",
+                "method_truncated", "target_truncated", "target_redacted"})
+            self.case.assertRegex(record["timestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+            self.case.assertEqual(record["path"], record["target"])
+            self.case.assertAlmostEqual(record["duration_ms"], record["duration_us"] / 1000, places=3)
+            if record["trace_id"] is not None:
+                self.case.assertRegex(record["trace_id"], r"^[0-9a-f]{32}$")
             self.case.assertGreater(record["timestamp_ms"], 1700000000000)
             self.case.assertLessEqual(record["timestamp_ms"], int(time.time() * 1000) + 5000)
             self.case.assertGreaterEqual(record["duration_us"], 0)
