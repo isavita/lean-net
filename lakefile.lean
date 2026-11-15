@@ -102,7 +102,24 @@ target «lean-net-brotli-common» _pkg : System.FilePath := do
 
 target «lean-net-zlib-shared» pkg : Dynlib := do
   let file ← inputBinFile (← codecLibraryPath "zlib" "libz.dll.a" "libz.dylib" "libz.so")
-  nativeDynlib pkg.sharedLibDir file "z"
+  let library ← nativeDynlib pkg.sharedLibDir file "z"
+  if System.Platform.isWindows || System.Platform.isOSX then return library
+  let lean ← getLeanInstall
+  if !lean.linkStaticFlags.contains "-lc++" then return library
+  -- The system compiler supplies the host CRT, but Lean's prebuilt runtime
+  -- requires its matching libc++. Expose only those archives, never the
+  -- toolchain's lib directory, which also contains older CRT startup objects.
+  let archives ← #["libc++.a", "libc++abi.a"].mapM fun name => do
+    let path := lean.systemLibDir / System.FilePath.mk name
+    unless ← path.pathExists do
+      error s!"Lean toolchain is missing its matching C++ runtime archive: {path}"
+    inputBinFile path
+  let archives := Job.collectArray archives "Lean C++ runtime archives"
+  (library.zipWith (fun library archives => (library, archives)) archives).mapM fun (library, archives) => do
+    for source in archives do
+      let some name := source.fileName | error "C++ runtime archive has no file name"
+      proc { cmd := "ln", args := #["-sfn", source.toString, (pkg.sharedLibDir / name).toString] }
+    return library
 
 target «lean-net-brotli-encoder-shared» _pkg : Dynlib := do
   let file ← inputBinFile (← codecLibraryPath "libbrotlienc" "libbrotlienc.dll.a" "libbrotlienc.dylib" "libbrotlienc.so")

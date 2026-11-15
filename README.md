@@ -8,7 +8,7 @@ Lean 4 libraries for TCP, HTTP/1.0, HTTP/1.1, HTTP/2, and WebSocket servers. The
 
 ## Install
 
-Use the Lean version in [`lean-toolchain`](lean-toolchain). Install a C compiler, `pkg-config`, zlib, and Brotli development libraries (`zlib`, `libbrotlienc`, `libbrotlicommon`). On Linux, also install `libc++-dev`, `libc++abi-dev`, `libgmp-dev`, and `libuv1-dev`, and set `export LEAN_CC=cc` before running Lake. Windows builds need MinGW GCC and matching import libraries. In a consumer `lakefile.lean`:
+Use the Lean version in [`lean-toolchain`](lean-toolchain). Install a C compiler, `pkg-config`, zlib, and Brotli development libraries (`zlib`, `libbrotlienc`, `libbrotlicommon`). On Linux, also install `libgmp-dev`, `libuv1-dev`, and `libssl-dev`, and set `export LEAN_CC=cc` before running Lake. Windows builds need MinGW GCC and matching import libraries. In a consumer `lakefile.lean`:
 
 ```lean
 require «lean-net» from git "https://github.com/isavita/lean-net" @ "v0.1.1"
@@ -69,7 +69,7 @@ python3 test/soak.py --count 10000
 
 Run the focused suites in [test/README.md](test/README.md). The executable entry points `lean-net-http1` and `lean-net-tls` use the same library APIs; their flags are listed in the [server](docs/server.md) and [TLS](tls/README.md) guides.
 
-Generate the API reference with `lake -d docs build LeanNetDocs:docs`. Serve `docs/.lake/build/doc` over HTTP to browse it locally.
+Generate the API reference with `python3 docs/build.py`. Serve `docs/.lake/build/doc` over HTTP to browse it locally.
 
 ## License
 
