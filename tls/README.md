@@ -6,7 +6,7 @@ TLS transport for [lean-net](../README.md). It serves HTTP/1.1 and HTTP/2 on the
 
 ## Install
 
-Use the repository's Lean toolchain. Install a C compiler, `pkg-config`, OpenSSL 1.1.1 or newer, zlib, and Brotli development libraries. On Linux, set `export LEAN_CC=cc` before running Lake. On macOS with Homebrew:
+Use the repository's Lean toolchain. Install a C compiler, `pkg-config`, OpenSSL 1.1.1 or newer, zlib, and Brotli development libraries. On Linux, install the [core build dependencies](../README.md#install) and set `export LEAN_CC=cc` before running Lake. On macOS with Homebrew:
 
 ```sh
 brew install openssl@3 zlib brotli pkgconf

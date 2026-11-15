@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install native documentation build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev libbrotli-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libc++-dev libc++abi-dev libgmp-dev libuv1-dev libssl-dev zlib1g-dev libbrotli-dev pkg-config
       - uses: leanprover/lean-action@v1
         with:
           auto-config: false
