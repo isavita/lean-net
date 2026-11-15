@@ -43,6 +43,15 @@ structure Worker where
   deferClosed : Bool := false
   /-- Bound provider teardown by the controller's shared drain deadline. -/
   shutdownBefore : UInt64 → IO Unit := fun _ => pure ()
+  /-- Requested transport-close time inside the shared deadline. The controller
+      reserves at most one quarter of its total drain budget. -/
+  shutdownReserveMs : UInt64 := 0
+  /-- Stop application admission and begin transport closure after the
+      application portion of the drain budget. Existing write fences survive. -/
+  beginShutdown : IO Unit := pure ()
+  /-- True once all provider-owned sessions have reached authoritative closure,
+      including handshakes which never published an application endpoint. -/
+  shutdownComplete : IO Bool := pure true
   reservedBuffers : Nat := 0
 
 private def plainEndpoint (socket : Reactor.Socket .connected) : Endpoint := {

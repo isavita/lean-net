@@ -1159,11 +1159,13 @@ private partial def Driver.loop (driver : Driver) : IO Unit := do
     Providers share the same absolute deadline for their close-notify work. -/
 private def Driver.drain (driver : Driver) : IO Unit := do
   let cutoff ← deadline (← Reactor.nowMs) driver.config.shutdownDrainMs
+  let reserve := min (driver.config.shutdownDrainMs / 4) driver.transport.shutdownReserveMs.toNat
+  let applicationCutoff := cutoff - reserve.toUInt64
   driver.state.modify fun state => { state with draining := true }
   driver.transport.shutdownBefore cutoff
   for (id, _) in (← driver.state.get).clients.toArray do driver.shutdownClient id
   let mut active := true
-  while active && (← Reactor.nowMs) < cutoff do
+  while active && (← Reactor.nowMs) < applicationCutoff do
     driver.refresh
     driver.events (← driver.transport.poll)
     driver.pumpAll
@@ -1172,12 +1174,29 @@ private def Driver.drain (driver : Driver) : IO Unit := do
       let ready ← driver.hasWork
       let providerReady ← driver.transport.hasWork
       driver.pollEvents (if ready || providerReady then 0 else 10) false
-  -- The application drain budget has expired. Retaining these sockets would
-  -- make TLS teardown spend a fresh timeout on the same blocked output. Abort
-  -- the remaining connections; the provider still observes native cancellation
-  -- and joins its worker before releasing its transport buffers.
-  cleanupActions ((← driver.state.get).clients.toArray.map fun (id, _) =>
-    cleanupActions #[driver.closeNow id .shutdown, driver.forget id])
+  if reserve != 0 then
+    -- Stop HTTP work before requesting transport closure. Retain fulfilled
+    -- historical write fences and their observations until provider CLOSED.
+    for (id, _) in (← driver.state.get).clients.toArray do
+      driver.setReading id false
+      driver.retire id .shutdown
+    driver.transport.beginShutdown
+    let mut transportActive := true
+    while transportActive && (← Reactor.nowMs) < cutoff do
+      driver.refresh
+      driver.events (← driver.transport.poll)
+      transportActive := !(← driver.state.get).clients.isEmpty || !(← driver.transport.shutdownComplete)
+      if transportActive then
+        let ready ← driver.transport.hasWork
+        driver.pollEvents (if ready then 0 else 10) false
+  -- The original shared budget has expired. Never grant a fresh TLS timeout
+  -- to blocked output; cancel what remains before joining the provider.
+  cleanupActions ((← driver.state.get).clients.toArray.map fun (id, client) =>
+    cleanupActions #[
+      (if client.retired then do
+        if ← id.isLive driver.reactor then client.socket.close
+       else driver.closeNow id .shutdown),
+      driver.forget id])
 
 private def withOutputSlots (reactor : Reactor.Reactor) (count : Nat)
     (use : Array OutputSlot → IO α) : IO α := go count #[]

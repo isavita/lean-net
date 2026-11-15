@@ -36,6 +36,8 @@ def main (args : List String) : IO UInt32 := do
       expectClosed "event" (worker.event .wake)
       expectClosed "pending-work check" worker.hasWork
       expectClosed "shutdown cutoff" (worker.shutdownBefore 1)
+      expectClosed "shutdown start" worker.beginShutdown
+      expectClosed "shutdown completion" worker.shutdownComplete
       let some stats ← diagnostics.get | throw (IO.userError "missing escaped diagnostics")
       expectClosed "diagnostics" stats
   IO.println "TLS escaped worker callbacks reject closed native owners"

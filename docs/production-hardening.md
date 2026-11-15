@@ -101,9 +101,15 @@ SIGINT/console stop ends admission and starts one shared application drain
 deadline (two seconds by default, `shutdownDrainMs` in the library). HTTP/1
 finishes the current request and queued response with connection closure.
 HTTP/2 sends GOAWAY and continues accepted streams and their flow-control
-traffic. Remaining work is cancelled at the deadline. TLS close-notify and
-worker teardown share that deadline; native workers join before their reactor
-resources are freed.
+traffic. TLS reserves the smaller of its configured shutdown timeout and one
+quarter of the shared budget for transport closure: the defaults allow up to
+1.5 seconds of HTTP draining followed by up to 0.5 seconds for close-notify.
+At that transition, remaining application work is cancelled while fulfilled
+write completions retain their accounting. Handshakes completing during
+transport closure send close-notify without admitting a new HTTP endpoint.
+Blocked connections are aborted at the original deadline; teardown never
+starts a fresh TLS timeout. Plain HTTP uses the full application drain budget.
+Native workers join before their reactor resources are freed.
 
 Certificate reload is opt-in on the TLS server. The loader reads and validates
 a bounded certificate/key snapshot outside reactor loops. Successful changes

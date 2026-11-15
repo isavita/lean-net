@@ -111,7 +111,11 @@ Handshake and TLS shutdown have absolute deadlines. Orderly closes send
 connection. Fatal alerts drain before peer-error cleanup. SIGINT stops admission
 and attempts bounded TLS notification before joining all native TLS threads and
 freeing reactor resources. The HTTP/2 machine performs a bounded GOAWAY and
-stream drain before TLS shutdown. Remaining graceful shutdown and production
+stream drain before TLS shutdown. HTTP draining reserves at most one quarter
+of its shared deadline for TLS closure (500ms of the default two seconds), so
+an incomplete request cannot consume the entire close-notify budget. Transport
+closure retains fulfilled write completions and admits no new HTTP endpoints;
+blocked connections are aborted at the original deadline. Remaining production
 acceptance gates are tracked in the roadmap.
 
 The older explicit `Context`/`Session` API remains available for compatibility;

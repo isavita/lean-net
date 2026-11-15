@@ -91,6 +91,7 @@ private structure State where
   sessions : Std.HashMap LeanNet.Reactor.SocketId Session := {}
   identities : Std.HashMap UInt64 LeanNet.Reactor.SocketId := {}
   shutdownBefore : Option UInt64 := none
+  shutdownStarted : Bool := false
 
 private structure Driver where
   handle : UInt64
@@ -320,6 +321,9 @@ private def Driver.poll (driver : Driver) : IO (Array HTTP.Transport.Event) := d
         if session.ready.isSome then throw (IO.userError "duplicate TLS handshake completion")
         let ready ← session.wire.ready
         driver.put id { session with ready := some ready }
+        if (← driver.state.get).shutdownStarted then
+          checkZero "TLS completed handshake during shutdown" (← FFI.Worker.shutdown driver.handle session.native)
+          continue
         let protocol ← match raw.flags with
           | 1 => pure HTTP.Transport.Protocol.http1
           | 2 => pure HTTP.Transport.Protocol.http2
@@ -358,13 +362,24 @@ private def Driver.stopEvents (driver : Driver) (events : Array HTTP.Transport.E
         checkZero "TLS completed handshake during shutdown" (← FFI.Worker.shutdown driver.handle session.native)
     | _ => pure ()
 
+/-- End application admission before spending the provider's reserved portion
+    of the existing drain deadline on close-notify and physical completions. -/
+private def Driver.beginShutdown (driver : Driver) : IO Unit := do
+  driver.ensureAlive
+  if (← driver.state.get).shutdownStarted then return
+  driver.state.modify fun state => { state with shutdownStarted := true }
+  let mut failure : Option IO.Error := none
+  for (_id, session) in (← driver.state.get).sessions.toArray do
+    if session.ready.isSome && !session.nativeClosed then
+      try checkZero "TLS worker shutdown" (← FFI.Worker.shutdown driver.handle session.native)
+      catch error => if failure.isNone then failure := some error
+  if let some error := failure then throw error
+
 /-- Preserve clean TLS close-notify on process shutdown, even for incomplete
     HTTP requests. Full HTTP/2 stream draining is handled by the HTTP controller. -/
 private def Driver.stop (driver : Driver) (duration : UInt64) : IO Unit := do
   try
-    for (_id, session) in (← driver.state.get).sessions.toArray do
-      if session.ready.isSome then
-        checkZero "TLS worker shutdown" (← FFI.Worker.shutdown driver.handle session.native)
+    driver.beginShutdown
     let proposed := (← LeanNet.Reactor.nowMs) + duration + 100
     let stopDeadline := ((← driver.state.get).shutdownBefore.map (min proposed)).getD proposed
     let mut draining := true
@@ -409,6 +424,9 @@ def withWorkerStats (bundle : Bundle) (config : Config) (reactor : LeanNet.React
         driver.ensureAlive
         driver.state.modify fun state =>
           { state with shutdownBefore := some ((state.shutdownBefore.map (min deadline)).getD deadline) }
+      shutdownReserveMs := config.shutdownTimeoutMs
+      beginShutdown := driver.beginShutdown
+      shutdownComplete := do driver.ensureAlive; return (← driver.state.get).sessions.isEmpty
       reservedBuffers := 2 * maxClients }
     let diagnostics : IO Stats := do
       unless ← driver.alive.get do throw (IO.userError "TLS worker is closed")

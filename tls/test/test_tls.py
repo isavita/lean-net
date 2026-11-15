@@ -420,10 +420,20 @@ class TLSAcceptance(unittest.TestCase):
             raw.sendall(b"\x16")
             for sock in sockets[:4]:
                 sock.sendall(b"GET / HTTP/1.1\r\nHost: local")
+            # A received Continue proves the request reached the HTTP parser,
+            # rather than depending on SIGINT racing unread TLS application data.
+            continued = tls_socket(self.port, self.http1_context)
+            sockets.append(continued)
+            continued.sendall(b"POST / HTTP/1.1\r\nHost: localhost\r\n"
+                              b"Content-Length: 1\r\nExpect: 100-continue\r\n\r\n")
+            reader = HttpReader(continued)
+            self.assertEqual(reader.until(b"\r\n\r\n").split(b"\r\n", 1)[0],
+                             b"HTTP/1.1 100 Continue")
+            self.assertEqual(reader.buffer, b"")
             self.server.send_signal(signal.SIGINT)
             self.assertEqual(self.server.wait(timeout=4), 0)
             for index, sock in enumerate(sockets):
-                with self.subTest(client=index, partial_request=index < 4):
+                with self.subTest(client=index, partial_request=index < 4, partial_body=index == 8):
                     self.assertEqual(sock.recv(1), b"", "TLS connection did not close cleanly")
         finally:
             for sock in sockets:
