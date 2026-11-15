@@ -18,6 +18,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      LEAN_NUM_THREADS: '2'
+      DISABLE_EQUATIONS: '1'
     steps:
       - uses: actions/checkout@v7
       - name: Install native documentation build dependencies
