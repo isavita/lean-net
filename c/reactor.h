@@ -7,6 +7,7 @@
 
 typedef struct rn_reactor rn_reactor;
 typedef struct rn_waker rn_waker;
+typedef struct ln_rl ln_rl;
 typedef struct rn_config {
     uint32_t max_connections;
     uint32_t max_events;
@@ -49,6 +50,10 @@ int rn_free(rn_reactor *reactor);
  * either endpoint. Unsupported platforms return -ENOTSUP. */
 int rn_set_accept_targets(rn_reactor *acceptor, rn_reactor *const *workers,
                           uint32_t count, uint32_t queue_capacity);
+/* Setup-only, borrowed limiter. The caller keeps it alive until all attached
+ * reactors and their owner threads have stopped and been freed. Only accepted
+ * TCP sockets are charged; rejection closes them before handoff or TLS. */
+int rn_set_accept_limiter(rn_reactor *reactor, ln_rl *limiter, uint32_t lane);
 int rn_socket_new(rn_reactor *reactor, uint64_t *out_token);
 /* Start an owner-thread, nonblocking outbound connect on a fresh slot. The
  * address is exactly 4 IPv4 or 16 IPv6 network-order bytes, and port is

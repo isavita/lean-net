@@ -234,7 +234,11 @@ private def compileAction (backends : Array Backend) (patterns : Array HostPatte
       if serves : patterns.all (fun p => (backends[backend]).serves.contains p) = true then
         return .proxy backend serves
       else
-        throw ⟨line, s!"backend '{name}' does not declare 'serves' for every pattern of this host"⟩
+        -- The Bool equality is Decidable: the successful branch constructs
+        -- the erased route proof automatically, including for `gate%`.
+        let missing := patterns.find? (fun p => !((backends[backend]).serves.contains p))
+        let host := (missing.map HostPattern.render).getD "<unknown>"
+        throw ⟨line, s!"backend does not declare 'serves' for host (host='{host}', backend='{name}')"⟩
     else throw ⟨line, s!"unknown backend '{name}'"⟩
 
 private def methodsOverlap (a b : Option (Array String)) : Bool :=

@@ -3,6 +3,10 @@ import LeanNet.Gate.Literal
 
 open LeanNet LeanNet.Gate LeanNet.HTTP
 
+/- error: host='b.com', backend='b' -/
+#guard_msgs (substring := true) in
+def forbiddenLiteral : Spec := gate% "backend b { http 1.2.3.4:80 ; serves a.com }\nhost a.com, b.com { route GET /x -> proxy b }"
+
 private def check (condition : Bool) (label : String) : IO Unit :=
   unless condition do throw (IO.userError s!"gate test: {label}")
 
@@ -70,6 +74,8 @@ private def parsing : IO Unit := do
   compileError "host a.com { route GET /x -> proxy nowhere }" "unknown backend"
   compileError "backend b { http 1.2.3.4:80 ; serves other.com }\nhost a.com { route GET /x -> proxy b }"
     "does not declare 'serves'"
+  compileError "backend b { http 1.2.3.4:80 ; serves a.com }\nhost a.com, b.com { route GET /x -> proxy b }"
+    "host='b.com', backend='b'"
   compileError "host a.com { route GET /x -> app }\nhost A.com { route GET /y -> app }" "duplicate host pattern"
   compileError "host a.com { route GET /x/:id -> app\n route GET /x/:other -> app }" "overlaps"
   compileError "host a.com { route GET /a/*/b -> app }" "final segment"
@@ -423,6 +429,29 @@ private def cidrs : IO Unit := do
   check (odd.contains (ByteArray.mk #[192, 168, 1, 7]) && !odd.contains (ByteArray.mk #[192, 168, 2, 1])) "non-octet prefix"
   check ((Cidr.parse "1.2.3.4/33").isNone && (Cidr.parse "01.2.3.4").isNone && (Cidr.parse "::1::").isNone) "invalid CIDRs"
 
+private def oneClockReadPerHead : IO Unit := do
+  let text := "ratelimit first 10/s burst 2 by global\n" ++
+    "ratelimit second 10/s burst 2 by route\n" ++
+    "host clock.example.com { tls sni off ; route GET / -> app { limit first ; limit second } }"
+  let spec ← match Spec.parse text with
+    | .ok value => pure value
+    | .error error => throw (IO.userError (toString error))
+  let reads ← IO.mkRef (0 : Nat)
+  let times ← IO.mkRef (#[] : Array UInt64)
+  let limiter : Limiter := { acquire := fun _ _ _ _ now => do
+    times.modify (·.push now)
+    return 0 }
+  let config : Config := { spec, limiter := some limiter, clock := do
+    reads.modify (· + 1)
+    return 1234 }
+  let policy ← match config.validate with
+    | .ok value => pure value
+    | .error error => throw (IO.userError (toString error))
+  let decision ← LeanNet.Gate.decide config policy 0 plain (head "clock.example.com" "GET" "/")
+  check decision.isOk "valid multi-rule head was rejected"
+  check ((← reads.get) == 1 && (← times.get) == #[1234, 1234])
+    "rate rules did not share one monotonic request timestamp"
+
 def main : IO Unit := do
   parsing
   hosts
@@ -430,4 +459,5 @@ def main : IO Unit := do
   rules
   runtime
   cidrs
+  oneClockReadPerHead
   IO.println "Gate policy, routing, rules and runtime tests passed"

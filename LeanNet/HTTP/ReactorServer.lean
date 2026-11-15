@@ -22,6 +22,9 @@ structure ReactorServerConfig where
   machine : Machine.Config := {}
   native : Reactor.Config := {}
   workers : Nat := 0
+  /-- Optional per-peer-IP GCRA budget checked on completed TCP accepts,
+      before worker handoff and any TLS handshake. -/
+  connectionRate : Option Reactor.AcceptRateConfig := none
   outputBuffers : Nat := 128
   maxInputBytes : Nat := 2 * 1024 * 1024 + 65536
   maxOutputBytes : Nat := 16 * 1024 * 1024
@@ -964,7 +967,7 @@ private def Driver.h2RawResult (driver : Driver) (id : Reactor.SocketId)
   let some client ← driver.client? id | return []
   let .http2 machine := client.protocol | return []
   if result.abortNow then
-    let step := machine.cancelTunnel streamId
+    let step := (machine.setTime (← driver.now).toNat).cancelTunnel streamId
     driver.put id { client with protocol := .http2 step.state }
     driver.dropTunnel id streamId
     return step.actions
@@ -983,7 +986,7 @@ private def Driver.h2RawResult (driver : Driver) (id : Reactor.SocketId)
     let .http2 machine := current.protocol | return actions
     match machine.trySendTunnel streamId ticket bytes with
     | .error _ =>
-      let step := machine.cancelTunnel streamId
+      let step := (machine.setTime (← driver.now).toNat).cancelTunnel streamId
       driver.put id { current with protocol := .http2 step.state }
       driver.dropTunnel id streamId
       actions := actions ++ step.actions
@@ -1015,7 +1018,7 @@ private def Driver.h2FeedPipe (driver : Driver) (id : Reactor.SocketId)
   let combined := prior.append data
   if combined.size > 65536 then
     let .http2 machine := client.protocol | return []
-    let step := machine.cancelTunnel streamId
+    let step := (machine.setTime (← driver.now).toNat).cancelTunnel streamId
     driver.put id { client with protocol := .http2 step.state }
     driver.dropTunnel id streamId
     return step.actions
@@ -1056,7 +1059,7 @@ private def Driver.retryTunnelWrites (driver : Driver) (id : Reactor.SocketId) :
     let .http2 machine := current.protocol | break
     match machine.trySendTunnel streamId ticket bytes with
     | .error _ =>
-      let step := machine.cancelTunnel streamId
+      let step := (machine.setTime (← driver.now).toNat).cancelTunnel streamId
       driver.put id { current with protocol := .http2 step.state }
       driver.dropTunnel id streamId
       actions := actions ++ step.actions
@@ -1300,7 +1303,7 @@ private def Driver.abortProxyStream (driver : Driver) (id : Reactor.SocketId)
   | .http1 machine => driver.applyStep id (machine.abortStream requestId)
   | .http2 machine =>
     if requestId <= 2147483647 then
-      driver.applyH2Step id (machine.abortResponseStream requestId.toUInt32)
+      driver.applyH2Step id ((machine.setTime (← driver.now).toNat).abortResponseStream requestId.toUInt32)
   | _ => pure ()
 
 private def Driver.proxyOutcomes (driver : Driver) (outcomes : Array Gateway.Outcome) : IO Unit := do
@@ -2129,11 +2132,11 @@ def serveWorkerFactory (resources : WithWorkerResources) (config : ReactorServer
       withAdmin config workers (some hub) <|
         withWorkerPool host port workers config.server.maxClients config.native
           (runWorker resources config (some hub))
-          ((config.gateway.map (·.pool.maxTotal)).getD 0)
+          ((config.gateway.map (·.pool.maxTotal)).getD 0) config.connectionRate
   else
     withWorkerPool host port workers config.server.maxClients config.native
       (runWorker resources config none)
-      ((config.gateway.map (·.pool.maxTotal)).getD 0)
+      ((config.gateway.map (·.pool.maxTotal)).getD 0) config.connectionRate
 
 /-- Attach a transport bracket while constructing callbacks on each owner. -/
 def serveFactoryWithTransport (provider : Transport.WithWorker)

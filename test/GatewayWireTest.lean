@@ -55,6 +55,19 @@ def main : IO Unit := do
   check (head.contains "X-Forwarded-For: 10.2.3.4\r\n") "X-Forwarded-For was not rebuilt"
   check (head.contains "Via: 1.1 lean-net\r\n") "Via missing"
   check (head.contains "Content-Length: 7\r\n") "body length missing"
+  check (head.contains "Connection: keep-alive\r\n" && !head.contains "Connection: x-secret")
+    "client Connection options crossed hop"
+  for name in #["X-Forwarded-For", "X-Real-IP", "Forwarded", "Client-Cert",
+      "Host", "Content-Length", "Transfer-Encoding", "Upgrade"] do
+    let nominated := { requestFor a with
+      headers := (requestFor a).headers.push (field "Connection" name) }
+    check (match encodeRequest a nominated with | .error .invalidConnection => true | _ => false)
+      s!"security-critical Connection option {name} was accepted"
+  let upgrade := { requestFor a with
+    headers := (requestFor a).headers.push (field "Connection" "Upgrade") |>.push
+      (field "Upgrade" "websocket") }
+  check (match encodeRequest a upgrade with | .error .invalidConnection => true | _ => false)
+    "unsupported upgrade crossed proxy hop"
   let poisoned := { requestFor a with headers := (requestFor a).headers.push (field "x-bad" "evil\r\nX: injected") }
   check (match encodeRequest a poisoned with | .error .invalidHeader => true | _ => false)
     "CRLF header accepted"

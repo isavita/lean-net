@@ -1,0 +1,114 @@
+{
+  "allocation_metric": "IO.getNumHeartbeats: small allocations on current Lean thread only",
+  "binary_sha256": "0ee09583f57d84b1ba2a6373c4c7008e99b911e6496b3d90614a0e0989f861fa",
+  "environment": {
+    "git_head": "4eeaa6b75b40d253a8a848a16850054f1094f136",
+    "git_status": "",
+    "lean": "Lean (version 4.35.0, arm64-apple-darwin24.6.0, commit eb6cafb7290e8bd5f2937522d8d804f58f02bafc, Release)",
+    "platform": "macOS-27.2.1-arm64-arm-64bit"
+  },
+  "iterations": 100000,
+  "limitations": [
+    "large allocations are not counted",
+    "no socket, parser, TLS, or GC pause included",
+    "elapsed time is a local microbenchmark, not RPS per core"
+  ],
+  "method": "single-thread compiled Lean gate decision; prebuilt head and policy; warmed cases",
+  "runs": [
+    {
+      "round": 1,
+      "samples": [
+        {
+          "case": "disabled-reference",
+          "elapsed_ns": 956708,
+          "ns_per_request": 9.56708,
+          "requests": 100000,
+          "small_allocations": 100002,
+          "small_allocations_per_request": 1.00002
+        },
+        {
+          "case": "host-only-gate",
+          "elapsed_ns": 82970167,
+          "ns_per_request": 829.70167,
+          "requests": 100000,
+          "small_allocations": 4800002,
+          "small_allocations_per_request": 48.00002
+        },
+        {
+          "case": "route-gate",
+          "elapsed_ns": 93395500,
+          "ns_per_request": 933.955,
+          "requests": 100000,
+          "small_allocations": 5900002,
+          "small_allocations_per_request": 59.00002
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "samples": [
+        {
+          "case": "disabled-reference",
+          "elapsed_ns": 971292,
+          "ns_per_request": 9.71292,
+          "requests": 100000,
+          "small_allocations": 100002,
+          "small_allocations_per_request": 1.00002
+        },
+        {
+          "case": "host-only-gate",
+          "elapsed_ns": 82749083,
+          "ns_per_request": 827.49083,
+          "requests": 100000,
+          "small_allocations": 4800002,
+          "small_allocations_per_request": 48.00002
+        },
+        {
+          "case": "route-gate",
+          "elapsed_ns": 93319125,
+          "ns_per_request": 933.19125,
+          "requests": 100000,
+          "small_allocations": 5900002,
+          "small_allocations_per_request": 59.00002
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "samples": [
+        {
+          "case": "disabled-reference",
+          "elapsed_ns": 971917,
+          "ns_per_request": 9.71917,
+          "requests": 100000,
+          "small_allocations": 100002,
+          "small_allocations_per_request": 1.00002
+        },
+        {
+          "case": "host-only-gate",
+          "elapsed_ns": 83012459,
+          "ns_per_request": 830.12459,
+          "requests": 100000,
+          "small_allocations": 4800002,
+          "small_allocations_per_request": 48.00002
+        },
+        {
+          "case": "route-gate",
+          "elapsed_ns": 93981250,
+          "ns_per_request": 939.8125,
+          "requests": 100000,
+          "small_allocations": 5900002,
+          "small_allocations_per_request": 59.00002
+        }
+      ]
+    }
+  ],
+  "source_sha256": {
+    "LeanNet/Gate/Gate.lean": "fe7fbdce8f804c007f2094df3f35ace558c8311de8f4a2a8f277d421cc5d2e5e",
+    "LeanNet/Gate/Policy.lean": "e1e4588f033b49fde9d2d0493dcbd4d098985eae647fdd421998d33481cea86a",
+    "LeanNet/HTTP/Admission.lean": "9fda4eb4e95208eafed996c0867687f4e91368fe8bef7049389356a382e565c7",
+    "lakefile.lean": "cfcdfe0fabcce5217cc34ba81ee49b1ea0f53765de9d199beec1b4a2cd5f4c35",
+    "test/GatePerf.lean": "dec3534b7b630584409b685f3b60c60deac1985a4b311117fd85f4fae981215b",
+    "test/bench_gate.py": "beaa36151fa4155c354f0c16ddc4b87711f7241de6f7a7babdfddfe43c343979"
+  }
+}

@@ -15,11 +15,33 @@ structure Config where
   buffers64k : UInt32 := 64
   timerTickMs : UInt32 := 10
 
+/-- Optional per-peer-IP budget for completed inbound TCP accepts. This is
+    checked by the native listener before a TLS worker sees the socket. -/
+structure AcceptRateConfig where
+  tokens : Nat
+  periodMs : Nat := 1000
+  burst : Nat
+  keyedSlots : Nat := 65536
+  deriving Inhabited
+
 /-- One thread owns this reactor and every connection and buffer lease it creates. -/
 structure Reactor where
   private mk ::
   private handle : UInt64
   private alive : IO.Ref Bool
+
+/-- Setup-scoped shared table. Every listener reactor borrows it until all
+    owner loops and reactor brackets have completed. -/
+structure AcceptLimiter where
+  private mk ::
+  private handle : UInt64
+  private lanes : Nat
+
+@[extern "lean_net_rl_new"]
+private opaque acceptLimiterNew (rules : @& ByteArray) (workers slots : UInt32)
+    (random : @& ByteArray) (nowMs : UInt64) : IO UInt64
+@[extern "lean_net_rl_free"]
+private opaque acceptLimiterFree (handle : UInt64) : IO UInt64
 
 /-- Native generation tokens prevent stale aliases from reaching a reused socket. -/
 structure Socket (state : SocketState) where
@@ -134,6 +156,38 @@ def withReactor (config : Config) (use : Reactor → IO α) : IO α := do
   if handle == 0 then throw (IO.userError "reactor create: null native handle")
   let reactor : Reactor := ⟨handle, ← IO.mkRef true⟩
   try use reactor finally destroy reactor
+
+private def le32 (value : Nat) : ByteArray :=
+  ByteArray.mk #[value.toUInt8, (value >>> 8).toUInt8,
+    (value >>> 16).toUInt8, (value >>> 24).toUInt8]
+
+/-- Allocate one fixed-size, lock-free keyed GCRA table shared by all accept
+    lanes. Table saturation denies new peers rather than resetting a budget. -/
+def withAcceptLimiter (config : AcceptRateConfig) (lanes : Nat)
+    (use : AcceptLimiter → IO α) : IO α := do
+  if config.tokens == 0 || config.tokens > 4294967295 ||
+      config.periodMs == 0 || config.periodMs > 4294967295 ||
+      config.burst == 0 || config.burst > 4294967295 ||
+      config.keyedSlots < 4 || config.keyedSlots > 16777216 ||
+      config.keyedSlots &&& (config.keyedSlots - 1) != 0 ||
+      lanes == 0 || lanes > 256 then
+    throw (IO.userError "invalid accept rate configuration")
+  let rule := le32 config.tokens ++ le32 config.periodMs ++ le32 config.burst ++
+    le32 2 ++ le32 1
+  let handle ← checked "accept rate limiter setup"
+    (← acceptLimiterNew rule lanes.toUInt32 config.keyedSlots.toUInt32
+      (← IO.getRandomBytes 16) (← FFI.Reactor.now))
+  if handle == 0 then throw (IO.userError "accept rate limiter setup returned null")
+  try use ⟨handle, lanes⟩ finally
+    checkedZero "accept rate limiter free" (← acceptLimiterFree handle)
+
+/-- Install before any listener or event loop starts. The limiter must outlive
+    this reactor; `withAcceptLimiter` should bracket the whole worker pool. -/
+def AcceptLimiter.attach (limiter : AcceptLimiter) (reactor : Reactor) (lane : Nat) : IO Unit := do
+  if lane >= limiter.lanes then throw (IO.userError "invalid accept limiter lane")
+  ensureAlive reactor
+  checkedZero "reactor accept rate limiter"
+    (← FFI.Reactor.setAcceptLimiter reactor.handle limiter.handle lane.toUInt32)
 
 /-- Configure before starting any member's listener or loop. Each worker owns
     its adopted connections. Stop and join every member before freeing any of

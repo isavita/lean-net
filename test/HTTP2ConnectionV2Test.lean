@@ -331,9 +331,81 @@ private def pushAndDrain : IO Unit := do
   check ((← frames goAway).size == 1 && c.draining && !c.drainComplete) "graceful GOAWAY state"
   let (_, block) ← hp (HPACK.encode HPACK.Context.new head)
   let late ← send c ⟨1, 5, 3, block⟩
-  check (late.requests.isEmpty && late.connection.canRespond 1 && (← frames (flatten late.output))[0]!.kind == 3) "GOAWAY accepted new request or lost active one"
+  check (late.requests.isEmpty && late.output.isEmpty && late.connection.canRespond 1)
+    "GOAWAY accepted a new request, emitted a redundant reset, or lost active work"
   let (c, _) ← ok (late.connection.queueResponse 1 {})
   check (c.drainComplete && c.isClosed) "graceful drain did not complete"
+
+private def peerResetFlood : IO Unit := do
+  let config : Connection.Config :=
+    { maxPeerResetsPerWindow := 2, resetWindowMs := 1000 }
+  let c ← requests (← connect config) #[head, head, head, head]
+  let rst id := (⟨3, 0, id, b32 8⟩ : Frame)
+  let first ← send (c.setTime 1000) (rst 1)
+  let second ← send first.connection (rst 3)
+  check (first.output.isEmpty && second.output.isEmpty && second.connection.canRespond 7)
+    "ordinary peer resets disturbed another stream"
+  let capped ← send (second.connection.setTime 1001) (rst 5)
+  let output ← frames (flatten capped.output)
+  check (output.size == 1 && output[0]!.kind == 7 && output[0]!.payload.extract 0 4 == b32 7 &&
+      output[0]!.payload.extract 4 8 == b32 11 && capped.connection.canRespond 7 &&
+      !capped.connection.drainComplete)
+    "peer reset flood did not start a graceful ENHANCE_YOUR_CALM drain"
+  let (_, block) ← hp (HPACK.encode HPACK.Context.new head)
+  let split := block.size / 2
+  let firstHead ← send capped.connection ⟨1, 0, 9, block.extract 0 split⟩
+  check (firstHead.connection.hasPartialInput && firstHead.output.isEmpty)
+    "ignored post-GOAWAY header block did not retain bounded continuation state"
+  let lastHead ← send firstHead.connection ⟨9, 4, 9, block.extract split block.size⟩
+  check (!lastHead.connection.hasPartialInput && lastHead.output.isEmpty &&
+      lastHead.requests.isEmpty && lastHead.connection.canRespond 7 &&
+      lastHead.connection.activeRequestIds == #[7])
+    "post-GOAWAY HEADERS allocated an exchange or emitted a reset"
+  let lateBody ← send lastHead.connection ⟨0, 1, 9, "ignored".toUTF8⟩
+  check (lateBody.output.isEmpty && lateBody.requests.isEmpty && lateBody.connection.canRespond 7)
+    "post-GOAWAY DATA disturbed a surviving stream"
+  let (drained, _) ← ok (lateBody.connection.queueResponse 7 {})
+  check (drained.drainComplete && drained.isClosed) "reset flood GOAWAY did not drain a sibling"
+  let continued := capped.connection.feedSlice (← wire (rst 7)) 0 13
+  check (continued.error.any (·.code == .enhanceYourCalm))
+    "continued peer reset flood remained live after GOAWAY"
+  let c ← requests (← connect config) #[head, head, head]
+  let first ← send (c.setTime 1000) (rst 1)
+  let next ← send (first.connection.setTime 2000) (rst 3)
+  let rolled ← send next.connection (rst 5)
+  check (rolled.output.isEmpty && !rolled.connection.draining)
+    "expired reset window did not release its budget"
+
+private def localResetFlood : IO Unit := do
+  let config : Connection.Config :=
+    { maxLocalResetsPerWindow := 2, resetWindowMs := 1000, maxResetHistory := 2 }
+  let c ← requests (← connect config) #[head]
+  let (_, malformed) ← hp (HPACK.encode HPACK.Context.new
+    #[{ name := ":method".toUTF8, value := "GET".toUTF8 }])
+  let first ← send (c.setTime 1000) ⟨1, 5, 3, malformed⟩
+  let second ← send (first.connection.setTime 900) ⟨1, 5, 5, malformed⟩
+  check ((← frames (flatten first.output)).size == 1 &&
+      (← frames (flatten second.output)).size == 1 &&
+      second.connection.activeRequestIds == #[1] && !second.connection.draining)
+    "invalid HEADERS were not individually reset within budget"
+  let capped ← send second.connection ⟨1, 5, 7, malformed⟩
+  let output ← frames (flatten capped.output)
+  check (output.size == 2 && output[0]!.kind == 3 && output[1]!.kind == 7 &&
+      output[1]!.payload.extract 4 8 == b32 11 &&
+      capped.connection.activeRequestIds == #[1] && capped.connection.canRespond 1 &&
+      !capped.connection.drainComplete)
+    "local reset flood did not start a graceful bounded drain"
+  let (_, valid) ← hp (HPACK.encode HPACK.Context.new head)
+  let mut draining := capped.connection
+  for i in [:12] do
+    let ignored ← send draining ⟨1, 5, UInt32.ofNat (9 + 2 * i), valid⟩
+    check (ignored.output.isEmpty && ignored.requests.isEmpty &&
+        ignored.connection.activeRequestIds == #[1] && ignored.connection.canRespond 1)
+      "post-GOAWAY HEADERS emitted a reset or retained an exchange"
+    draining := ignored.connection
+  let (drained, _) ← ok (draining.queueResponse 1 {})
+  check (drained.drainComplete && drained.isClosed)
+    "sibling response did not complete after local reset flood"
 
 private def peerGoAwayControlLiveness : IO Unit := do
   for code in #[0, 255] do
@@ -417,6 +489,8 @@ def main : IO Unit := do
   receiveCreditThresholds
   scheduling
   pushAndDrain
+  peerResetFlood
+  localResetFlood
   peerGoAwayControlLiveness
   responseAndEOF
   IO.println "HTTP/2 connection V2 tests passed"

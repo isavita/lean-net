@@ -42,4 +42,15 @@ def main : IO Unit := do
   rejected ["--upstream-ca", "roots.pem"]
   rejected ["--gate", "gateway.gate", "--upstream-ca"]
   rejected ["--gate", "gateway.gate", "--upstream-ca", "roots.pem", "--upstream-ca", "other.pem"]
+  let acceptedRate ← parse ["--connection-rate", "20/1000/10"]
+  let some rate := (← acceptedRate.httpConfig).connectionRate
+    | throw (IO.userError "connection rate was not propagated")
+  check (rate.tokens == 20 && rate.periodMs == 1000 && rate.burst == 10 &&
+    rate.keyedSlots == 65536) "connection rate values changed"
+  for value in ["", "20", "20/1000", "20/1000/10/1", "0/1000/10",
+      "20/0/10", "20/1000/0", "-1/1000/10", "x/1000/10",
+      "4294967296/1000/10"] do
+    rejected ["--connection-rate", value]
+  rejected ["--connection-rate"]
+  rejected ["--connection-rate", "20/1000/10", "--connection-rate", "20/1000/10"]
   IO.println "HTTP CLI defaults, upstream CA, bounds and rejection cases passed"

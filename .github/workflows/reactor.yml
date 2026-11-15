@@ -123,6 +123,7 @@ jobs:
         run: |
           lake env ${{ matrix.python }} test/test_gateway_runtime.py -v
           lake env ${{ matrix.python }} test/test_gateway_cli.py -v
+          lake env ${{ matrix.python }} test/test_connection_rate.py -v
       - name: Native upstream connect and resolver (Unix)
         if: runner.os != 'Windows'
         run: |
