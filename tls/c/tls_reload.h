@@ -139,15 +139,53 @@ done:
   EVP_PKEY_free(private_key); sk_X509_INFO_pop_free(chain, X509_INFO_free);
   BIO_free(cert_bio); BIO_free(key_bio); return error;
 }
+static const char *tw_input_path(const tw_provider *provider, uint32_t i) {
+  if (i < provider->count * 2) return i % 2 ? provider->paths[i / 2].private_key : provider->paths[i / 2].certificate;
+  if (i < provider->count * 3) return provider->paths[i - provider->count * 2].ocsp;
+  return provider->client_ca;
+}
+/* Accept only a successful, currently valid GOOD response for this leaf. */
+static int tw_context_ocsp(tw_context *context, const tw_pem *der) {
+  const unsigned char *cursor = der->bytes;
+  OCSP_RESPONSE *response = d2i_OCSP_RESPONSE(NULL, &cursor, (long)der->length);
+  OCSP_BASICRESP *basic = NULL; OCSP_CERTID *id = NULL; int error = -EINVAL;
+  X509 *leaf = SSL_CTX_get0_certificate(context->ssl), *issuer = NULL;
+  STACK_OF(X509) *chain = NULL;
+  if (!response || cursor != der->bytes + der->length || !leaf ||
+      OCSP_response_status(response) != OCSP_RESPONSE_STATUS_SUCCESSFUL) goto done;
+  basic = OCSP_response_get1_basic(response); if (!basic) goto done;
+  if (SSL_CTX_get0_chain_certs(context->ssl, &chain) != 1) goto done;
+  for (int i = 0; chain && i < sk_X509_num(chain); ++i)
+    if (X509_check_issued(sk_X509_value(chain, i), leaf) == X509_V_OK) { issuer = sk_X509_value(chain, i); break; }
+  if (!issuer) goto done;
+  id = OCSP_cert_to_id(NULL, leaf, issuer); if (!id) goto done;
+  int status = 0, reason = 0; ASN1_GENERALIZEDTIME *revoked = NULL, *this_update = NULL, *next_update = NULL;
+  if (OCSP_resp_find_status(basic, id, &status, &reason, &revoked, &this_update, &next_update) != 1 ||
+      status != V_OCSP_CERTSTATUS_GOOD || OCSP_check_validity(this_update, next_update, 300, -1) != 1) goto done;
+  context->ocsp = malloc(der->length); if (!context->ocsp) { error = -ENOMEM; goto done; }
+  memcpy(context->ocsp, der->bytes, der->length); context->ocsp_length = der->length;
+  SSL_CTX_set_tlsext_status_cb(context->ssl, tw_ocsp_status);
+  SSL_CTX_set_tlsext_status_arg(context->ssl, context);
+  error = 0;
+done:
+  OCSP_CERTID_free(id); OCSP_BASICRESP_free(basic); OCSP_RESPONSE_free(response); return error;
+}
+/* TLS 1.2 forward-secret AEAD suites only; TLS 1.3 uses OpenSSL's AEAD set. */
+#define TW_TLS12_CIPHERS "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:" \
+  "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:" \
+  "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305"
 static int tw_snapshot_load(tw_provider *provider, tw_bundle **out) {
   *out = NULL; size_t total = 0; int error = -ENOMEM;
-  tw_pem *inputs = calloc((size_t)provider->count * 2, sizeof(*inputs));
+  /* Layout: cert/key pairs, then one OCSP slot per context, then the CA. */
+  uint32_t total_inputs = provider->count * 3 + 1;
+  tw_pem *inputs = calloc((size_t)total_inputs, sizeof(*inputs));
   EVP_MD_CTX *digest = EVP_MD_CTX_new(); tw_bundle *bundle = NULL;
   unsigned char fingerprint[SHA256_DIGEST_LENGTH]; unsigned int digest_length = 0;
   if (!inputs || !digest) goto done;
   if (EVP_DigestInit_ex(digest, EVP_sha256(), NULL) != 1) { error = -EIO; goto done; }
-  for (uint32_t i = 0; i < provider->count * 2; ++i) {
-    const char *path = i % 2 ? provider->paths[i / 2].private_key : provider->paths[i / 2].certificate;
+  for (uint32_t i = 0; i < total_inputs; ++i) {
+    const char *path = tw_input_path(provider, i);
+    if (!path) continue;
     error = tw_pem_read(path, &inputs[i], &total); if (error) goto done;
     uint64_t length = inputs[i].length;
     if (EVP_DigestUpdate(digest, &length, sizeof(length)) != 1 ||
@@ -182,16 +220,45 @@ static int tw_snapshot_load(tw_provider *provider, tw_bundle **out) {
     SSL_CTX_set_client_hello_cb(context->ssl, tw_client_hello, bundle);
     SSL_CTX_set_tlsext_servername_callback(context->ssl, tw_servername);
     SSL_CTX_set_tlsext_servername_arg(context->ssl, bundle);
+    if (SSL_CTX_set_cipher_list(context->ssl, TW_TLS12_CIPHERS) != 1) { error = -EINVAL; goto done; }
+    if (provider->client_ca) {
+      /* The CA bundle is copied into memory BIOs, never reopened by OpenSSL. */
+      const tw_pem *ca = &inputs[provider->count * 3];
+      BIO *bio = BIO_new_mem_buf(ca->bytes, (int)ca->length);
+      STACK_OF(X509_INFO) *authorities = bio ? PEM_X509_INFO_read_bio(bio, NULL, tw_password, NULL) : NULL;
+      STACK_OF(X509_NAME) *names = sk_X509_NAME_new_null();
+      X509_STORE *store = SSL_CTX_get_cert_store(context->ssl);
+      int loaded = 0;
+      for (int k = 0; authorities && names && store && k < sk_X509_INFO_num(authorities); ++k) {
+        X509 *authority = sk_X509_INFO_value(authorities, k)->x509;
+        if (!authority) continue;
+        X509_NAME *name = X509_NAME_dup(X509_get_subject_name(authority));
+        if (!name || X509_STORE_add_cert(store, authority) != 1 || !sk_X509_NAME_push(names, name)) {
+          X509_NAME_free(name); loaded = -1; break;
+        }
+        ++loaded;
+      }
+      sk_X509_INFO_pop_free(authorities, X509_INFO_free); BIO_free(bio);
+      if (loaded <= 0) { sk_X509_NAME_pop_free(names, X509_NAME_free); error = -EINVAL; goto done; }
+      SSL_CTX_set_client_CA_list(context->ssl, names);
+      SSL_CTX_set_verify(context->ssl, SSL_VERIFY_PEER |
+        (provider->verify_mode == 2 ? SSL_VERIFY_FAIL_IF_NO_PEER_CERT : 0), NULL);
+      SSL_CTX_set_verify_depth(context->ssl, 10);
+    }
+    if (inputs[provider->count * 2 + i].bytes) {
+      error = tw_context_ocsp(context, &inputs[provider->count * 2 + i]); if (error) goto done;
+    }
   }
   error = 0;
 verify:
-  for (uint32_t i = 0; i < provider->count * 2; ++i) {
-    const char *path = i % 2 ? provider->paths[i / 2].private_key : provider->paths[i / 2].certificate;
+  for (uint32_t i = 0; i < total_inputs; ++i) {
+    const char *path = tw_input_path(provider, i);
+    if (!path) continue;
     error = tw_pem_unchanged(path, &inputs[i]); if (error) goto done;
   }
   *out = bundle; bundle = NULL;
 done:
-  if (inputs) for (uint32_t i = 0; i < provider->count * 2; ++i) tw_pem_free(&inputs[i]);
+  if (inputs) for (uint32_t i = 0; i < total_inputs; ++i) tw_pem_free(&inputs[i]);
   free(inputs); EVP_MD_CTX_free(digest); tw_bundle_release(bundle); return error;
 }
 static void tw_control_fail(tw_provider *provider, int error);
@@ -365,13 +432,18 @@ static void tw_provider_release(tw_provider *provider) {
   tw_bundle_release(provider->current);
   for (uint32_t i = 0; provider->paths && i < provider->count; ++i) {
     free(provider->paths[i].name); free(provider->paths[i].certificate); free(provider->paths[i].private_key);
+    free(provider->paths[i].ocsp);
   }
+  free(provider->client_ca);
   free(provider->paths); if (provider->lock) CRYPTO_THREAD_lock_free(provider->lock); free(provider);
 }
 lean_object *lean_tlsw_bundle_new(b_lean_obj_arg cert, b_lean_obj_arg key,
-    b_lean_obj_arg names, b_lean_obj_arg certs, b_lean_obj_arg keys, uint8_t tickets) {
+    b_lean_obj_arg names, b_lean_obj_arg certs, b_lean_obj_arg keys, uint8_t tickets,
+    b_lean_obj_arg ocsp, b_lean_obj_arg client_ca, uint8_t verify_mode) {
   size_t count = lean_array_size(names);
-  if (count >= TW_MAX_CERTS || count != lean_array_size(certs) || count != lean_array_size(keys) || tickets > 1)
+  if (count >= TW_MAX_CERTS || count != lean_array_size(certs) || count != lean_array_size(keys) || tickets > 1 ||
+      lean_array_size(ocsp) != count + 1 || verify_mode > 2 ||
+      (verify_mode != 0) != (lean_string_size(client_ca) > 1))
     return tw_handle(-EINVAL, "invalid TLS certificate table");
   tw_provider *provider = calloc(1, sizeof(*provider));
   if (!provider) return tw_handle(-ENOMEM, "allocating TLS provider");
@@ -381,15 +453,22 @@ lean_object *lean_tlsw_bundle_new(b_lean_obj_arg cert, b_lean_obj_arg key,
   atomic_init(&provider->live_versions, 0); atomic_init(&provider->loader_threads, 0);
   atomic_init(&provider->generation, 1); atomic_init(&provider->attempts, 0); atomic_init(&provider->publications, 0);
   atomic_init(&provider->failures, 0); atomic_init(&provider->requested, 0); atomic_init(&provider->completed, 0); atomic_init(&provider->last_error, 0);
-  provider->count = (uint32_t)count + 1; provider->tickets = tickets;
+  provider->count = (uint32_t)count + 1; provider->tickets = tickets; provider->verify_mode = verify_mode;
   provider->lock = CRYPTO_THREAD_lock_new(); provider->paths = calloc(provider->count, sizeof(*provider->paths));
   int error = -ENOMEM; char message[256] = "TLS provider allocation failed";
   if (!provider->lock || !provider->paths) goto failure;
+  if (verify_mode) {
+    provider->client_ca = tw_copy_text(client_ca); if (!provider->client_ca) { error = -EINVAL; goto failure; }
+  }
   for (uint32_t i = 0; i < provider->count; ++i) {
     tw_path *path = &provider->paths[i];
     path->certificate = tw_copy_text(i ? lean_array_uget_borrowed(certs, i - 1) : cert);
     path->private_key = tw_copy_text(i ? lean_array_uget_borrowed(keys, i - 1) : key);
     if (!path->certificate || !path->private_key) { error = -EINVAL; goto failure; }
+    lean_object *ocsp_path = lean_array_uget_borrowed(ocsp, i);
+    if (lean_string_size(ocsp_path) > 1) {
+      path->ocsp = tw_copy_text(ocsp_path); if (!path->ocsp) { error = -EINVAL; goto failure; }
+    }
     if (i) {
       lean_object *name = lean_array_uget_borrowed(names, i - 1); char normalized[254];
       if (!tw_hostname((const unsigned char *)lean_string_cstr(name), lean_string_size(name) - 1, normalized)) { error = -EINVAL; goto failure; }
@@ -402,7 +481,7 @@ lean_object *lean_tlsw_bundle_new(b_lean_obj_arg cert, b_lean_obj_arg key,
   if ((uintptr_t)provider > INT64_MAX) { error = -EOVERFLOW; goto failure; }
   return tw_handle((int64_t)(uintptr_t)provider, "");
 failure:
-  tw_diagnostic(message, "invalid TLS certificate, key, validity interval or SNI identity");
+  tw_diagnostic(message, "invalid TLS certificate, key, validity interval, SNI identity, client CA or OCSP response");
   tw_provider_release(provider); return tw_handle(error, message);
 }
 lean_object *lean_tlsw_bundle_reload_start(uint64_t handle, uint64_t interval) {

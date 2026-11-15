@@ -2,6 +2,17 @@
 #include "../c/tls_worker.c"
 #include <stdio.h>
 
+/* Bundles without OCSP responses or client-certificate verification. */
+static lean_object *test_bundle_new(lean_object *cert, lean_object *key, lean_object *names,
+    lean_object *certs, lean_object *keys, uint8_t tickets) {
+  size_t count = lean_array_size(names) + 1;
+  lean_object *ocsp = lean_alloc_array(count, count);
+  for (size_t i = 0; i < count; ++i) lean_array_set_core(ocsp, i, lean_mk_string(""));
+  lean_object *ca = lean_mk_string("");
+  lean_object *result = lean_tlsw_bundle_new(cert, key, names, certs, keys, tickets, ocsp, ca, 0);
+  lean_dec(ocsp); lean_dec(ca); return result;
+}
+
 void lean_initialize_runtime_module(void);
 static void check(int condition, const char *message) {
   if (!condition) { fprintf(stderr,"TLS context native: %s\n",message); exit(1); }
@@ -22,7 +33,7 @@ static void table_case(const char *certificate,const char *private_key,
   lean_object *names=strings(hosts,count),*certs=strings(certificates,count),*secrets=strings(keys,count);
   lean_object *cert=lean_mk_string(certificate),*key=lean_mk_string(private_key);
   exclusive(names);exclusive(certs);exclusive(secrets);
-  lean_object *result=lean_tlsw_bundle_new(cert,key,names,certs,secrets,tickets);
+  lean_object *result=test_bundle_new(cert,key,names,certs,secrets,tickets);
   check(lean_io_result_is_ok(result),"context setup returns IO result");
   int64_t value=(int64_t)lean_unbox_uint64(lean_ctor_get(lean_io_result_get_value(result),0));
   exclusive(names);exclusive(certs);exclusive(secrets);

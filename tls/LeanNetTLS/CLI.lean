@@ -13,7 +13,10 @@ def serve (options : LeanNet.HTTP.CLI.Options) (certificate privateKey : String)
     privateKey
     -- Always start the off-loop loader so SIGHUP can reload certificates;
     -- without --reload-certs-ms it only acts on explicit (signal) requests.
-    reload := some { intervalMs := (options.reloadCertsMs.getD 0).toUInt64 } }
+    reload := some { intervalMs := (options.reloadCertsMs.getD 0).toUInt64 }
+    clientCA := options.clientCA.map (·.toString)
+    requireClientCert := options.requireClientCert
+    ocspResponse := options.ocspResponse.map (·.toString) }
   if let some root := options.staticRoot then
     let bytes := options.staticMemoryMiB * 1024 * 1024
     ReactorServer.serveStaticRoot root tls

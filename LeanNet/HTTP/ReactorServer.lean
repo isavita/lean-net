@@ -493,6 +493,9 @@ private def Driver.beginDrain (driver : Driver) (id : Reactor.SocketId) : IO Uni
 /-- Establish the request's trace context before application dispatch. -/
 private def Driver.traced (driver : Driver) (id : Reactor.SocketId) (requestId : Nat)
     (request : Request) : IO Request := do
+  let request := match (← driver.client? id) with
+    | some client => { request with clientCertificate := client.socket.clientCertificate }
+    | none => request
   if !driver.config.tracing then return request
   let state ← driver.state.get
   let (context, headers, traces) := TraceContext.ensure request.headers state.traces

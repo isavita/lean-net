@@ -55,8 +55,12 @@ def withBundle (config : Config) (use : Bundle → IO α) : IO α := do
   let keys := config.hosts.map (·.privateKey)
   for text in #[config.certificateChain, config.privateKey] ++ names ++ certs ++ keys do
     if text.toUTF8.toList.contains 0 then throw (IO.userError "TLS configuration contains NUL")
+  if config.requireClientCert && config.clientCA.isNone then
+    throw (IO.userError "requireClientCert needs a clientCA bundle")
+  let ocsp := #[config.ocspResponse.getD ""] ++ config.hosts.map (·.ocspResponse.getD "")
+  let verifyMode : UInt8 := if config.clientCA.isNone then 0 else if config.requireClientCert then 2 else 1
   let (raw, message) ← FFI.Worker.bundleNew config.certificateChain config.privateKey names certs keys
-    (if config.tickets then 1 else 0)
+    (if config.tickets then 1 else 0) ocsp (config.clientCA.getD "") verifyMode
   let handle ← check "TLS certificate bundle" raw message
   if handle == 0 then throw (IO.userError "TLS certificate bundle returned null")
   let bundle : Bundle := ⟨handle, ← IO.mkRef true⟩
@@ -328,7 +332,11 @@ private def Driver.poll (driver : Driver) : IO (Array HTTP.Transport.Event) := d
           | 1 => pure HTTP.Transport.Protocol.http1
           | 2 => pure HTTP.Transport.Protocol.http2
           | _ => throw (IO.userError "TLS negotiated an unknown application protocol")
-        events := events.push (.ready (driver.endpoint id ready) protocol)
+        let (verified, subject, sans) ← FFI.Worker.peer driver.handle session.native
+        let certificate : Option HTTP1.ClientCertificate := if verified == 1 then
+            some { subject, subjectAltNames := if sans.isEmpty then #[] else (sans.splitOn ",").toArray }
+          else none
+        events := events.push (.ready { driver.endpoint id ready with clientCertificate := certificate } protocol)
       | 3 => events := events.push (.written id raw.operation (Errno.decode raw.result).toNat)
       | 4 => events := events.push (.eof id)
       | 6 =>
@@ -403,6 +411,14 @@ private def Driver.stop (driver : Driver) (duration : UInt64) : IO Unit := do
       catch error => if failure.isNone then failure := some error
     if let some error := failure then throw error
 
+/-- Process-wide TLS handshake counters in Prometheus text format. -/
+def handshakeMetrics : IO ByteArray := do
+  let values ← FFI.Worker.handshakeStats
+  let value := fun (index : Nat) => values[index]?.getD 0
+  return (s!"# HELP lean_net_tls_handshakes_total Completed TLS handshakes.\n# TYPE lean_net_tls_handshakes_total counter\nlean_net_tls_handshakes_total {value 0}\n" ++
+    s!"# TYPE lean_net_tls_resumed_handshakes_total counter\nlean_net_tls_resumed_handshakes_total {value 1}\n" ++
+    s!"# TYPE lean_net_tls_client_certificates_total counter\nlean_net_tls_client_certificates_total {value 2}\n").toUTF8
+
 /-- All OpenSSL calls and their objects belong to the native TLS thread. This
     bracket stops and joins it while the reactor and every buffer are alive. -/
 def withWorkerStats (bundle : Bundle) (config : Config) (reactor : LeanNet.Reactor.Reactor)
@@ -418,6 +434,7 @@ def withWorkerStats (bundle : Bundle) (config : Config) (reactor : LeanNet.React
     let transport : HTTP.Transport.Worker := {
       deferClosed := true
       secure := true
+      metrics := handshakeMetrics
       event := fun event => do driver.ensureAlive; driver.nativeEvent event
       poll := do driver.ensureAlive; driver.poll
       hasWork := do driver.ensureAlive; return (← check "TLS pending work" (← FFI.Worker.hasWork handle)) != 0

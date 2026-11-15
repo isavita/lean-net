@@ -5,6 +5,8 @@ structure HostConfig where
   name : String
   certificateChain : String
   privateKey : String
+  /-- DER OCSP response stapled for this host's certificate. -/
+  ocspResponse : Option String := none
   deriving Repr
 
 /-- Reload reads the configured paths on one dedicated native loader. Zero
@@ -24,6 +26,14 @@ structure Config where
   shutdownTimeoutMs : UInt64 := 2000
   tickets : Bool := true
   reload : Option ReloadConfig := none
+  /-- DER OCSP response for the default certificate. It must be a successful,
+      currently valid GOOD response for that leaf; reloads re-read it, so an
+      external refresher only needs to replace the file and send SIGHUP. -/
+  ocspResponse : Option String := none
+  /-- PEM CA bundle for client certificate verification (mTLS). -/
+  clientCA : Option String := none
+  /-- Reject handshakes without a client certificate (requires `clientCA`). -/
+  requireClientCert : Bool := false
   deriving Repr
 
 /-- Scalar-only native ABI. `lastError` encodes zero or negative errno. -/

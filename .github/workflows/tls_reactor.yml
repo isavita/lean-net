@@ -103,6 +103,8 @@ jobs:
         env:
           LEAN_NET_TLS_CYCLES: '1000'
         run: lake env ${{ matrix.python }} tls/test/test_tls_reactor.py -v
+      - name: Production TLS policy (mTLS, OCSP, ciphers, curl matrix)
+        run: lake env ${{ matrix.python }} tls/test/test_tls_production.py -v
       - name: HTTP/2 frame isolation, priorities, push and TLS acceptance
         run: lake env ${{ matrix.python }} test/test_http2_reactor.py -v
       - name: Public HTTP/2 CLI push acceptance

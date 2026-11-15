@@ -4,7 +4,10 @@ import LeanNetTLS.ReactorConfig
 namespace LeanNetTLS.FFI.Worker
 
 @[extern "lean_tlsw_bundle_new"] opaque bundleNew (cert key : @& String)
-  (names certs keys : @& Array String) (tickets : UInt8) : IO (UInt64 × String)
+  (names certs keys : @& Array String) (tickets : UInt8) (ocsp : @& Array String)
+  (clientCA : @& String) (verifyMode : UInt8) : IO (UInt64 × String)
+@[extern "lean_tlsw_peer"] opaque peer (handle session : UInt64) : IO (UInt8 × String × String)
+@[extern "lean_tlsw_handshake_stats"] opaque handshakeStats : IO (Array UInt64)
 @[extern "lean_tlsw_bundle_free"] opaque bundleFree (handle : UInt64) : IO UInt64
 @[extern "lean_tlsw_bundle_reload_start"] opaque bundleReloadStart (handle intervalMs : UInt64) : IO UInt64
 @[extern "lean_tlsw_bundle_reload_request"] opaque bundleReloadRequest (handle : UInt64) : IO UInt64

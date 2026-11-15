@@ -21,6 +21,7 @@
 #include <openssl/sha.h>
 #include <openssl/pem.h>
 #include <openssl/x509v3.h>
+#include <openssl/ocsp.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdatomic.h>
@@ -49,6 +50,9 @@ typedef struct tw_context {
   SSL_CTX *ssl;
   char *name;
   unsigned char identity[SHA256_DIGEST_LENGTH];
+  /* Validated DER OCSP response stapled when a client requests status. */
+  unsigned char *ocsp;
+  size_t ocsp_length;
 } tw_context;
 typedef struct tw_provider tw_provider;
 typedef struct tw_bundle {
@@ -59,7 +63,7 @@ typedef struct tw_bundle {
   unsigned char fingerprint[SHA256_DIGEST_LENGTH];
 } tw_bundle;
 typedef struct tw_path {
-  char *name, *certificate, *private_key;
+  char *name, *certificate, *private_key, *ocsp;
 } tw_path;
 struct tw_provider {
   atomic_uint references;
@@ -68,6 +72,9 @@ struct tw_provider {
   tw_path *paths;
   uint32_t count;
   uint8_t tickets;
+  /* mTLS: 0 off, 1 request and verify a client certificate, 2 require one. */
+  uint8_t verify_mode;
+  char *client_ca;
   atomic_int stop, closed, control_error, snapshot_error;
   atomic_uint live_versions, loader_threads;
   atomic_uint_fast64_t generation, attempts, publications, failures, requested, completed;
@@ -115,6 +122,10 @@ typedef struct tw_session {
       fatal, shutdown_sent, file_failed, terminal_write;
   int error, protocol;
   char diagnostic[256];
+  /* Verified client certificate, captured by the TLS thread before READY is
+   * published (release) and read by the reactor owner after READY (acquire). */
+  int peer_verified;
+  char peer_subject[512], peer_sans[1024];
   uint32_t seen_cipher, seen_plain, seen_cipher_tail, seen_plain_tail,
       seen_fence_tail, seen_notifications;
   int more;
@@ -212,7 +223,7 @@ static void tw_bundle_release(tw_bundle *bundle) {
   if (!bundle) return;
   if (atomic_fetch_sub(&bundle->references, 1) != 1) return;
   for (uint32_t i = 0; bundle->contexts && i < bundle->count; ++i) {
-    SSL_CTX_free(bundle->contexts[i].ssl); free(bundle->contexts[i].name);
+    SSL_CTX_free(bundle->contexts[i].ssl); free(bundle->contexts[i].name); free(bundle->contexts[i].ocsp);
   }
   if (bundle->owner) atomic_fetch_sub(&bundle->owner->live_versions, 1);
   free(bundle->contexts); free(bundle);
@@ -271,6 +282,68 @@ static int tw_alpn(SSL *ssl, const unsigned char **out, unsigned char *outlen,
   if (h2) { *out = h2; *outlen = 2; return SSL_TLSEXT_ERR_OK; }
   if (http1) { *out = http1; *outlen = 8; return SSL_TLSEXT_ERR_OK; }
   return SSL_TLSEXT_ERR_ALERT_FATAL;
+}
+/* Process-wide handshake counters exported to Prometheus. */
+static atomic_uint_fast64_t tw_handshakes_total = 0, tw_handshakes_resumed = 0,
+    tw_client_certificates = 0;
+static int tw_ocsp_status(SSL *ssl, void *argument) {
+  tw_context *context = argument;
+  if (!context || !context->ocsp) return SSL_TLSEXT_ERR_NOACK;
+  unsigned char *copy = OPENSSL_malloc(context->ocsp_length);
+  if (!copy) return SSL_TLSEXT_ERR_NOACK;
+  memcpy(copy, context->ocsp, context->ocsp_length);
+  if (SSL_set_tlsext_status_ocsp_resp(ssl, copy, (long)context->ocsp_length) != 1) {
+    OPENSSL_free(copy); return SSL_TLSEXT_ERR_NOACK;
+  }
+  return SSL_TLSEXT_ERR_OK;
+}
+static void tw_append(char *out, size_t capacity, size_t *used, const char *text, size_t length) {
+  if (*used >= capacity - 1) return;
+  if (length > capacity - 1 - *used) length = capacity - 1 - *used;
+  memcpy(out + *used, text, length); *used += length; out[*used] = 0;
+}
+/* Subject DN (RFC 2253) and comma-separated SANs ("DNS:x", "URI:y",
+ * "email:z", "IP:a"). Truncated at fixed bounds; control bytes are dropped. */
+static void tw_capture_peer(tw_session *session) {
+  session->peer_verified = 0; session->peer_subject[0] = 0; session->peer_sans[0] = 0;
+  X509 *certificate = SSL_get1_peer_certificate(session->ssl);
+  if (!certificate) return;
+  session->peer_verified = SSL_get_verify_result(session->ssl) == X509_V_OK;
+  BIO *bio = BIO_new(BIO_s_mem());
+  if (bio && X509_NAME_print_ex(bio, X509_get_subject_name(certificate), 0, XN_FLAG_RFC2253) >= 0) {
+    int n = BIO_read(bio, session->peer_subject, (int)sizeof(session->peer_subject) - 1);
+    session->peer_subject[n > 0 ? n : 0] = 0;
+  }
+  BIO_free(bio);
+  GENERAL_NAMES *names = X509_get_ext_d2i(certificate, NID_subject_alt_name, NULL, NULL);
+  size_t used = 0;
+  for (int i = 0; names && i < sk_GENERAL_NAME_num(names); ++i) {
+    const GENERAL_NAME *name = sk_GENERAL_NAME_value(names, i);
+    const char *prefix = NULL; const unsigned char *value = NULL; int length = 0; char ip[64];
+    if (name->type == GEN_DNS) { prefix = "DNS:"; value = ASN1_STRING_get0_data(name->d.dNSName); length = ASN1_STRING_length(name->d.dNSName); }
+    else if (name->type == GEN_URI) { prefix = "URI:"; value = ASN1_STRING_get0_data(name->d.uniformResourceIdentifier); length = ASN1_STRING_length(name->d.uniformResourceIdentifier); }
+    else if (name->type == GEN_EMAIL) { prefix = "email:"; value = ASN1_STRING_get0_data(name->d.rfc822Name); length = ASN1_STRING_length(name->d.rfc822Name); }
+    else if (name->type == GEN_IPADD) {
+      const unsigned char *raw = ASN1_STRING_get0_data(name->d.iPAddress);
+      int raw_length = ASN1_STRING_length(name->d.iPAddress);
+      if (raw_length == 4) length = snprintf(ip, sizeof(ip), "%u.%u.%u.%u", raw[0], raw[1], raw[2], raw[3]);
+      else if (raw_length == 16) {
+        length = 0;
+        for (int k = 0; k < 16; k += 2)
+          length += snprintf(ip + length, sizeof(ip) - (size_t)length, k ? ":%x" : "%x", (unsigned)(raw[k] << 8 | raw[k + 1]));
+      }
+      prefix = "IP:"; value = (const unsigned char *)ip;
+    }
+    if (!prefix || !value || length <= 0) continue;
+    if (used) tw_append(session->peer_sans, sizeof(session->peer_sans), &used, ",", 1);
+    tw_append(session->peer_sans, sizeof(session->peer_sans), &used, prefix, strlen(prefix));
+    for (int k = 0; k < length; ++k)
+      if (value[k] >= 32 && value[k] < 127 && value[k] != ',')
+        tw_append(session->peer_sans, sizeof(session->peer_sans), &used, (const char *)value + k, 1);
+  }
+  GENERAL_NAMES_free(names);
+  X509_free(certificate);
+  atomic_fetch_add(&tw_client_certificates, 1);
 }
 #include "tls_reload.h"
 
@@ -503,6 +576,9 @@ static void tw_drive(tw_engine *engine, tw_session *session) {
         const unsigned char *protocol = NULL; unsigned int n = 0;
         SSL_get0_alpn_selected(session->ssl, &protocol, &n);
         session->protocol = n == 2 && memcmp(protocol, "h2", 2) == 0 ? 2 : 1;
+        tw_capture_peer(session);
+        atomic_fetch_add(&tw_handshakes_total, 1);
+        if (SSL_session_reused(session->ssl)) atomic_fetch_add(&tw_handshakes_resumed, 1);
         session->handshake_complete = 1; session->more = 1; continue;
       }
       status = tw_classify(session, rc);
@@ -1107,4 +1183,25 @@ lean_object *lean_tlsw_stats(uint64_t handle) {
   lean_ctor_set_uint64(result, 8, atomic_load(&engine->owner_violations));
   lean_ctor_set_uint64(result, 16, atomic_load(&engine->running));
   return lean_io_result_mk_ok(result);
+}
+
+/* Verified client certificate of a READY session: (verified, subject, SANs). */
+lean_object *lean_tlsw_peer(uint64_t handle, uint64_t token) {
+  tw_session *session = NULL;
+  tw_bridge_session *owner = handle ? tw_find((tw_bridge *)(uintptr_t)handle, token, &session) : NULL;
+  int ready = owner && atomic_load_explicit(&session->ready, memory_order_acquire);
+  lean_object *tuple = lean_alloc_ctor(0, 2, 0), *inner = lean_alloc_ctor(0, 2, 0);
+  lean_ctor_set(inner, 0, lean_mk_string(ready ? session->peer_subject : ""));
+  lean_ctor_set(inner, 1, lean_mk_string(ready ? session->peer_sans : ""));
+  lean_ctor_set(tuple, 0, lean_box(ready && session->peer_verified ? 1 : 0));
+  lean_ctor_set(tuple, 1, inner);
+  return lean_io_result_mk_ok(tuple);
+}
+lean_object *lean_tlsw_handshake_stats(lean_object *unit) {
+  (void)unit;
+  lean_object *array = lean_mk_empty_array_with_capacity(lean_box(3));
+  array = lean_array_push(array, lean_box_uint64(atomic_load(&tw_handshakes_total)));
+  array = lean_array_push(array, lean_box_uint64(atomic_load(&tw_handshakes_resumed)));
+  array = lean_array_push(array, lean_box_uint64(atomic_load(&tw_client_certificates)));
+  return lean_io_result_mk_ok(array);
 }

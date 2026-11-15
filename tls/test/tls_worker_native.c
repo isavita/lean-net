@@ -43,6 +43,17 @@ static int test_cipher_write(rn_reactor *reactor, uint64_t connection, uint64_t 
 #define splice test_file_splice
 #endif
 #include "../c/tls_worker.c"
+
+/* Bundles without OCSP responses or client-certificate verification. */
+static lean_object *test_bundle_new(lean_object *cert, lean_object *key, lean_object *names,
+    lean_object *certs, lean_object *keys, uint8_t tickets) {
+  size_t count = lean_array_size(names) + 1;
+  lean_object *ocsp = lean_alloc_array(count, count);
+  for (size_t i = 0; i < count; ++i) lean_array_set_core(ocsp, i, lean_mk_string(""));
+  lean_object *ca = lean_mk_string("");
+  lean_object *result = lean_tlsw_bundle_new(cert, key, names, certs, keys, tickets, ocsp, ca, 0);
+  lean_dec(ocsp); lean_dec(ca); return result;
+}
 #undef pthread_join
 #undef rn_transport_write
 #undef SSL_get_error
@@ -236,7 +247,7 @@ static void publish_wrapped_input(SSL *ssl, int error) {
 }
 static void drive_notification_wrap(const char *certificate, const char *key) {
   lean_object *cert = lean_mk_string(certificate), *secret = lean_mk_string(key), *empty = lean_mk_empty_array();
-  uint64_t bundle = handle(lean_tlsw_bundle_new(cert, secret, empty, empty, empty, 1));
+  uint64_t bundle = handle(test_bundle_new(cert, secret, empty, empty, empty, 1));
   lean_dec(cert); lean_dec(secret); lean_dec(empty);
   rn_config config = {1, 8, 1, 2, 0, 0, 1}; rn_reactor *reactor = NULL;
   check(rn_new(&config, &reactor) == 0, "create forced-wrap reactor");
@@ -338,7 +349,7 @@ static void exercise(const char *certificate, const char *key, uint32_t capacity
   check(rn_file_source_publish((uintptr_t)reader, sizeof(payload), sizeof(payload) + 65536, &file_source) == 0, "pin immutable native TLS file");
   check(rn_file_source_publish((uintptr_t)abort_reader, sizeof(payload), sizeof(payload) + 65536, &abort_source) == 0, "pin independently owned cancellation snapshot");
   lean_object *cert = lean_mk_string(certificate), *secret = lean_mk_string(key), *empty = lean_mk_empty_array();
-  uint64_t bundle = handle(lean_tlsw_bundle_new(cert, secret, empty, empty, empty, 1));
+  uint64_t bundle = handle(test_bundle_new(cert, secret, empty, empty, empty, 1));
   lean_dec(cert); lean_dec(secret); lean_dec(empty);
   rn_config config = {1, 32, 8, 4, 0, 0, 1}; rn_reactor *reactor = NULL;
   check(rn_new(&config, &reactor) == 0, "create four-cell reactor");

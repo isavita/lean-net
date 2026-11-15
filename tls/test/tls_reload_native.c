@@ -59,6 +59,17 @@ static DWORD WINAPI tested_reload_wait(HANDLE, DWORD);
 #endif
 #include <stdio.h>
 
+/* Bundles without OCSP responses or client-certificate verification. */
+static lean_object *test_bundle_new(lean_object *cert, lean_object *key, lean_object *names,
+    lean_object *certs, lean_object *keys, uint8_t tickets) {
+  size_t count = lean_array_size(names) + 1;
+  lean_object *ocsp = lean_alloc_array(count, count);
+  for (size_t i = 0; i < count; ++i) lean_array_set_core(ocsp, i, lean_mk_string(""));
+  lean_object *ca = lean_mk_string("");
+  lean_object *result = lean_tlsw_bundle_new(cert, key, names, certs, keys, tickets, ocsp, ca, 0);
+  lean_dec(ocsp); lean_dec(ca); return result;
+}
+
 void lean_initialize_runtime_module(void);
 static void check(int condition, const char *message) {
   if (!condition) { fprintf(stderr, "TLS reload native: %s\n", message); exit(1); }
@@ -203,7 +214,7 @@ static uint64_t provider(const char *certificate, const char *key) {
   for (unsigned i = 0; i < 2; ++i) {
     lean_array_set_core(certs, i, lean_mk_string(certificate)); lean_array_set_core(keys, i, lean_mk_string(key));
   }
-  uint64_t value = handle(lean_tlsw_bundle_new(cert, secret, names, certs, keys, 1));
+  uint64_t value = handle(test_bundle_new(cert, secret, names, certs, keys, 1));
   lean_dec(cert); lean_dec(secret); lean_dec(names); lean_dec(certs); lean_dec(keys); return value;
 }
 static void stats_abi(tw_provider *provider) {

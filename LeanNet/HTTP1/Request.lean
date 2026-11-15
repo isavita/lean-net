@@ -14,6 +14,14 @@ structure RequestHead where
   target : ByteArray
   headers : Array Header
 
+/-- A client certificate that the TLS layer verified against the configured
+    client CA (mTLS). Subject is an RFC 2253 DN; SANs are typed entries such as
+    `DNS:example.com`, `URI:spiffe://...`, `email:a@b` or `IP:10.0.0.1`. -/
+structure ClientCertificate where
+  subject : String
+  subjectAltNames : Array String := #[]
+  deriving Repr, Inhabited, BEq
+
 /-- The request target and body remain uninterpreted wire bytes. -/
 structure Request where
   method : String
@@ -22,6 +30,8 @@ structure Request where
   headers : Array Header
   body : ByteArray
   trailers : Array Header := #[]
+  /-- Set by the server for TLS connections with a verified client certificate. -/
+  clientCertificate : Option ClientCertificate := none
 
 /-- Limits apply independently to the request head, decoded body, and trailers. -/
 structure Limits where

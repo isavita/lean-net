@@ -61,6 +61,17 @@ static int tested_close(int);
 #endif
 #define rn_waker_wake tested_reactor_wake
 #include "../c/tls_worker.c"
+
+/* Bundles without OCSP responses or client-certificate verification. */
+static lean_object *test_bundle_new(lean_object *cert, lean_object *key, lean_object *names,
+    lean_object *certs, lean_object *keys, uint8_t tickets) {
+  size_t count = lean_array_size(names) + 1;
+  lean_object *ocsp = lean_alloc_array(count, count);
+  for (size_t i = 0; i < count; ++i) lean_array_set_core(ocsp, i, lean_mk_string(""));
+  lean_object *ca = lean_mk_string("");
+  lean_object *result = lean_tlsw_bundle_new(cert, key, names, certs, keys, tickets, ocsp, ca, 0);
+  lean_dec(ocsp); lean_dec(ca); return result;
+}
 #undef rn_waker_wake
 #ifdef _WIN32
 #undef SetEvent
@@ -397,7 +408,7 @@ static void historical_control_failure(uint64_t bundle) {
 int main(int argc, char **argv) {
   check(argc == 6, "certificate fixture arguments"); lean_initialize_runtime_module();
   lean_object *cert = lean_mk_string(argv[1]), *key = lean_mk_string(argv[2]), *empty = lean_mk_empty_array();
-  uint64_t bundle = native_handle(lean_tlsw_bundle_new(cert, key, empty, empty, empty, 1));
+  uint64_t bundle = native_handle(test_bundle_new(cert, key, empty, empty, empty, 1));
   lean_dec(cert); lean_dec(key); lean_dec(empty);
   tw_provider *provider = (tw_provider *)(uintptr_t)bundle; tw_bundle *original = provider->current;
   controls(bundle); historical_control_failure(bundle);

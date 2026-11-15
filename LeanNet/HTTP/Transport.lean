@@ -1,4 +1,5 @@
 import LeanNet.Reactor.Basic
+import LeanNet.HTTP1.Request
 
 namespace LeanNet.HTTP.Transport
 
@@ -20,6 +21,8 @@ structure Endpoint where
   closeAfterWrites : IO Unit
   armTimer : UInt32 → UInt64 → IO Unit
   cancelTimer : UInt32 → IO Unit
+  /-- Verified mTLS client certificate, captured once the handshake completed. -/
+  clientCertificate : Option HTTP1.ClientCertificate := none
 
 inductive Event where
   | ready (endpoint : Endpoint) (protocol : Protocol)

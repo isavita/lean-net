@@ -17,6 +17,16 @@ def demoHandlers : HTTP1.Handlers := {
   onRequest := fun request => do
     if request.target == "/pushed.txt".toUTF8 && ["GET", "HEAD"].contains request.method then
       return { response := demoAsset }
+    -- Demonstrates the mTLS identity exposed to applications.
+    if request.target == "/client-certificate".toUTF8 && request.method == "GET" then
+      let text := "text/plain; charset=utf-8".toUTF8
+      match request.clientCertificate with
+      | some certificate =>
+        let body := s!"subject={certificate.subject}\nsan={",".intercalate certificate.subjectAltNames.toList}\n"
+        return { response := { status := 200, headers := #[{ name := "content-type", value := text }], body := body.toUTF8 } }
+      | none =>
+        return { response := { status := 404, headers := #[{ name := "content-type", value := text }],
+                               body := "no verified client certificate\n".toUTF8 } }
     return { response := ← HTTP1.defaultRouter request }
   onPush := fun request => pure <|
     if request.method == "GET" && request.target == "/".toUTF8 then
