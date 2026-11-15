@@ -76,13 +76,12 @@ package «lean-net-tls» where
       unless ← library.pathExists do
         throw <| IO.userError "Select macOS zlib's lib/pkgconfig directory in PKG_CONFIG_PATH"
       return flags.map (fun flag => if flag == "-lz" then library.toString else flag) ++ #["-pthread"]
-    -- Use explicit multiarch paths and static Brotli, whose unversioned math
-    -- references can resolve against Lean's matching bundled libm. Retain
-    -- OpenSSL's established pkg-config lookup and select only codecs here.
+    -- Select the pkg-config codecs explicitly without adding their system
+    -- directory to the linker's global search path.
     let mut libraries := #["-pthread"]
     for (packageName, libraryName) in #[
-        ("zlib", "libz.so"), ("libbrotlienc", "libbrotlienc.a"),
-        ("libbrotlicommon", "libbrotlicommon.a")] do
+        ("zlib", "libz.so"), ("libbrotlienc", "libbrotlienc.so"),
+        ("libbrotlicommon", "libbrotlicommon.so")] do
       let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", packageName] }
       if location.exitCode != 0 then throw <| IO.userError s!"cannot locate {packageName} library"
       let path := System.FilePath.mk location.stdout.trimAscii.toString / libraryName

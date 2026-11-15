@@ -8,7 +8,7 @@ Lean 4 libraries for TCP, HTTP/1.0, HTTP/1.1, HTTP/2, and WebSocket servers. The
 
 ## Install
 
-Use the Lean version in [`lean-toolchain`](lean-toolchain). Install a C compiler, `pkg-config`, zlib, and Brotli development libraries (`zlib`, `libbrotlienc`, `libbrotlicommon`). On Linux, also install `libgmp-dev`, `libuv1-dev`, and `libssl-dev`, and set `export LEAN_CC=cc` before running Lake. Windows builds need MinGW GCC and matching import libraries. In a consumer `lakefile.lean`:
+Use the Lean version in [`lean-toolchain`](lean-toolchain). Install a C compiler, `pkg-config`, zlib, and Brotli development libraries (`zlib`, `libbrotlienc`, `libbrotlicommon`). On Linux, set `export LEAN_CC=cc` and install GMP, libuv, and OpenSSL development libraries (`libgmp-dev`, `libuv1-dev`, `libssl-dev` on Debian/Ubuntu). Windows builds need MinGW GCC and matching import libraries. In a consumer `lakefile.lean`:
 
 ```lean
 require «lean-net» from git "https://github.com/isavita/lean-net" @ "v0.1.1"

@@ -46,12 +46,10 @@ package «lean-net» where
   -- arguments only apply to this package's own executables and shared libraries.
   moreLinkObjs := if System.Platform.isWindows then
       #[`@/«lean-net-zlib», `@/«lean-net-brotli-encoder», `@/«lean-net-brotli-common», `@/«lean-net-winsock»]
-    else if System.Platform.isOSX then #[]
-    else #[`@/«lean-net-brotli-encoder», `@/«lean-net-brotli-common», `@/«lean-net-realtime»]
+    else #[]
   moreLinkLibs := if System.Platform.isWindows then #[]
-    else if System.Platform.isOSX then
+    else
       #[`@/«lean-net-zlib-shared», `@/«lean-net-brotli-encoder-shared», `@/«lean-net-brotli-common-shared»]
-    else #[`@/«lean-net-zlib-shared»]
   moreLinkArgs := run_io do
     let output ← IO.Process.output { cmd := "pkg-config", args := #["--libs", "zlib", "libbrotlienc", "libbrotlicommon"] }
     if output.exitCode != 0 then throw <| IO.userError "zlib and Brotli development libraries are required"
@@ -76,13 +74,12 @@ package «lean-net» where
       unless ← candidate.pathExists do
         throw <| IO.userError "Select an installed zlib with PKG_CONFIG_PATH; on macOS use Homebrew zlib's lib/pkgconfig directory"
       return flags.map (fun flag => if flag == "-lz" then candidate.toString else flag) ++ #["-pthread"]
-    -- pkg-config omits system -L flags; Lean's bundled linker does not know
-    -- the distribution's multiarch directories. Static Brotli also avoids
-    -- importing the host shared library's newer versioned libm requirements.
+    -- Select the pkg-config libraries explicitly without adding a system
+    -- directory to the linker's global search path.
     let mut libraries := #["-pthread"]
     for (packageName, libraryName) in #[
-        ("zlib", "libz.so"), ("libbrotlienc", "libbrotlienc.a"),
-        ("libbrotlicommon", "libbrotlicommon.a")] do
+        ("zlib", "libz.so"), ("libbrotlienc", "libbrotlienc.so"),
+        ("libbrotlicommon", "libbrotlicommon.so")] do
       let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", packageName] }
       if location.exitCode != 0 then throw <| IO.userError s!"cannot locate {packageName} library"
       let path := System.FilePath.mk location.stdout.trimAscii.toString / libraryName
@@ -95,10 +92,10 @@ target «lean-net-zlib» _pkg : System.FilePath := do
   inputBinFile (← codecLibraryPath "zlib" "libz.dll.a" "libz.dylib" "libz.so")
 
 target «lean-net-brotli-encoder» _pkg : System.FilePath := do
-  inputBinFile (← codecLibraryPath "libbrotlienc" "libbrotlienc.dll.a" "libbrotlienc.dylib" "libbrotlienc.a")
+  inputBinFile (← codecLibraryPath "libbrotlienc" "libbrotlienc.dll.a" "libbrotlienc.dylib" "libbrotlienc.so")
 
 target «lean-net-brotli-common» _pkg : System.FilePath := do
-  inputBinFile (← codecLibraryPath "libbrotlicommon" "libbrotlicommon.dll.a" "libbrotlicommon.dylib" "libbrotlicommon.a")
+  inputBinFile (← codecLibraryPath "libbrotlicommon" "libbrotlicommon.dll.a" "libbrotlicommon.dylib" "libbrotlicommon.so")
 
 target «lean-net-zlib-shared» pkg : Dynlib := do
   let file ← inputBinFile (← codecLibraryPath "zlib" "libz.dll.a" "libz.dylib" "libz.so")
@@ -121,19 +118,16 @@ target «lean-net-zlib-shared» pkg : Dynlib := do
       proc { cmd := "ln", args := #["-sfn", source.toString, (pkg.sharedLibDir / name).toString] }
     return library
 
-target «lean-net-brotli-encoder-shared» _pkg : Dynlib := do
+target «lean-net-brotli-encoder-shared» pkg : Dynlib := do
   let file ← inputBinFile (← codecLibraryPath "libbrotlienc" "libbrotlienc.dll.a" "libbrotlienc.dylib" "libbrotlienc.so")
-  file.mapM fun path => pure { path, name := "brotlienc" }
+  nativeDynlib pkg.sharedLibDir file "brotlienc"
 
-target «lean-net-brotli-common-shared» _pkg : Dynlib := do
+target «lean-net-brotli-common-shared» pkg : Dynlib := do
   let file ← inputBinFile (← codecLibraryPath "libbrotlicommon" "libbrotlicommon.dll.a" "libbrotlicommon.dylib" "libbrotlicommon.so")
-  file.mapM fun path => pure { path, name := "brotlicommon" }
+  nativeDynlib pkg.sharedLibDir file "brotlicommon"
 
 target «lean-net-winsock» _pkg : System.FilePath := do
   inputBinFile (← compilerLibraryPath "libws2_32.a")
-
-target «lean-net-realtime» _pkg : System.FilePath := do
-  inputBinFile (← compilerLibraryPath "librt.a")
 
 @[default_target]
 lean_lib LeanNet
