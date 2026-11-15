@@ -15,7 +15,8 @@ private def acceptorEvent (event : Reactor.Event) : IO Unit := do
       throw (← LeanNet.Errno.error "HTTP acceptor owned descriptor (library bug)" code)
     if (flags &&& 1) != 0 && (← Reactor.isRecoverableAcceptError code) then return
     throw (← LeanNet.Errno.error "HTTP acceptor" code)
-  | .accepted _ | .written .. | .eof _ | .timer .. | .wireEOF _ | .wireTimer .. =>
+  | .accepted _ | .connected _ | .written .. | .eof _ | .timer .. |
+    .wireEOF _ | .wireTimer .. | .connectTimer .. =>
     throw (IO.userError "HTTP acceptor unexpectedly owns a protocol connection")
 
 private partial def acceptorLoop (reactor : Reactor.Reactor) (group : Reactor.Group) : IO Unit := do
@@ -77,14 +78,14 @@ private def runMembers (reactors : Array Reactor.Reactor) (partitions : Array Na
   if let some error := ← first.get then throw error
 
 private def withPartitionReactors (partitions : Array Nat) (native : Reactor.Config)
-    (listenerSlots : Nat) (use : Array Reactor.Reactor → IO Unit) : IO Unit :=
+    (listenerSlots outboundSlots : Nat) (use : Array Reactor.Reactor → IO Unit) : IO Unit :=
   go 0 partitions.size #[]
 where
   go (index remaining : Nat) (reactors : Array Reactor.Reactor) : IO Unit :=
     match remaining with
     | 0 => use reactors
     | n + 1 => do
-      let capacity := partitions[index]! + listenerSlots
+      let capacity := partitions[index]! + listenerSlots + outboundSlots
       -- Match the supported native connection bounds before UInt32 conversion.
       if capacity == 0 || capacity > 1000000 then
         throw (IO.userError "HTTP worker native connection capacity must be between 1 and 1000000")
@@ -111,12 +112,14 @@ def workerCount (workers maxClients : Nat) : IO Nat := do
     on each dedicated owner and every task joins before resources close. -/
 def withWorkerPool (host : String) (port : UInt16) (workers maxClients : Nat)
     (native : Reactor.Config)
-    (run : Nat → Nat → Reactor.Reactor → Reactor.Group → IO Unit) : IO Unit := do
+    (run : Nat → Nat → Reactor.Reactor → Reactor.Group → IO Unit)
+    (outboundSlotsPerWorker : Nat := 0) : IO Unit := do
   let count ← workerCount workers maxClients
   let partitions := (Array.range count).map fun index =>
     maxClients / count + if index < maxClients % count then 1 else 0
   let handoff := count > 1 && (System.Platform.isWindows || System.Platform.isOSX)
-  Reactor.withEndpoint port <| withPartitionReactors partitions native (if handoff then 0 else 1) fun reactors => do
+  Reactor.withEndpoint port <| withPartitionReactors partitions native
+      (if handoff then 0 else 1) outboundSlotsPerWorker fun reactors => do
     if handoff then
       let sourceConfig : Reactor.Config := {
         maxConnections := 4, maxEvents := 64, maxWrites := 1,

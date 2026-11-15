@@ -60,10 +60,11 @@ enum rn_socket_state {
   RN_LISTENING,
   RN_ACCEPTING,
   RN_DISPATCH_PENDING,
+  RN_CONNECTING,
   RN_CONNECTED,
   RN_CLOSING
 };
-enum rn_operation_kind { RN_OP_ACCEPT, RN_OP_READ, RN_OP_WRITE, RN_OP_FILE };
+enum rn_operation_kind { RN_OP_ACCEPT, RN_OP_READ, RN_OP_WRITE, RN_OP_FILE, RN_OP_CONNECT };
 typedef struct rn_operation {
   OVERLAPPED overlapped; /* Must be first: completion pointer casts here. */
   uint32_t kind, connection, listener, buffer, write;
@@ -79,11 +80,12 @@ typedef struct rn_connection {
   uint8_t transport_mode;
   uint32_t dispatch_pending, dispatch_listener;
   LPFN_ACCEPTEX accept_ex;
+  LPFN_CONNECTEX connect_ex;
   LPFN_TRANSMITFILE transmit_file;
   uint32_t paused_position;
   int paused;
   int read_paused, read_disabled, accept_paused, eof, draining;
-  rn_operation read, accept;
+  rn_operation read, accept, connect;
 } rn_connection;
 typedef struct rn_buffer {
   lean_object *bytes;
@@ -880,6 +882,32 @@ static void rn_completed(rn_reactor *r, rn_operation *op, DWORD bytes,
     }
     rn_finalize_connection(r, op->listener);
     rn_post_accept(r, op->listener);
+  } else if (op->kind == RN_OP_CONNECT) {
+    if (c->state == RN_CLOSING) {
+      rn_finalize_connection(r, index);
+      return;
+    }
+    if (!error) {
+      int pending = 0, pending_size = sizeof(pending);
+      if (getsockopt(c->socket, SOL_SOCKET, SO_ERROR, (char *)&pending,
+                     &pending_size) == SOCKET_ERROR)
+        error = rn_error(WSAGetLastError());
+      else if (pending_size != sizeof(pending)) error = EIO;
+      else if (pending) error = rn_error((DWORD)pending);
+    }
+    if (!error && setsockopt(c->socket, SOL_SOCKET,
+                             SO_UPDATE_CONNECT_CONTEXT, NULL, 0) == SOCKET_ERROR) {
+      error = rn_error(WSAGetLastError());
+      rn_emit(r, RN_ERROR, token, 0, 0, -error, RN_SETUP_ERROR, 0, 0);
+      rn_close_native(r, index);
+    } else if (error) {
+      rn_emit(r, RN_ERROR, token, 0, 0, -error, 0, 0, 0);
+      rn_close_native(r, index);
+    } else {
+      c->state = RN_CONNECTED;
+      rn_emit(r, RN_CONNECT_COMPLETE, token, 0, 0, 0, 0, 0, 0);
+      rn_post_read(r, index);
+    }
   } else if (op->kind == RN_OP_READ) {
     rn_buffer *b = &r->buffers[op->buffer];
     --b->io_refs;
@@ -995,7 +1023,8 @@ static void rn_expire(rn_reactor *r, uint64_t now) {
         rn_timer_remove(r, i);
         if (c->state != RN_UNUSED && c->state != RN_CLOSING)
           rn_emit(r, RN_TIMER, rn_token(ci, c->generation), kind, 0,
-                  (int64_t)deadline, 0, 0, 0);
+                  (int64_t)deadline,
+                  c->state == RN_CONNECTING ? RN_CONNECTING_TIMER : 0, 0, 0);
       }
       i = next;
     }
@@ -1106,6 +1135,67 @@ int rn_socket_new(rn_reactor *r, uint64_t *out) {
   if (i == RN_NONE)
     return -ENOBUFS;
   *out = rn_token(i, r->connections[i].generation);
+  return 0;
+}
+int rn_connect(rn_reactor *r, uint64_t token, const uint8_t *address,
+               uint32_t address_length, uint16_t port) {
+  if (!r || !address || (address_length != 4 && address_length != 16) || !port)
+    return -EINVAL;
+  rn_connection *c = rn_connection_get(r, token);
+  if (!c || c->state != RN_FRESH) return -EINVAL;
+  struct sockaddr_storage remote, local;
+  memset(&remote, 0, sizeof(remote)); memset(&local, 0, sizeof(local));
+  int length, family;
+  if (address_length == 4) {
+    struct sockaddr_in *to = (struct sockaddr_in *)&remote;
+    struct sockaddr_in *from = (struct sockaddr_in *)&local;
+    family = AF_INET; length = (int)sizeof(*to);
+    to->sin_family = from->sin_family = AF_INET;
+    to->sin_port = htons(port);
+    memcpy(&to->sin_addr, address, 4);
+  } else {
+    struct sockaddr_in6 *to = (struct sockaddr_in6 *)&remote;
+    struct sockaddr_in6 *from = (struct sockaddr_in6 *)&local;
+    family = AF_INET6; length = (int)sizeof(*to);
+    to->sin6_family = from->sin6_family = AF_INET6;
+    to->sin6_port = htons(port);
+    memcpy(&to->sin6_addr, address, 16);
+  }
+  SOCKET socket = WSASocketW(family, SOCK_STREAM, IPPROTO_TCP, NULL, 0,
+                             WSA_FLAG_OVERLAPPED);
+  if (socket == INVALID_SOCKET) return -rn_error(WSAGetLastError());
+  int error = 0, one = 1;
+  if (bind(socket, (struct sockaddr *)&local, length) == SOCKET_ERROR ||
+      setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, (const char *)&one,
+                 sizeof(one)) == SOCKET_ERROR)
+    error = rn_error(WSAGetLastError());
+  GUID guid = WSAID_CONNECTEX; DWORD written = 0;
+  if (!error && WSAIoctl(socket, SIO_GET_EXTENSION_FUNCTION_POINTER,
+                         &guid, sizeof(guid), &c->connect_ex,
+                         sizeof(c->connect_ex), &written, NULL, NULL) == SOCKET_ERROR)
+    error = rn_error(WSAGetLastError());
+  if (!error && !CreateIoCompletionPort((HANDLE)socket, r->port, 0, 0))
+    error = rn_error(GetLastError());
+  if (error) {
+    int closed = closesocket(socket) == SOCKET_ERROR ? rn_error(WSAGetLastError()) : 0;
+    return -(closed ? closed : error);
+  }
+  c->socket = socket; c->state = RN_CONNECTING;
+  rn_operation *op = &c->connect;
+  memset(op, 0, sizeof(*op));
+  op->kind = RN_OP_CONNECT; op->connection = rn_index(token); op->pending = 1;
+  ++c->pending; ++r->outstanding;
+  DWORD sent = 0;
+  BOOL connected = c->connect_ex(socket, (struct sockaddr *)&remote, length,
+                                 NULL, 0, &sent, &op->overlapped);
+  if (!connected && WSAGetLastError() != ERROR_IO_PENDING) {
+    error = rn_error(WSAGetLastError());
+    op->pending = 0; --c->pending; --r->outstanding;
+    c->socket = INVALID_SOCKET; c->state = RN_FRESH;
+    int closed = closesocket(socket) == SOCKET_ERROR ? rn_error(WSAGetLastError()) : 0;
+    return -(closed ? closed : error);
+  }
+  r->started = 1;
   return 0;
 }
 int rn_bind(rn_reactor *r, uint64_t token, const char *host, uint16_t port,
@@ -1256,7 +1346,7 @@ int rn_step(rn_reactor *r, int timeout_ms) {
     rn_event event = r->queued[r->queue_head];
     r->queue_head = (r->queue_head + 1) % r->queue_capacity;
     --r->queue_count;
-    if (event.kind == RN_ACCEPTED || event.kind == RN_READ ||
+    if (event.kind == RN_ACCEPTED || event.kind == RN_CONNECT_COMPLETE || event.kind == RN_READ ||
         event.kind == RN_EOF || event.kind == RN_TIMER) {
       rn_connection *connection = rn_connection_get(r, event.connection);
       if (!connection || connection->state == RN_CLOSING) {

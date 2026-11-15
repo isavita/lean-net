@@ -24,7 +24,8 @@ private def hdr (name value : String) : HTTP1.Header := { name, value := value.t
 
 private def head (authority : String) (method target : String) (extra : Array HTTP1.Header := #[])
     (kind : Admission.Kind := .request) : Admission.Head :=
-  { protocol := .http11, method, target := target.toUTF8, authority := authority.toUTF8, headers := #[hdr "host" authority] ++ extra, kind }
+  { protocol := .http11, method, target := target.toUTF8, authority := authority.toUTF8,
+    headers := #[hdr "host" authority] ++ extra, bodyless := kind == .upgrade, kind }
 
 private def plain := Transport.Facts.forTesting false (peer := ByteArray.mk #[10, 2, 3, 4])
 private def tls (sni : String) := Transport.Facts.forTesting true (sni := some sni.toUTF8) (peer := ByteArray.mk #[10, 2, 3, 4])
@@ -79,6 +80,32 @@ private def parsing : IO Unit := do
   compileError "host a.com { route GET /x -> nothing }" "unknown action"
   compileError "host a.com {\n route GET /x -> app {\n" "unterminated"
   compileError "backend b { https 1.2.3.4:443 ; verify bad_name ; serves a.com }" "verify name"
+  compileError "backend b { https secure.example:443 ; http 1.2.3.4:80 ; verify secure.example ; serves a.com }"
+    "TLS verify requires HTTPS targets only"
+  let ipv6 ← policyOf
+    "backend v6 { https [::1]:443 ; verify ::1 ; serves a.com }\nhost a.com { route GET / -> proxy v6 }"
+  check (ipv6.backends[0]!.targets[0]!.host == "::1" && ipv6.backends[0]!.verify == some "::1")
+    "bracketed IPv6 backend and IP identity"
+  compileError "backend b { https [::1:443 ; serves a.com }" "[IPv6]:port"
+  compileError "backend b { https [not-an-ip]:443 ; serves a.com }" "[IPv6]:port"
+  compileError "limits { target-bytes 0 }\nhost a.com { route GET /x -> app }" "target-bytes"
+  compileError "ratelimit huge 4294967296/s burst 1 by global\nhost a.com { route GET /x -> app }"
+    "native 32-bit range"
+  compileError "ratelimit huge 1/4294967296ms burst 1 by global\nhost a.com { route GET /x -> app }"
+    "native 32-bit range"
+  compileError "ratelimit huge 1/s burst 4294967296 by global\nhost a.com { route GET /x -> app }"
+    "native 32-bit range"
+  let excessRates : Spec := { rates := Array.replicate 1025 { name := "r", tokens := 1, periodMs := 1000, burst := 1 } }
+  match Policy.compile excessRates with
+  | .error e => check ((toString e).contains "too many rate limits") "rate count bound"
+  | .ok _ => throw (IO.userError "too many rate limits accepted")
+  let invalidRate : RateSpec :=
+    { name := "bad", tokens := 1, periodMs := 1000, burst := 1,
+      key := .header "X-Client-Id" }
+  let invalidRateHeader : Spec := { rates := #[invalidRate] }
+  match Policy.compile invalidRateHeader with
+  | .error e => check ((toString e).contains "invalid key header name") "noncanonical rate key header"
+  | .ok _ => throw (IO.userError "noncanonical rate key header accepted")
   -- Same methods on different patterns, and disjoint methods on one pattern, are fine.
   let _ ← policyOf "host a.com { route GET /x/:id -> app\n route POST /x/:other -> app }"
   -- The compile-time literal is a plain Spec.
@@ -127,8 +154,15 @@ private def paths : IO Unit := do
   for target in ["/admin", "/admin/x", "/%61dmin/x", "/%41DMIN"] do
     let expected := if target == "/%41DMIN" then 404 else 403
     check (statusOf (api "GET" target) == expected) s!"admin bypass {target}"
-  for target in ["/a/../admin", "/./admin", "/admin%2Fx", "/a//b", "/x\\y", "/bad%0Z"] do
+  for target in ["/a/../admin", "/./admin", "/admin%2Fx", "/admin;v=1",
+      "/admin%3Bv=1", "/a//b", "/x\\y", "/bad%0Z"] do
     check (reasonOf (api "GET" target) == some .badPath) s!"ambiguous path {target}"
+  for target in ["/profile/me?x=\r", "/profile/me?x=%0D", "/profile/me?x=%00",
+      "/profile/me?x=%", "/profile/me?x=bad\\value"] do
+    check (reasonOf (api "GET" target) == some .badPath) s!"unsafe query {target}"
+  let shortTarget ← policyOf "limits { target-bytes 8 }\nhost short.example.com { tls sni off ; fallback app }"
+  check (reasonOf (admitHead shortTarget plain (head "short.example.com" "GET" "/x?123456")) == some .badPath)
+    "target byte bound includes query"
   check (reasonOf (api "GET" "http://other.com/x") == some .badPath) "absolute-form refused"
   check (reasonOf (api "GET" "/a/b/c/d/e/f/g/h/i") == some .badPath) "path depth bound"
   -- /static/* covers the prefix itself and everything below.
@@ -144,10 +178,32 @@ private def paths : IO Unit := do
   | .ok _ => throw (IO.userError "redirect route admitted")
   -- WebSocket routes need an upgrade; tunnels need a websocket route.
   check (statusOf (api "GET" "/ws") == 426) "websocket route without upgrade"
-  check ((admitHead policy (tls "api.example.com") (head "api.example.com" "GET" "/ws" #[] .upgrade)).toBool) "websocket upgrade"
+  let wsHeaders := #[hdr "connection" "Upgrade", hdr "upgrade" "WebSocket"]
+  check ((admitHead policy (tls "api.example.com") (head "api.example.com" "GET" "/ws" wsHeaders .upgrade)).toBool) "websocket upgrade"
+  check (statusOf (admitHead policy (tls "api.example.com")
+    (head "api.example.com" "GET" "/ws" #[hdr "connection" "Upgrade", hdr "upgrade" "h2c"] .upgrade)) == 426)
+    "h2c cannot satisfy websocket route"
+  check (statusOf (admitHead policy (tls "api.example.com")
+    (head "api.example.com" "GET" "/ws" #[hdr "upgrade" "websocket"] .upgrade)) == 426)
+    "websocket route requires Connection upgrade"
+  let wsTunnel : Admission.Head :=
+    { protocol := .http2, method := "CONNECT", target := "/ws".toUTF8,
+      authority := "api.example.com".toUTF8, scheme := some "https".toUTF8,
+      requestedProtocol := some "websocket".toUTF8, headers := #[hdr "host" "api.example.com"], kind := .tunnel }
+  check ((admitHead policy (tls "api.example.com") wsTunnel).toBool) "websocket tunnel"
+  check (statusOf (admitHead policy (tls "api.example.com")
+    { wsTunnel with requestedProtocol := some "other".toUTF8 }) == 426)
+    "other tunnel protocol cannot satisfy websocket route"
   check (statusOf (admitHead policy (tls "api.example.com") (head "api.example.com" "CONNECT" "/profile/me" #[] .tunnel)) == 404) "tunnel off a websocket route"
   -- Fallback serves unmatched paths on hosts without routes.
   check ((admitHead policy plain (head "plain.example.com" "POST" "/deep/path")).toBool) "fallback"
+  let fallbackWs ← policyOf "host ws.example.com { tls sni off ; fallback websocket }"
+  check (statusOf (admitHead fallbackWs plain (head "ws.example.com" "GET" "/anything")) == 426)
+    "websocket fallback requires upgrade"
+  check ((admitHead fallbackWs plain (head "ws.example.com" "GET" "/anything" wsHeaders .upgrade)).toBool)
+    "websocket fallback accepts websocket upgrade"
+  check (statusOf (admitHead policy plain (head "plain.example.com" "CONNECT" "/anything" #[] .tunnel)) == 404)
+    "app fallback cannot admit tunnel"
 
 private def rules : IO Unit := do
   let policy ← policyOf policyText
@@ -166,6 +222,28 @@ private def rules : IO Unit := do
   check (reasonOf (api denied "GET" "/internal" #[]) == some .ipDenied) "denied subnet"
   let outside := Transport.Facts.forTesting true (sni := some "api.example.com".toUTF8) (peer := ByteArray.mk #[192, 168, 0, 1])
   check (reasonOf (api outside "GET" "/internal" #[]) == some .ipDenied) "outside allow list"
+  -- A route allowlist narrows the host allowlist; it cannot widen it.
+  let nested ← policyOf "host access.example.com {
+    tls sni off ; allow 10.0.0.0/8
+    route GET /narrow -> app { allow 10.2.0.0/16 }
+    route GET /wide -> app { allow 0.0.0.0/0 }
+  }"
+  let nestedHead := head "access.example.com" "GET"
+  let admitPeer := fun peer path => admitHead nested (Transport.Facts.forTesting false (peer := peer)) (nestedHead path)
+  check ((admitPeer (ByteArray.mk #[10, 2, 3, 4]) "/narrow").toBool) "peer in both allowlists"
+  check (reasonOf (admitPeer (ByteArray.mk #[10, 3, 3, 4]) "/narrow") == some .ipDenied)
+    "route allowlist narrows host allowlist"
+  check ((admitPeer (ByteArray.mk #[10, 3, 3, 4]) "/wide").toBool) "host peer remains allowed"
+  check (reasonOf (admitPeer (ByteArray.mk #[192, 168, 1, 1]) "/wide") == some .ipDenied)
+    "route allowlist cannot bypass host allowlist"
+  -- Values outside Content-Type are exact bytes, including case and semicolons.
+  let enumerated ← policyOf "host values.example.com {
+    tls sni off ; route GET / -> app { headers { one-of x-role admin } }
+  }"
+  let value := fun text => admitHead enumerated plain (head "values.example.com" "GET" "/" #[hdr "x-role" text])
+  check ((value "admin").toBool) "exact enumerated value"
+  check (reasonOf (value "admin;delegate") == some .unsupportedValue) "semicolon does not bypass enum"
+  check (reasonOf (value "ADMIN") == some .unsupportedValue) "case does not bypass enum"
   -- Header-level safety (CRLF injection, names, counts, bytes).
   check (reasonOf (api facts "GET" "/profile/1" #[hdr "x-a" "1\r\nX-Injected: yes"]) == some .badHeader) "CRLF value"
   check (reasonOf (api facts "GET" "/profile/1" #[hdr "x a" "1"]) == some .badHeader) "invalid name"
@@ -207,7 +285,7 @@ private def runtime : IO Unit := do
   let decide := fun target extra => hook.decide facts (head "api.example.com" "GET" target extra)
   for _ in [:2] do
     match ← decide "/profile/7" #[] with
-    | .accept _ (some handler) _ _ =>
+    | .accept _ (some handler) _ _ _ _ =>
       let reply ← handler { method := "GET", target := "/profile/7".toUTF8, headers := #[], body := .empty }
       check (reply.response.body == "7".toUTF8) "forwarder receives the admitted request"
     | _ => throw (IO.userError "rate-limited route rejected early")
@@ -215,10 +293,35 @@ private def runtime : IO Unit := do
   | .reject r => check (r.status == 429 && r.headers.any (fun h => h.name == "retry-after" && h.value == "2".toUTF8)) "429 Retry-After"
   | .accept .. => throw (IO.userError "limit not enforced")
   match ← decide "/keyed" #[hdr "x-api-key" "k", hdr "x-debug" "1"] with
-  | .accept _ none (some rewrite) _ =>
+  | .accept _ none (some rewrite) _ _ _ =>
     let request := rewrite { method := "GET", target := "/keyed".toUTF8, headers := #[hdr "x-debug" "1", hdr "x-api-key" "k"], body := .empty }
     check (!request.headers.any (·.name == "x-debug") && request.headers.any (·.name == "x-api-key")) "strip rewrite"
   | _ => throw (IO.userError "strip rewrite missing")
+  -- A trailer arrives after the gate's header checks and rate-key decision.
+  -- Reject it before an app or proxy receives a completed request.
+  let unrestricted : Limiter := { acquire := fun _ _ _ _ _ => pure 0 }
+  let trailerRejections ← IO.mkRef (0 : Nat)
+  let trailerApp := { app with onReject := fun rejection _ => do
+    if rejection.reason == .invalidTrailer then trailerRejections.modify (· + 1) }
+  let trailerFactory ← match LeanNet.Gate.factory
+      { config with app := trailerApp, limiter := some unrestricted } with
+    | .ok value => pure value | .error error => throw (IO.userError (toString error))
+  let trailerHook ← trailerFactory 0
+  for target in #["/keyed", "/profile/7"] do
+    let fields := if target == "/keyed" then #[hdr "x-api-key" "k"] else #[]
+    match ← trailerHook.decide facts (head "api.example.com" "GET" target fields) with
+    | .accept _ _ _ _ _ (some validate) =>
+      let request : HTTP1.Request :=
+        { method := "GET", target := target.toUTF8, headers := fields,
+          body := .empty, trailers := #[hdr "x-internal-role" "admin"] }
+      match ← validate request with
+      | .error rejection =>
+        check (rejection.status == 400 && rejection.label == "invalid_trailer")
+          "post-body trailer rejection"
+      | .ok _ => throw (IO.userError "trailer reached gated handler")
+      check ((← validate { request with trailers := #[] }).isOk) "trailer-free request rejected"
+    | _ => throw (IO.userError "gate post-body validator missing")
+  check ((← trailerRejections.get) == 2) "post-body rejections were not observed"
   match ← hook.decide facts (head "api.example.com" "PUT" "/profile/1/avatar" #[hdr "content-type" "image/png"]) with
   | .accept bodyLimit .. => check (bodyLimit == some (5 * 1048576)) "route body bound"
   | .reject _ => throw (IO.userError "avatar rejected")
@@ -227,6 +330,90 @@ private def runtime : IO Unit := do
     | .ok p => pure p | .error e => throw (IO.userError (toString e))
   check ((admitHead only plain (head "only.example.com" "POST" "/any/path")).toBool) "hostsOnly admits its host"
   check (reasonOf (admitHead only plain (head "evil.example.com" "GET" "/")) == some .unknownHost) "hostsOnly refuses others"
+  let canonicalSpec ← match Spec.parse
+      "host canonical.example.com { tls sni off ; route GET /admin -> app admin }" with
+    | .ok parsed => pure parsed | .error e => throw (IO.userError (toString e))
+  let canonicalApp : App := { handlers := #[("admin", echo)] }
+  let canonicalConfig : Config := { spec := canonicalSpec, app := canonicalApp }
+  let canonicalFactory ← match LeanNet.Gate.factory canonicalConfig with
+    | .ok value => pure value | .error e => throw (IO.userError (toString e))
+  let canonicalHook ← canonicalFactory 0
+  match ← canonicalHook.decide plain (head "canonical.example.com" "GET" "/%61dmin?x=1") with
+  | .accept _ _ (some rewrite) _ _ _ =>
+    let request := rewrite { method := "GET", target := "/%61dmin?x=1".toUTF8, headers := #[], body := .empty }
+    check (request.target == "/admin?x=1".toUTF8) "handler receives canonical path and query"
+  | _ => throw (IO.userError "canonical path rewrite missing")
+  let unavailableSpec ← match Spec.parse
+      "ratelimit edge 1/s burst 1 by global\nhost limited.example.com { tls sni off ; route GET / -> app { limit edge } }" with
+    | .ok parsed => pure parsed | .error e => throw (IO.userError (toString e))
+  let unavailable : Limiter := { acquire := fun _ _ _ _ _ => pure (UInt32.ofNat 4294967295) }
+  let unavailableFactory ← match LeanNet.Gate.factory ({ spec := unavailableSpec, limiter := some unavailable } : Config) with
+    | .ok value => pure value | .error e => throw (IO.userError (toString e))
+  let unavailableHook ← unavailableFactory 0
+  match ← unavailableHook.decide plain (head "limited.example.com" "GET" "/") with
+  | .reject rejection =>
+    check (rejection.status == 503 && rejection.label == "limiter_unavailable")
+      "native limiter failure rejects with 503"
+  | .accept .. => throw (IO.userError "native limiter failure admitted")
+  let principalSpec ← match Spec.parse
+      "ratelimit people 1/s burst 1 by principal\nhost identity.example.com { tls sni off ; route GET / -> app { limit people } }" with
+    | .ok parsed => pure parsed | .error e => throw (IO.userError (toString e))
+  let observed ← IO.mkRef (#[] : Array ByteArray)
+  let capture : Limiter := { acquire := fun _ _ _ key _ => do
+    observed.modify (·.push key)
+    return 0 }
+  let principalFactory ← match LeanNet.Gate.factory
+      ({ spec := principalSpec, limiter := some capture } : Config) with
+    | .ok value => pure value | .error e => throw (IO.userError (toString e))
+  let principalHook ← principalFactory 0
+  let identityHead := head "identity.example.com" "GET" "/"
+  let identityFacts := fun (certificate : Option HTTP1.ClientCertificate) =>
+    Transport.Facts.forTesting true (principal := certificate)
+  match ← principalHook.decide (identityFacts none) identityHead with
+  | .reject rejection =>
+    check (rejection.status == 403 && rejection.label == "client_cert_required")
+      "principal keyed rate requires verified identity"
+  | .accept .. => throw (IO.userError "unauthenticated principal keyed request admitted")
+  let certificates : Array HTTP1.ClientCertificate := #[
+    { subject := "CN=alice", subjectAltNames := #["DNS:shared.test", "URI:spiffe://team/alice"] },
+    { subject := "CN=alice", subjectAltNames := #["URI:spiffe://team/alice", "DNS:shared.test"] },
+    { subject := "CN=alice", subjectAltNames := #["DNS:shared.test", "URI:spiffe://team/bob"] },
+    { subject := "CN=bob", subjectAltNames := #["DNS:shared.test", "URI:spiffe://team/alice"] }]
+  for certificate in certificates do
+    match ← principalHook.decide (identityFacts (some certificate)) identityHead with
+    | .accept .. => pure ()
+    | .reject _ => throw (IO.userError "verified principal rate request rejected")
+  let keys ← observed.get
+  check (keys.size == 4) "unauthenticated request never touched principal limiter"
+  check (keys[0]! == keys[1]!) "principal key is independent of SAN order"
+  check (keys[0]! != keys[2]!) "principal key includes every SAN"
+  check (keys[0]! != keys[3]!) "principal key includes subject"
+  let headerSpec ← match Spec.parse
+      "ratelimit clients 1/s burst 1 by header x-client-id\nhost headers.example.com { tls sni off ; route GET / -> app { limit clients } }" with
+    | .ok parsed => pure parsed | .error e => throw (IO.userError (toString e))
+  let headerKeys ← IO.mkRef (#[] : Array ByteArray)
+  let headerLimiter : Limiter := { acquire := fun _ _ _ key _ => do
+    headerKeys.modify (·.push key)
+    return 0 }
+  let headerFactory ← match LeanNet.Gate.factory
+      ({ spec := headerSpec, limiter := some headerLimiter } : Config) with
+    | .ok value => pure value | .error e => throw (IO.userError (toString e))
+  let headerHook ← headerFactory 0
+  let headerHead := fun fields => head "headers.example.com" "GET" "/" fields
+  match ← headerHook.decide plain (headerHead #[]) with
+  | .reject rejection =>
+    check (rejection.status == 400 && rejection.label == "missing_header")
+      "missing rate key header rejected"
+  | .accept .. => throw (IO.userError "missing rate key header admitted")
+  match ← headerHook.decide plain (headerHead #[hdr "x-client-id" "same", hdr "x-client-id" "same"]) with
+  | .reject rejection =>
+    check (rejection.status == 400 && rejection.label == "duplicate_header")
+      "duplicate rate key header rejected"
+  | .accept .. => throw (IO.userError "duplicate rate key header admitted")
+  match ← headerHook.decide plain (headerHead #[hdr "x-client-id" "alice"]) with
+  | .accept .. => pure ()
+  | .reject _ => throw (IO.userError "single rate key header rejected")
+  check ((← headerKeys.get) == #["alice".toUTF8]) "ambiguous rate key reached limiter"
 
 private def cidrs : IO Unit := do
   let some v6 := Cidr.parse "2001:db8::/32" | throw (IO.userError "IPv6 CIDR")

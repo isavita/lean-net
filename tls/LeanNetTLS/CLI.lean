@@ -18,11 +18,13 @@ def serve (options : LeanNet.HTTP.CLI.Options) (certificate privateKey : String)
     requireClientCert := options.requireClientCert
     ocspResponse := options.ocspResponse.map (·.toString) }
   options.withGate http fun http => do
+  let upstreamCA := options.upstreamCA.map (·.toString)
   if let some root := options.staticRoot then
     let bytes := options.staticMemoryMiB * 1024 * 1024
     ReactorServer.serveStaticRoot root tls
       { builder := { maxFileBytes := bytes, maxPackBytes := bytes }, residentBytes := bytes }
-      http host port
-  else ReactorServer.serveFactory (fun _ => pure (LeanNet.HTTP2.demoHandlersWith http.websocketOrigin)) tls http host port
+      http host port upstreamCA
+  else
+    ReactorServer.serveFactory (fun _ => pure (LeanNet.HTTP2.demoHandlersWith http.websocketOrigin)) tls http host port upstreamCA
 
 end LeanNetTLS.CLI

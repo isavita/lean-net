@@ -259,6 +259,41 @@ def Response.encodeFor (response : Response) (context : EncodeContext)
       response.body, "\r\n".toUTF8, chunkEnd options.trailers], framing, next }
   return { parts := if response.body.isEmpty then #[head] else #[head, response.body], framing, next }
 
+/-- A final response head whose body will arrive in bounded pieces. The caller
+must enforce the declared length (if any) and send a final chunk for chunked
+framing. The response metadata has no body; body bytes never enter this encoder. -/
+structure EncodedStreamHead where
+  head : ByteArray
+  framing : BodyFraming
+  next : ResponseNext
+
+def Response.encodeStreamHeadFor (response : Response) (context : EncodeContext)
+    (framing : BodyFraming) (declaredTrailers : Array String := #[])
+    (forceClose : Bool := false) : Except String EncodedStreamHead := do
+  if !response.body.isEmpty then throw "stream response metadata must not contain a body"
+  if response.status < 200 || response.status > 599 || response.status == 204 ||
+      response.status == 205 || response.status == 304 then
+    throw "this response cannot start a streamed body"
+  if context.requestMethod == "HEAD" then throw "HEAD must use a bodyless response"
+  if context.requestMethod == "CONNECT" && response.status < 300 then
+    throw "successful CONNECT requires an explicit tunnel handoff"
+  match framing with
+  | .none => throw "streamed response requires body framing"
+  | .contentLength length =>
+    if length > 18446744073709551615 then throw "stream Content-Length exceeds wire range"
+    if !declaredTrailers.isEmpty then throw "trailers require chunked framing"
+  | .chunked =>
+    if context.version != .http11 then throw "HTTP/1.0 does not support chunked responses"
+  | .closeDelimited =>
+    if !declaredTrailers.isEmpty then throw "trailers require chunked framing"
+  let fields ← responseFields response context
+  let reason ← responseReason response {}
+  let declared := declaredTrailers.map fun name => ({ name, value := ByteArray.empty } : Header)
+  let names ← trailerFields { trailers := declared } context
+  let next := ResponseNext.nextRequest (if forceClose then .close else
+    connAction context.version context.requestHeaders framing)
+  return { head := responseHead response context fields reason framing next names, framing, next }
+
 /-- A file response carries only headers and immutable source metadata. The
     region is absent for HEAD and empty files, while framing retains GET length. -/
 structure EncodedFileResponse where

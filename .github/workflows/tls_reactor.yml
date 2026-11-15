@@ -84,7 +84,7 @@ jobs:
       - name: Build public TLS APIs and native fixtures
         run: |
           lake build lean-net-http1 lean-net-platform-info lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-observability-fixture lean-net-process-metrics-test lean-net-deferred-transport-fixture lean-net-keepalive-transport-fixture
-          lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture lean-net-tls-static-fixture lean-net-tls-reload-fixture lean-net-tls-worker-lifetime-test lean-net-tls-admission-fixture
+          lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture lean-net-tls-static-fixture lean-net-tls-reload-fixture lean-net-tls-worker-lifetime-test lean-net-tls-admission-fixture lean-net-tls-gateway-test
       - name: Public CLI queue configuration
         run: lake env lean --run test/HTTPCLIOptionsTest.lean
       - name: WebSocket HTTP/1 and HTTP/2 wire acceptance
@@ -105,6 +105,10 @@ jobs:
         env:
           LEAN_NET_TLS_CYCLES: '1000'
         run: lake env ${{ matrix.python }} tls/test/test_tls_reactor.py -v
+      - name: Verified upstream TLS client and gateway forwarding
+        run: |
+          lake env ${{ matrix.python }} tls/test/test_tls_gateway.py -v
+          lake env ${{ matrix.python }} tls/test/test_tls_gateway_e2e.py -v
       - name: Production TLS policy (mTLS, OCSP, ciphers, curl matrix)
         run: lake env ${{ matrix.python }} tls/test/test_tls_production.py -v
       - name: HTTP/2 frame isolation, priorities, push and TLS acceptance

@@ -60,6 +60,11 @@ def State.new (config : Connection.Config := {}) : State :=
 def State.canRespond (state : State) (id : UInt32) : Bool :=
   !state.closing && state.connection.canRespond id
 
+/-- Whether a just-admitted head still owns an exchange. Includes uploads
+    awaiting a body, unlike `canRespond`; excludes immediate 413/417 replies. -/
+def State.hasAdmittedStream (state : State) (id : UInt32) : Bool :=
+  !state.closing && state.connection.hasAdmittedStream id
+
 def State.canPush (state : State) : Bool := !state.closing && state.connection.canPush
 
 def State.canDrain (state : State) : Bool := !state.closing && state.connection.canDrain
@@ -79,6 +84,28 @@ def State.setDate (state : State) (date : ByteArray) : State :=
 private def writes (parts : Array ByteArray) : List Action :=
   let parts := parts.filter (fun bytes => !bytes.isEmpty)
   if parts.isEmpty then [] else [.write parts]
+
+/-- Native lifecycle cancellation must not depend on output observation.
+    Each encoded byte part contains whole HTTP/2 frames, possibly a
+    WINDOW_UPDATE or HEADERS before a local RST. Walk frame headers and skip
+    payloads without copying them; file payloads use a different action path. -/
+private def localResetActions (parts : Array ByteArray)
+    (reason : HTTP.ResponseAbortReason) : List Action := Id.run do
+  let mut ids : Array UInt32 := #[]
+  for bytes in parts do
+    let mut cursor := 0
+    for _ in [:bytes.size / 9 + 1] do
+      if cursor + 9 > bytes.size then break
+      let length := bytes[cursor]!.toNat * 65536 +
+        bytes[cursor + 1]!.toNat * 256 + bytes[cursor + 2]!.toNat
+      if length > bytes.size - cursor - 9 then break
+      if bytes[cursor + 3]! == 3 && length == 4 then
+        let id := UInt32.ofNat ((bytes[cursor + 5]!.toNat * 16777216 +
+          bytes[cursor + 6]!.toNat * 65536 + bytes[cursor + 7]!.toNat * 256 +
+          bytes[cursor + 8]!.toNat) % 2147483648)
+        if !ids.contains id then ids := ids.push id
+      cursor := cursor + 9 + length
+  return ids.toList.map (fun id => .responseAborted id reason)
 
 private def State.clearKeepalive (state : State) : State :=
   if state.ping.isNone && state.nextPingAt.isNone then state
@@ -199,7 +226,8 @@ private def progress (state : State) (connection : Connection)
 
 private def outputStep (state : State) (connection : Connection) (output : Array ByteArray)
     (status : Nat := 0) (reason : HTTP.ResponseAbortReason := .error) : Step :=
-  if !state.config.trackOutput then progress state connection output
+  if !state.config.trackOutput then
+    progress state connection output #[] 0 (some (writes output ++ localResetActions output reason))
   else match observedParts state.connection connection (output.map WirePart.bytes) status reason with
     | .ok actions => progress state connection output #[] 0 (some actions)
     | .error error => fatal state error
@@ -211,13 +239,14 @@ private def connectionStep (state : State) (result : Connection.Step)
     result.heads.toList.filterMap (fun event => event.gateHead.map (Action.headReady event.streamId · event.startedAt)) ++
     result.tunnelData.toList.map Action.tunnelData ++
     result.tunnelResets.toList.map Action.tunnelReset
-  let mut actions := writes result.output
+  let peerAbortActions := result.peerResets.toList.map (fun id => Action.responseAborted id .cancelled)
+  let mut actions := writes result.output ++ localResetActions result.output reason ++ peerAbortActions
   if state.config.trackOutput then
     match observedParts state.connection result.connection (result.output.map WirePart.bytes) 100 reason with
     | .error error => return fatal state error
     | .ok output =>
       actions := result.started.toList.map (fun event => .requestStarted event.streamId event.head event.startedAt) ++
-        output ++ result.peerResets.toList.map (fun id => .responseAborted id .cancelled)
+        output ++ peerAbortActions
   -- feedSlice/finish already include the fatal GOAWAY, preserving prior control
   -- output. Closing here must not manufacture a duplicate GOAWAY.
   if result.error.isSome then
@@ -226,7 +255,7 @@ private def connectionStep (state : State) (result : Connection.Step)
       consumed := result.consumed
       actions := actions ++ tunnelActions ++ [.drainClose] }
   let step := progress state result.connection result.output result.requests result.consumed
-    (if state.config.trackOutput then some actions else none)
+    (some actions)
   return { step with actions := step.actions ++ tunnelActions }
 
 /-- Admit a stream paused by `Config.headGate`, optionally with a tighter body
@@ -369,6 +398,39 @@ def State.respond (state : State) (id : UInt32) (reply : HTTP1.Reply)
       | .ok (connection, wire) => return outputStep state connection #[wire]
       | .error failure => return fatal state failure
 
+/-- Commit response HEADERS without retaining the body. A bodyless status or
+HEAD request is finished by the HEADERS frame. Errors are returned to the
+gateway so it can reset only this stream before any bytes are committed. -/
+def State.beginResponseStream (state : State) (id : UInt32) (response : HTTP1.Response) :
+    Except ProtocolError Step := do
+  if !state.canRespond id then
+    throw ⟨.protocolError, .stream id, "streaming response is not expected"⟩
+  let (connection, headers) ← state.connection.beginResponseStream id response
+  return outputStep state connection #[headers] response.status
+
+/-- Emit one flow-controlled DATA frame and report the accepted prefix. `none`
+does not change the machine; the gateway must hold its bounded pending chunk. -/
+def State.tryStreamData (state : State) (id : UInt32) (bytes : ByteArray) :
+    Except ProtocolError (Option (Nat × Step)) := do
+  if state.closing then throw ⟨.streamClosed, .stream id, "connection is closing"⟩
+  match ← state.connection.tryStreamData id bytes with
+  | none => return none
+  | some (connection, output, consumed) =>
+    return some (consumed, outputStep state connection #[output])
+
+/-- Terminate a streamed response with END_STREAM or validated trailers. -/
+def State.endResponseStream (state : State) (id : UInt32)
+    (trailers : Array HTTP1.Header := #[]) : Except ProtocolError Step := do
+  if state.closing then throw ⟨.streamClosed, .stream id, "connection is closing"⟩
+  let (connection, output) ← state.connection.endResponseStream id trailers
+  return outputStep state connection #[output]
+
+/-- An upstream failure after response HEADERS resets only this stream. -/
+def State.abortResponseStream (state : State) (id : UInt32) : Step :=
+  match state.connection.cancel id .internalError with
+  | .ok (connection, bytes) => outputStep state connection #[bytes] 0 .error
+  | .error error => fatal state error
+
 def State.fail (state : State) (error : ProtocolError) : Step :=
   if state.closing then { state } else fatal state error
 
@@ -429,8 +491,7 @@ def State.pingTimer (state : State) (now : Nat) : Step := Id.run do
   if let some ping := state.ping then
     if ping.deadline.any (· <= now) then
       let result := fatal state ⟨.protocolError, .connection, "HTTP/2 PING acknowledgement timed out"⟩
-      let aborted := if state.config.trackOutput then
-        state.connection.activeRequestIds.toList.map (fun id => Action.responseAborted id .timeout) else []
+      let aborted := state.connection.activeRequestIds.toList.map (fun id => Action.responseAborted id .timeout)
       return { result with actions := aborted ++ result.actions }
     return { state }
   if !state.nextPingAt.any (· <= now) then return { state }

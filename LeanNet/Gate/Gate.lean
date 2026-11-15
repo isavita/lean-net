@@ -1,4 +1,5 @@
 import LeanNet.Gate.Policy
+import LeanNet.Gateway.Wire
 
 /-! Runtime gate: binds a compiled policy to application handlers, named
     checks, a rate limiter and an optional upstream forwarder, and turns it
@@ -26,7 +27,8 @@ structure Limiter where
 structure App where
   handlers : Array (String × Handler) := #[]
   checks : Array (String × Check) := #[]
-  /-- Required when any route uses `-> proxy`; see `LeanNet.Gateway`. -/
+  /-- Optional application override for `-> proxy`; the native gateway handles
+      such routes when no override is registered. -/
   forwarder : Option Handler := none
   /-- Observe every rejection (metrics, logging). Must not block. -/
   onReject : Rejection → Admission.Head → IO Unit := fun _ _ => pure ()
@@ -57,8 +59,7 @@ def Config.validate (config : Config) : Except ConfigError Policy := do
     match action with
     | .app (some name) =>
       if !config.app.handlers.any (·.1 == name) then throw ⟨line, s!"no handler registered for 'app {name}'"⟩
-    | .proxy _ =>
-      if config.app.forwarder.isNone then throw ⟨line, "'proxy' routes need App.forwarder (LeanNet.Gateway)"⟩
+    | .proxy _ => pure ()
     | _ => pure ()
   for (line, name) in checkNames config.spec do
     if !config.app.checks.any (·.1 == name) then throw ⟨line, s!"no check registered for 'check {name}'"⟩
@@ -71,18 +72,40 @@ private def u32Bytes (n : Nat) : ByteArray :=
 
 /-- Key bytes for a keyed rule; never derived from headers unless the rule
     explicitly says so (`by header NAME`). -/
+private def principalKey (identity : HTTP1.ClientCertificate) : ByteArray := Id.run do
+  let subject := identity.subject.toUTF8
+  let sans := identity.subjectAltNames.qsort (fun a b => decide (a < b))
+  let mut key := (u32Bytes subject.size).append subject
+  key := key.append (u32Bytes sans.size)
+  for san in sans do
+    let value := san.toUTF8
+    key := (key.append (u32Bytes value.size)).append value
+  return key
+
 private def rateKey (rate : RateSpec) (a : Admitted) : ByteArray :=
   match rate.key with
   | .global | .route => ByteArray.empty
   | .clientIp => a.facts.peer
   | .principal => match a.facts.principal with
-    | some identity => (identity.subjectAltNames[0]?.getD identity.subject).toUTF8
+    | some identity => principalKey identity
     | none => ByteArray.empty
   | .header name => ((a.head.headers.find? (·.name == name)).map (·.value)).getD ByteArray.empty
 
-private def stripper (names : Array String) : Option (HTTP1.Request → HTTP1.Request) :=
-  if names.isEmpty then none
-  else some fun request => { request with headers := request.headers.filter (fun h => !names.contains h.name) }
+private def canonicalTarget (path : NormalPath) : ByteArray :=
+  if path.query.isEmpty then path.path
+  else (path.path.append "?".toUTF8).append path.query
+
+/-- Route matching, application logic, and upstream forwarding must observe
+    the same canonical path. In particular, a route for `/admin` must not hand
+    `/%61dmin` to a backend that interprets escapes differently. -/
+private def rewriter (a : Admitted) : Option (HTTP1.Request → HTTP1.Request) :=
+  let target := canonicalTarget a.path
+  let names := a.rules.headers.strip
+  if target == a.head.target && names.isEmpty then none
+  else some fun request => Id.run do
+    let headers := if names.isEmpty then request.headers
+      else request.headers.filter (fun h => !names.contains h.name)
+    return { request with target := target, headers := headers }
 
 private def retryAfter (ms : UInt32) : HTTP1.Header :=
   { name := "retry-after", value := (toString ((ms.toNat + 999) / 1000)).toUTF8 }
@@ -101,18 +124,50 @@ def decide (config : Config) (policy : Policy) (worker : Nat) (facts : Transport
       let now ← config.clock
       for rule in a.rules.limits do
         if let some rate := policy.rates[rule]? then
+          if rate.key == .principal && a.facts.principal.isNone then
+            return .error (.make .clientCertRequired 403)
+          if let .header name := rate.key then
+            let count := a.head.headers.foldl
+              (fun found header => if header.name == name then found + 1 else found) 0
+            if count == 0 then return .error (.make .missingHeader 400)
+            if count != 1 then return .error (.make .duplicateHeader 400)
           let scope := if rate.key == .route then (a.routeId?.getD 0) + 1 else 0
           let delay ← limiter.acquire worker.toUInt32 rule.toUInt32 scope.toUInt32 (rateKey rate a) now
+          if delay == UInt32.ofNat 4294967295 then
+            return .error (.make .limiterUnavailable 503)
           if delay != 0 then return .error (.make .rateLimited 429 #[retryAfter delay])
   let dispatch : Option (HTTP1.Request → IO HTTP1.Reply) := match a.action? with
     | some (.app (some name)) => (config.app.handlers.find? (·.1 == name)).map fun (_, handler) => handler a
     | some (.proxy _ _) => config.app.forwarder.map (· a)
     | _ => none
+  let proxy : Option Admission.ProxyPlan :=
+    if config.app.forwarder.isSome then none
+    else match a.backend? with
+      | none => none
+      | some index =>
+        let backend := a.policy.backends[index]
+        some {
+          targets := backend.targets.map fun target =>
+            { host := target.host, port := target.port,
+              tls := target.scheme == .https,
+              verifyName := backend.verify.getD target.host }
+          serialize := fun request =>
+            match Gateway.encodeRequest a request with
+            | .ok wire => .ok wire
+            | .error error => .error s!"{repr error}" }
   let label := match a.selection with
     | .route r => (a.policy.hosts[a.host]).routes[r].pattern
     | .fallback => "fallback"
     | .internal => "internal"
-  return .ok (.accept a.rules.body dispatch (stripper a.rules.headers.strip) (some label))
+  -- Trailers arrive after head checks, including named checks and rate-key
+  -- selection. Refuse them before dispatch and observe the typed rejection.
+  let postBody : HTTP1.Request → IO (Except Admission.Rejection HTTP1.Request) :=
+    fun request => do
+      if request.trailers.isEmpty then return .ok request
+      let rejection := Rejection.make .invalidTrailer 400
+      config.app.onReject rejection head
+      return .error rejection.toAdmission
+  return .ok (.accept a.rules.body dispatch (rewriter a) (some label) proxy (some postBody))
 
 /-- The per-worker admission factory. Each worker compiles its own copy of
     the policy on its own thread (no cross-core reference counting). -/

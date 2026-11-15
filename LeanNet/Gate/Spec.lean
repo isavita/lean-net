@@ -4,9 +4,10 @@ import LeanNet.Gate.Core
 
 ```
 # comments start with '#'; statements end at a newline or ';'
-limits { headers 64 ; header-bytes 16KiB ; path-depth 16 }
+limits { headers 64 ; header-bytes 16KiB ; target-bytes 16KiB ; path-depth 16 }
 ratelimit edge 2000/s burst 400 by client-ip      # by: route | client-ip | principal | header NAME | global
 backend profiles { http 10.0.0.5:8080 10.0.0.6:8080 ; serves api.example.com }
+backend loopback { https [::1]:8443 ; verify ::1 ; serves local.example.com }
 host api.example.com, *.api.example.com {
   tls sni strict                                    # or: tls sni off
   allow 10.0.0.0/8 ; deny 10.9.0.0/16
@@ -26,9 +27,9 @@ on unknown-host 421                                 # or: close
 
 Paths: literal segments, `:name` (one segment, captured) and a final `*`
 (the prefix itself and everything below it). `app` without a name is the
-server's own handlers. Host items are inherited by every route: `body`,
-`timeout` are overridden by the route; `limit`, `check`, `allow`, `deny`,
-`mtls` and `headers` accumulate. -/
+server's own handlers. Host items are inherited by every route: `body` and
+`timeout` are overridden by the route; both host and route `allow` lists must
+match when present; `limit`, `check`, `deny`, `mtls` and `headers` accumulate. -/
 
 namespace LeanNet.Gate
 
@@ -128,6 +129,7 @@ inductive UnknownHost where
 structure LimitsSpec where
   maxHeaders : Nat := 100
   maxHeaderBytes : Nat := 16384
+  maxTargetBytes : Nat := 16384
   maxPathDepth : Nat := 32
   deriving Repr, Inhabited
 
@@ -442,10 +444,19 @@ private def rateDecl : PM RateSpec := do
   return spec
 
 private def target (scheme : Scheme) (text : String) : PM Target := do
-  let parts := text.splitOn ":"
-  let (host, portText) ← match parts with
-    | [host, port] => pure (host, port)
-    | _ => fail s!"backend target '{text}' must be host:port"
+  let (host, portText) ←
+    if text.startsWith "[" then
+      match text.splitOn "]" with
+      | [bracketed, suffix] =>
+        let host := (bracketed.drop 1).toString
+        if !suffix.startsWith ":" || (parseAddress host).map (·.size) != some 16 then
+          fail s!"backend target '{text}' must be [IPv6]:port"
+        pure (host, (suffix.drop 1).toString)
+      | _ => fail s!"backend target '{text}' must be [IPv6]:port"
+    else
+      match text.splitOn ":" with
+      | [host, port] => pure (host, port)
+      | _ => fail s!"backend target '{text}' must be host:port"
   let some port := portText.toNat? | fail s!"invalid port in '{text}'"
   if port == 0 || port > 65535 || host.isEmpty then fail s!"invalid backend target '{text}'"
   return { scheme, host, port := port.toUInt16 }
@@ -482,6 +493,7 @@ private partial def limitsBlock (limits : LimitsSpec) : PM LimitsSpec := do
       let some n := text.toNat? | fail s!"invalid count '{text}'"
       limits := { limits with maxHeaders := n }
     | "header-bytes" => limits := { limits with maxHeaderBytes := ← size }
+    | "target-bytes" => limits := { limits with maxTargetBytes := ← size }
     | "path-depth" =>
       let text ← word "a depth"
       let some n := text.toNat? | fail s!"invalid depth '{text}'"

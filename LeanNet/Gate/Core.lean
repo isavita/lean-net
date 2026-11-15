@@ -216,38 +216,60 @@ private def unreserved (c : UInt8) : Bool :=
 
 private def upperHex (n : UInt8) : UInt8 := if n < 10 then 48 + n else 55 + n
 
+/-- Conservative request-target bytes accepted by both supported parsers.
+    Escapes are checked separately below; raw controls, fragments and
+    backslashes never enter an admitted target. -/
+private def uriByte (c : UInt8) : Bool :=
+  (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) ||
+    #[33, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 58, 59, 61, 63, 64, 95, 126].contains c.toNat
+
 inductive PathError where
-  | notOriginForm | dotSegment | emptySegment | encodedSeparator | badEscape | tooDeep
+  | notOriginForm | dotSegment | emptySegment | encodedSeparator | badEscape | badByte | tooDeep | tooLong
   deriving BEq, Repr
 
 /-- Normalised origin-form path, split from its query. Unreserved escapes are
     decoded and other escapes upper-cased, so `/%61dmin` and `/admin` are one
     path. Encoded `/`, `\` or NUL, raw `\`, `.`/`..` segments and empty inner
-    segments are rejected. The router, the application and an upstream all
-    see this same normalised path. -/
+    segments and semicolon path parameters are rejected. The router, the
+    application and an upstream all see this same normalised path. -/
 structure NormalPath where
   path : ByteArray
   query : ByteArray
   segments : Array ByteArray
   deriving Inhabited
 
-def normalizePath (target : ByteArray) (maxDepth : Nat := 32) : Except PathError NormalPath := do
+def normalizePath (target : ByteArray) (maxDepth : Nat := 32)
+    (maxTargetBytes : Nat := 16384) : Except PathError NormalPath := do
   if target.isEmpty || target[0]! != 47 then throw .notOriginForm
+  if target.size > maxTargetBytes then throw .tooLong
+  if !target.data.all uriByte then throw .badByte
   let stop := (target.data.findIdx? (· == 63)).getD target.size
   let query := if stop < target.size then target.extract (stop + 1) target.size else ByteArray.empty
+  let mut q := 0
+  while q < query.size do
+    if query[q]! == 37 then
+      if q + 2 >= query.size then throw .badEscape
+      let some high := hexValue query[q + 1]! | throw .badEscape
+      let some low := hexValue query[q + 2]! | throw .badEscape
+      let decoded := high * 16 + low
+      if decoded < 32 || decoded == 127 then throw .badByte
+      q := q + 3
+    else q := q + 1
   -- Common case: no escapes or backslashes, so the path is one slice.
-  let plain := !target.data.any (fun c => c == 37 || c == 92) 0 stop
+  let plain := !target.data.any (fun c => c == 37 || c == 92 || c == 59) 0 stop
   let mut path := if plain then target.extract 0 stop else ByteArray.empty
   let mut i := if plain then stop else 0
   while i < stop do
     let c := target[i]!
-    if c == 92 then throw .encodedSeparator
+    if c == 92 || c == 59 then throw .encodedSeparator
     if c == 37 then
       if i + 2 >= stop then throw .badEscape
       let some high := hexValue target[i + 1]! | throw .badEscape
       let some low := hexValue target[i + 2]! | throw .badEscape
       let decoded := high * 16 + low
-      if decoded == 47 || decoded == 92 || decoded == 0 then throw .encodedSeparator
+      if decoded == 47 || decoded == 92 || decoded == 59 || decoded == 0 then
+        throw .encodedSeparator
+      if decoded < 32 || decoded == 127 then throw .badByte
       if unreserved decoded then path := path.push decoded
       else path := ((path.push 37).push (upperHex high)).push (upperHex low)
       i := i + 3

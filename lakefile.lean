@@ -75,6 +75,18 @@ lean_exe «lean-net-admission-fixture» where
 lean_exe «lean-net-gate-fixture» where
   root := `test.GateFixture
 
+lean_exe «lean-net-gateway-pool-test» where
+  root := `test.GatewayPoolTest
+
+lean_exe «lean-net-gateway-engine-test» where
+  root := `test.GatewayEngineTest
+
+lean_exe «lean-net-gateway-h2-streaming-test» where
+  root := `test.GatewayH2StreamingTest
+
+lean_exe «lean-net-gateway-h1-streaming-test» where
+  root := `test.GatewayH1StreamingTest
+
 lean_exe «lean-net-event-ffi-test» where
   root := `test.EventFFITest
 
@@ -142,6 +154,7 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   let header ← inputTextFile (pkg.dir / "c" / "socket_shim.h")
   let reactorHeader ← inputTextFile (pkg.dir / "c" / "reactor.h")
   let ffiHeader ← inputTextFile (pkg.dir / "c" / "reactor_ffi.h")
+  let gatewayResolve ← inputTextFile (pkg.dir / "c" / "gateway_resolve.h")
   let bridgeHeader ← inputTextFile (pkg.dir / "c" / "reactor_lean.h")
   let transportImpl ← inputTextFile (pkg.dir / "c" / "reactor_transport_impl.h")
   let fileHeader ← inputTextFile (pkg.dir / "c" / "reactor_file.h")
@@ -157,6 +170,7 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   src := src.zipWith (fun source _ => source) header
   src := src.zipWith (fun source _ => source) reactorHeader
   src := src.zipWith (fun source _ => source) ffiHeader
+  src := src.zipWith (fun source _ => source) gatewayResolve
   src := src.zipWith (fun source _ => source) bridgeHeader
   src := src.zipWith (fun source _ => source) fileHeader
   src := src.zipWith (fun source _ => source) groupHeader

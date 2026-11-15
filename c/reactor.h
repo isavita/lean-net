@@ -18,10 +18,11 @@ typedef struct rn_config {
 } rn_config;
 
 enum rn_event_kind { RN_ACCEPTED=1, RN_READ=2, RN_WRITTEN=3, RN_EOF=4,
-    RN_TIMER=5, RN_CLOSED=6, RN_ERROR=7, RN_WAKE=8 };
+    RN_TIMER=5, RN_CLOSED=6, RN_ERROR=7, RN_WAKE=8, RN_CONNECT_COMPLETE=9 };
 #define RN_TIMER_KINDS 8u
 
-enum rn_event_flags { RN_ACCEPT_ERROR=1, RN_SETUP_ERROR=2, RN_CLOSE_ERROR=4, RN_CIPHERTEXT=8 };
+enum rn_event_flags { RN_ACCEPT_ERROR=1, RN_SETUP_ERROR=2, RN_CLOSE_ERROR=4,
+    RN_CIPHERTEXT=8, RN_CONNECTING_TIMER=16 };
 /* WRITTEN is a historical completion: its connection identity can already be
  * closed, and successful writes precede CLOSED even within the same batch. */
 typedef struct rn_event {
@@ -49,6 +50,14 @@ int rn_free(rn_reactor *reactor);
 int rn_set_accept_targets(rn_reactor *acceptor, rn_reactor *const *workers,
                           uint32_t count, uint32_t queue_capacity);
 int rn_socket_new(rn_reactor *reactor, uint64_t *out_token);
+/* Start an owner-thread, nonblocking outbound connect on a fresh slot. The
+ * address is exactly 4 IPv4 or 16 IPv6 network-order bytes, and port is
+ * nonzero. DNS resolution belongs outside the reactor loop. On success the
+ * socket remains reactor-owned and emits RN_CONNECT_COMPLETE after SO_ERROR succeeds;
+ * failure emits RN_ERROR then RN_CLOSED. A synchronous error leaves the slot
+ * fresh with no OS socket; the caller must close that slot. */
+int rn_connect(rn_reactor *reactor, uint64_t token, const uint8_t *address,
+               uint32_t address_length, uint16_t port);
 int rn_bind(rn_reactor *reactor, uint64_t token, const char *host, uint16_t port,
             int reuse_port);
 int rn_start_listening(rn_reactor *reactor, uint64_t token, int backlog);

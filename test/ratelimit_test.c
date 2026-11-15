@@ -73,9 +73,14 @@ int main(void) {
         if (ln_rl_acquire(rate, worker, 0, 0, NULL, 0, now) == 0) ++admitted;
   REQUIRE(admitted <= 2000 + 100 + 1);
   REQUIRE(admitted >= 1800);
+  uint64_t counted = 0;
+  for (uint32_t worker = 0; worker < 4; ++worker)
+    counted += atomic_load(&rate->counters[worker].allowed) + atomic_load(&rate->counters[worker].limited);
+  REQUIRE(counted == 4u * 2001u * 5u);
   ln_rl_free(rate);
 
-  /* Eviction: many keys in a tiny table never over-admit a returning key. */
+  /* Key churn must not evict an active key and reset its quota. A returning
+   * victim remains denied, while a full probe set fails closed for new keys. */
   ln_rl *tiny = NULL;
   const uint32_t one[1][5] = {{1, 60000, 1, LN_RL_KEYED, 1}};
   REQUIRE(ln_rl_create(one, 1, 1, 8, RANDOM, 0, &tiny) == 0);
@@ -86,14 +91,54 @@ int main(void) {
     snprintf(name, sizeof(name), "k%d", i);
     (void)ln_rl_acquire(tiny, 0, 0, 0, (const uint8_t *)name, strlen(name), 1);
   }
+  REQUIRE(ln_rl_acquire(tiny, 0, 0, 0, (const uint8_t *)"victim", 6, 1) != 0);
+  REQUIRE(ln_rl_acquire(tiny, 0, 0, 0, (const uint8_t *)"new-key", 7, 1) != 0);
+  REQUIRE(ln_rl_acquire(tiny, 0, 0, 0, (const uint8_t *)"victim", 6, 60000) == 0);
+  REQUIRE(ln_rl_acquire(tiny, 0, 0, 0, (const uint8_t *)"victim", 6, 60000) != 0);
   ln_rl_free(tiny);
+
+  /* Long mTLS/header keys remain distinct past the old 256-byte cutoff.
+   * Oversized identities fail closed instead of silently sharing a prefix. */
+  ln_rl *extended = NULL;
+  REQUIRE(ln_rl_create(one, 1, 1, 1024, RANDOM, 0, &extended) == 0);
+  uint8_t key_a[300], key_b[300];
+  memset(key_a, 'x', sizeof(key_a));
+  memset(key_b, 'x', sizeof(key_b));
+  key_a[sizeof(key_a) - 1] = 'a';
+  key_b[sizeof(key_b) - 1] = 'b';
+  REQUIRE(ln_rl_acquire(extended, 0, 0, 0, key_a, sizeof(key_a), 0) == 0);
+  REQUIRE(ln_rl_acquire(extended, 0, 0, 0, key_a, sizeof(key_a), 0) != 0);
+  REQUIRE(ln_rl_acquire(extended, 0, 0, 0, key_b, sizeof(key_b), 0) == 0);
+  uint8_t *oversized_key = calloc(LN_RL_MAX_KEY_BYTES + 1u, 1);
+  REQUIRE(oversized_key != NULL);
+  REQUIRE(ln_rl_acquire(extended, 0, 0, 0, oversized_key, LN_RL_MAX_KEY_BYTES + 1u, 0) == 0xFFFFFFFFu);
+  free(oversized_key);
+  ln_rl_free(extended);
+
+  /* Packed keyed timestamps never wrap into a fresh budget. Recreate the
+   * limiter before the horizon; this instance fails closed instead. */
+  ln_rl *horizon = NULL;
+  const uint32_t quick[1][5] = {{1, 1, 1, LN_RL_KEYED, 1}};
+  REQUIRE(ln_rl_create(quick, 1, 1, 8, RANDOM, 0, &horizon) == 0);
+  REQUIRE(ln_rl_acquire(horizon, 0, 0, 0, (const uint8_t *)"a", 1,
+                        (LN_RL_TAT_MASK - 9) / 10 + 1) == 0xFFFFFFFFu);
+  ln_rl_free(horizon);
 
   /* Invalid configurations. */
   ln_rl *bad = NULL;
   const uint32_t zero[1][5] = {{0, 1000, 1, LN_RL_GLOBAL, 1}};
+  const uint32_t overflow[1][5] = {{1, UINT32_MAX, UINT32_MAX, LN_RL_GLOBAL, 1}};
+  const uint32_t huge_route[1][5] = {{1, 1000, 1, LN_RL_ROUTE, 65536}};
+  const uint32_t fractional[1][5] = {{3, 1, 3, LN_RL_GLOBAL, 1}};
   REQUIRE(ln_rl_create(zero, 1, 1, 0, RANDOM, 0, &bad) == -EINVAL);
+  REQUIRE(ln_rl_create(overflow, 1, 1, 0, RANDOM, 0, &bad) == -ERANGE);
+  REQUIRE(ln_rl_create(huge_route, 1, 256, 0, RANDOM, 0, &bad) == -EINVAL);
+  REQUIRE(ln_rl_create(fractional, 1, 1, 0, RANDOM, 0, &bad) == 0);
+  REQUIRE(bad->rules[0].interval_ns == 333334); /* never round toward a faster limit */
+  ln_rl_free(bad); bad = NULL;
   REQUIRE(ln_rl_create(specs, 3, 8, 1000, RANDOM, 0, &bad) == -EINVAL); /* not a power of two */
   REQUIRE(ln_rl_create(specs, 3, 8, 0, RANDOM, 0, &bad) == -EINVAL);    /* keyed rule, no table */
+  REQUIRE(ln_rl_acquire(l, 0, 1, 4, NULL, 0, 1000) == 0xFFFFFFFFu); /* invalid route scope */
   ln_rl_free(l);
   puts("rate limiter native tests passed");
   return 0;

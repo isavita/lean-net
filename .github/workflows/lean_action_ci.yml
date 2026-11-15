@@ -16,13 +16,15 @@ jobs:
       - uses: leanprover/lean-action@v1
       - name: Build and test TCP, HTTP/1.1 and h2c
         run: |
-          lake build lean-net-http1-fixture lean-net-http2-fixture lean-net-event-ffi-test lean-net-transport-test lean-net-ffi-live lean-net-pool-lifetime-test
+          lake build lean-net-http1-fixture lean-net-http2-fixture lean-net-event-ffi-test lean-net-transport-test lean-net-ffi-live lean-net-pool-lifetime-test lean-net-gateway-pool-test lean-net-gateway-engine-test lean-net-gateway-h1-streaming-test lean-net-gateway-h2-streaming-test
           lake build
+          lake build LeanNet.Gate.Literal
           lake env lean test/LeanNetTest.lean
           lake env lean --run test/HTTPCLIOptionsTest.lean
           lake env lean --run test/HTTP1Test.lean
           lake env lean --run test/HTTP1HeaderEventTest.lean
           lake env lean --run test/HTTP1ResponseTest.lean
+          lake env lean --run test/HTTP1ClientResponseTest.lean
           lake env lean --run test/HTTP1ParserV2Test.lean
           lake env lean --run test/HTTP1EncodingTest.lean
           lake env lean --run test/HTTP1MachineTest.lean
@@ -46,6 +48,9 @@ jobs:
           lake env lean --run test/HTTP2HeadGateTest.lean
           lake env lean --run test/WebSocketTest.lean
           lake env lean --run test/GateTest.lean
+          lake env lean --run test/GatewayWireTest.lean
+          .lake/build/bin/lean-net-gateway-h1-streaming-test
+          .lake/build/bin/lean-net-gateway-h2-streaming-test
           lake env lean --run test/StaticSelectionTest.lean
           lake env lean --run test/TraceContextTest.lean
           python3 test/test_echo.py -v
@@ -60,10 +65,14 @@ jobs:
           python3 test/test_resilience.py -v
           lake build lean-net-admission-fixture
           python3 test/test_admission.py -v
-          lake build lean-net-gate-fixture LeanNet.Gate.Literal
+          lake build lean-net-gate-fixture
           python3 test/test_gate.py -v
           python3 test/test_ratelimit.py -v
           python3 test/test_gate_cli.py -v
+          python3 test/test_gateway_runtime.py -v
+          python3 test/test_gateway_cli.py -v
+          python3 test/test_reactor_connect.py -v
+          python3 test/test_gateway_resolve.py -v
           python3 test/test_admin.py -v
       - name: Short deterministic protocol fuzz and controller invariants
         run: |
@@ -81,5 +90,7 @@ jobs:
           retention-days: 14
       - name: Build and test TLS package
         run: |
-          lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test
+          lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-gateway-test
           python3 tls/test/test_tls.py -v
+          python3 tls/test/test_tls_gateway.py -v
+          python3 tls/test/test_tls_gateway_e2e.py -v

@@ -1,6 +1,7 @@
 import LeanNet.FFI.Reactor
 import LeanNet.FFI.Errno
 import LeanNet.Reactor.Basic
+import LeanNet.Gateway.Resolve
 
 open LeanNet
 
@@ -169,6 +170,40 @@ private def mustReject (label : String) (action : IO α) : IO Unit := do
   let failed ← try let _ ← action; pure false catch _ => pure true
   check failed label
 
+private def typedConnectInputChecks : IO Unit :=
+  Reactor.withReactor {
+    maxConnections := 2, maxEvents := 4, maxWrites := 2,
+    buffers4k := 1, buffers16k := 0, buffers64k := 0, timerTickMs := 1
+  } fun reactor => do
+    let fresh ← reactor.socket
+    mustReject "typed connect accepted malformed address"
+      (fresh.startConnect (ByteArray.mk #[127, 0, 0]) 8080)
+    check (!(← fresh.id.isLive reactor)) "invalid connect left a live socket"
+    let fresh ← reactor.socket
+    mustReject "typed connect accepted port zero"
+      (fresh.startConnect (ByteArray.mk #[127, 0, 0, 1]) 0)
+    let mut closed := 0
+    for _ in [:4] do
+      if let .completions count ← reactor.poll 0 then
+        for i in [:count] do
+          match ← reactor.event i.toUInt32 with
+          | .closed _ => closed := closed + 1
+          | _ => throw (IO.userError "invalid connect produced unexpected completion")
+    check (closed == 2) "invalid connect did not retire both slots"
+
+private def typedResolverChecks : IO Unit := do
+  let .ok ipv4 ← LeanNet.Gateway.Resolve.resolve "127.0.0.1"
+    | throw (IO.userError "typed IPv4 resolution failed")
+  check (ipv4 == ByteArray.mk #[127, 0, 0, 1]) "typed IPv4 bytes changed"
+  let .ok ipv6 ← LeanNet.Gateway.Resolve.resolve "::1" .preferIPv6
+    | throw (IO.userError "typed IPv6 resolution failed")
+  check (ipv6.size == 16 && ipv6[15]! == 1) "typed IPv6 bytes changed"
+  let .error .invalidHost ← LeanNet.Gateway.Resolve.resolve "example.com:443"
+    | throw (IO.userError "typed resolver accepted host with port")
+  let .ok localhost ← LeanNet.Gateway.Resolve.resolve "localhost" .preferIPv4
+    | throw (IO.userError "typed localhost resolution failed")
+  check (localhost.size == 4 || localhost.size == 16) "typed DNS result invalid"
+
 private def wireMain (port : UInt16) : IO Unit := do
   let held ← IO.mkRef (none : Option Reactor.Waker)
   Reactor.withReactor {
@@ -221,8 +256,11 @@ private def wireMain (port : UInt16) : IO Unit := do
             check (id == ready.id) "cipher EOF identity changed"
             ready.closeAfterWrites
           | .closed _ => closed := true
-          | .timer .. | .wireTimer .. => throw (IO.userError "unexpected wire timer")
+          | .timer .. | .wireTimer .. | .connectTimer .. => throw (IO.userError "unexpected wire timer")
           | .error .. => throw (IO.userError "unexpected wire error")
+          | .connected socket => do
+            let _ ← socket.close (by decide)
+            throw (IO.userError "unexpected outbound connection")
           | .written .. | .wake => pure ()
       if closed then break
     check (closed && received == 5) "wire fixture failed to drain binary input"
@@ -239,5 +277,8 @@ def main (args : List String) : IO Unit := do
     let some number := port.toNat? | throw (IO.userError "invalid port")
     if number == 0 || number > 65535 then throw (IO.userError "invalid port")
     wireMain (UInt16.ofNat number)
-  | [] => coreMain
+  | [] => do
+    coreMain
+    typedConnectInputChecks
+    typedResolverChecks
   | _ => throw (IO.userError "unexpected reactor fixture arguments")

@@ -41,6 +41,8 @@ structure Head where
   authority : ByteArray
   /-- HTTP/2 `:scheme`; `none` for HTTP/1. -/
   scheme : Option ByteArray := none
+  /-- HTTP/2 extended CONNECT `:protocol`; absent for ordinary requests. -/
+  requestedProtocol : Option ByteArray := none
   headers : Array HTTP1.Header
   /-- Declared body length, when framed by Content-Length. -/
   contentLength : Option Nat := none
@@ -70,14 +72,35 @@ def Rejection.reply (rejection : Rejection) : HTTP1.Reply :=
   { response := { status := rejection.status, headers, body := rejection.body },
     options := { forceClose := true } }
 
+/-- A route-bound upstream target. DNS resolution and TLS verification happen
+    in the gateway transport, never inside the head-stage hook. -/
+structure UpstreamTarget where
+  host : String
+  port : UInt16
+  tls : Bool
+  verifyName : String
+  deriving Inhabited
+
+/-- Built only from a gate-admitted proxy route. The serializer closes over
+    that exact admission snapshot, so a later reload cannot substitute a
+    backend or a client-provided Host. -/
+structure ProxyPlan where
+  targets : Array UpstreamTarget
+  serialize : HTTP1.Request → Except String (Array ByteArray)
+
 /-- `dispatch`, when present, replaces `Handlers.onRequest` for this request;
     it typically closes over the admitted, policy-bound request. `rewrite`
-    (e.g. stripping headers) is applied before whichever handler runs. -/
+    (e.g. canonicalizing the path) is applied before whichever handler runs.
+    `proxy`, when present, starts a native outbound transaction after the body
+    is complete. The handler and proxy fields are mutually exclusive. -/
 inductive Verdict where
   | accept (bodyLimit : Option Nat := none) (dispatch : Option (HTTP1.Request → IO HTTP1.Reply) := none)
       (rewrite : Option (HTTP1.Request → HTTP1.Request) := none)
       -- label: matched route pattern for access logs (configuration only).
       (label : Option String := none)
+      (proxy : Option ProxyPlan := none)
+      -- Validate completed body metadata before any local or upstream handler.
+      (postBody : Option (HTTP1.Request → IO (Except Rejection HTTP1.Request)) := none)
   | reject (rejection : Rejection)
 
 /-- Runs synchronously on the worker; must not block. Exceptions are treated

@@ -27,8 +27,11 @@ one `Option` branch per request.
    - rate limits (`429` with `Retry-After`).
 4. Accepted requests carry the route's body bound (`413` while streaming).
    They go to the bound action: an `app NAME` handler, the server's own
-   handlers (`app`), a WebSocket selection, or the upstream `forwarder`.
-   `strip` rules remove headers before any handler sees them.
+   handlers (`app`), a WebSocket selection, or the native upstream gateway.
+   `strip` rules remove headers before any handler sees them. The gate rejects
+   request trailers with a typed 400 after the body and before any handler or
+   backend receives the request; trailer fields cannot bypass head-stage
+   header rules, named checks or rate keys.
 5. Rejections are typed values (`Gate.Rejection`), never exceptions. HTTP/1
    rejections close the connection. HTTP/2 rejections refuse that stream
    only. Bodies are fixed reason labels and never echo request bytes.
@@ -61,8 +64,9 @@ def main : IO Unit := do
 Use `Spec.parse text` for a runtime file, `gate% "…"` to check a policy at
 build time (a malformed policy fails the build), or build a `Spec` directly.
 All three go through `Policy.compile`. `Gate.factory` additionally verifies
-that every `app NAME`, `check NAME`, `proxy` and rate limit the policy uses
-is provided. Each worker compiles its own copy of the policy, so no policy
+that every named application handler, named check and rate limiter the policy
+uses is provided. `proxy` uses the native gateway unless an application
+registers a custom forwarder. Each worker compiles its own copy, so no policy
 object is shared across cores. `Spec.hostsOnly #["api.example.com"]` is the
 smallest useful gate: a strict host allowlist in front of the existing
 handlers.
@@ -76,6 +80,13 @@ Both public executables accept `--gate POLICY`:
 tls/.lake/build/bin/lean-net-tls chain.pem key.pem --metrics --gate ./gate.policy 8443
 ```
 
+For HTTPS backends, the TLS executable verifies the upstream certificate
+chain and the backend's configured `verify` name (or its target host). It uses
+OpenSSL's configured default trust roots unless `--upstream-ca roots.pem` is
+supplied with `--gate`. The option replaces those roots with the given PEM
+bundle; an unreadable or invalid bundle stops startup. A backend with `verify`
+must contain only HTTPS targets.
+
 - **Startup.** The policy is validated at startup; an invalid file stops the
   server.
 - **Reload.** `SIGHUP` re-reads and atomically publishes it. On the TLS
@@ -85,8 +96,9 @@ tls/.lake/build/bin/lean-net-tls chain.pem key.pem --metrics --gate ./gate.polic
   private copy. In-flight requests keep their snapshot. Changing `ratelimit`
   lines requires a restart.
 - **Actions.** CLI policies can use `app` (the server's handlers or static
-  files), `deny`, `redirect` and `websocket`. Named handlers (`app NAME`),
-  named checks and `proxy` need a library program that registers them.
+  files), `deny`, `redirect`, `websocket`, and the built-in HTTP/1.1 `proxy`.
+  Named handlers (`app NAME`) and named checks need a library program that
+  registers them.
 - **Metrics.** Gate counters appear on `/metrics` and on the admin port:
   - `lean_net_gate_policy_generation`
   - `lean_net_gate_reloads_total{result}`
@@ -99,7 +111,31 @@ tls/.lake/build/bin/lean-net-tls chain.pem key.pem --metrics --gate ./gate.polic
 
 The library equivalent is `Gate.withLive config workers fun live => …`, then
 set `admission := some live.factory`, `onReload := live.reloadFile path` and
-`extraMetrics := live.metrics`.
+`extraMetrics := live.metrics`. Set `gateway := some {}` to enable the native
+upstream engine with its default limits. The TLS package installs a verified
+upstream TLS provider per worker; a plain core server fails closed on HTTPS
+targets.
+
+### Gateway transport
+
+Accepted HTTP/1.1 and HTTP/2 requests are serialized as HTTP/1.1 to the
+configuration-owned backend target. DNS resolution runs outside the reactor
+loop, TCP connects are nonblocking, and each reactor owns its connection
+pool. The pool includes the resolved address, port and TLS verification
+identity in its key. It reuses a connection only after a complete, reusable
+response, completed request writes, no unread parser bytes and a live socket.
+For TLS it also requires an empty OpenSSL input/output buffer and retains the
+claimed TLS session with the idle socket. Unsolicited idle reads close that
+connection. Response bodies are forwarded in bounded slices; upstream reads
+pause while downstream output is backpressured. The default upstream response
+body limit is 16 MiB; the wire limit is 32 MiB. Configure these and
+pool/timeout bounds through
+`Gateway.Config` in library programs.
+
+The gateway forwards HTTP requests and responses. It does not tunnel
+WebSocket upgrades or CONNECT to backends; WebSocket routes invoke the local
+server handler. `--upstream-ca` applies only to outbound HTTPS and is separate
+from `--client-ca`, which verifies inbound mTLS clients.
 
 ### Overhead
 
@@ -128,10 +164,11 @@ What keeps the overhead low:
 
 ```
 # comments start with '#'; statements end at a newline or ';'
-limits { headers 64 ; header-bytes 16KiB ; path-depth 16 }
+limits { headers 64 ; header-bytes 16KiB ; target-bytes 16KiB ; path-depth 16 }
 ratelimit edge 2000/s burst 400 by client-ip      # route | global | client-ip | principal | header NAME
 backend profiles { http 10.0.0.5:8080 10.0.0.6:8080 ; serves api.example.com }
 backend tenants  { https tenants.internal:443 ; verify tenants.internal ; serves *.tenant.example.com }
+backend loopback { https [::1]:8443 ; verify ::1 ; serves local.example.com }
 
 host api.example.com, api.example.org {
   tls sni strict                                   # or: tls sni off
@@ -156,6 +193,8 @@ on unknown-host 421                                # or: close (drop silently)
   wildcards (`*.x.com` matches `a.x.com`, not `x.com` or `a.b.x.com`), and
   `_` as a catch-all. Matching is case-insensitive. Host and HTTP/2
   `:authority` must agree.
+- **Backends.** IPv6 literal targets use `[address]:port`; an IPv6 `verify`
+  identity is checked against an `iPAddress` certificate SAN without SNI.
 - **Paths.** A pattern is made of literal segments, `:name` captures (one
   segment) and a final `*`. `/a/*` matches `/a`, `/a/` and everything below.
   Literal segments win over captures, and captures win over `*`, with
@@ -163,12 +202,14 @@ on unknown-host 421                                # or: close (drop silently)
   overlapping methods are compile errors.
 - **Normalisation is strict.** Unreserved escapes are decoded (`/%61dmin` is
   `/admin`). Encoded `/`, `\` or NUL, raw `\`, dot segments and empty inner
-  segments return 400. The router, the application and an upstream all see
+  segments return 400. Raw or escaped semicolons in path segments also return
+  400, preventing upstream matrix parameter handling from changing a gate
+  route decision. The router, the application and an upstream all see
   the same normalised path. A gated server therefore rejects
   absolute-form and `*` targets, and HTTP/1.0 requests without `Host`.
 - **Inheritance.** Host items apply to every route. A route overrides `body`
-  and `timeout`, and adds to `limit`, `check`, `allow`, `deny`, `mtls` and
-  `headers`.
+  and `timeout`, and adds to `limit`, `check`, `deny`, `mtls` and `headers`.
+  When host and route each declare `allow`, both CIDR lists must match.
 - **Actions.** `websocket` routes require an upgrade (426 otherwise).
   HTTP/2 extended CONNECT requires a `websocket` route.
 
@@ -179,8 +220,11 @@ applies it to a host or route. RATE is `N/s`, `N/m`, `N/h` or `N/<duration>`.
 Keys:
 - `route` (the default) gives each route its own bucket;
 - `global` shares one bucket across everything that uses the rule;
-- `client-ip`, `principal` (verified mTLS SAN) and `header NAME` key per
-  client.
+- `client-ip`, `principal` and `header NAME` key per client. `principal`
+  requires a verified mTLS certificate and keys on its subject plus the
+  complete sorted SAN set; requests without a certificate receive 403.
+  `header NAME` requires exactly one occurrence; missing or duplicate fields
+  receive 400 before the limiter is called.
 
 Wrap the workers in `Gate.RateLimiter.withLimiter spec workers` and pass
 `handle.limiter` to `Gate.Config`.
@@ -195,10 +239,12 @@ window-boundary bursts and `Retry-After` is exact.
   lease per lease period.
 - **Keyed rules** use one fixed table of 64-bit words (a 24-bit tag and a
   40-bit TAT in 100 µs units). The table is indexed by SipHash-2-4 under a
-  random per-process key and probed over four slots. A new key evicts the
-  slot with the oldest arrival time. Tag collisions share a budget, which is
-  stricter, never looser. Memory is `keyedSlots × 8` bytes (default 64Ki
-  slots = 512 KiB).
+  random per-process key and probed over four slots. A new key claims only an
+  empty or fully expired slot. When all four candidates have active budgets,
+  the new key receives a retry delay; active budgets are never reset by
+  eviction. Tag collisions share a budget, which is stricter, never looser.
+  The full key is hashed up to a 64 KiB work bound; larger keys fail closed
+  with 503. Memory is `keyedSlots × 8` bytes (default 64Ki slots = 512 KiB).
 - Limits are per process. A fleet-wide quota needs an external coordinator.
 - `test/ratelimit_test.c` checks under AddressSanitizer/UBSan and
   ThreadSanitizer that 8 contending threads never exceed the burst, that
@@ -231,7 +277,7 @@ pass itself still runs once per request.
 
 | Status | Reasons |
 | --- | --- |
-| 400 | bad header, bad authority, bad path, missing/forbidden/duplicate header, unsupported value |
+| 400 | bad header, bad authority, bad path, missing/forbidden/duplicate header, unsupported value, request trailer |
 | 401–403 | checks (application-chosen), IP rules, mTLS requirements, `deny` |
 | 404 / 405 | no route / wrong method (`Allow` lists the route's methods) |
 | 413 | route body bound exceeded (also mid-stream) |
@@ -240,5 +286,6 @@ pass itself still runs once per request.
 | 426 | WebSocket route without an upgrade |
 | 429 | rate limit, with `Retry-After` |
 | 431 | header count, bytes or `max` rule |
+| 502 / 503 / 504 | upstream failure / capacity or unavailable limiter / upstream timeout |
 
 `App.onReject` observes every rejection, for example for metrics.

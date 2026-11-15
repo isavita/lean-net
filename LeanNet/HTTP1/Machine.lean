@@ -1,5 +1,6 @@
 import LeanNet.HTTP1.Parser
 import LeanNet.HTTP1.Encoding
+import LeanNet.HTTP1.Streaming
 import LeanNet.HTTP.ResponseOutput
 
 namespace LeanNet.HTTP1.Machine
@@ -9,6 +10,7 @@ structure Config where
   parserOptions : Parser.Options := {}
   maxInformational : Nat := 16
   maxFileResponseBytes : Nat := 1024 * 1024 * 1024
+  maxStreamResponseBytes : Nat := 16 * 1024 * 1024
   trackOutput : Bool := false
 
 /-- Header decisions are explicit, including the legacy HTTP/1.0 EOF-body
@@ -25,17 +27,20 @@ inductive Action where
   | write (outputId : Nat) (parts : Array ByteArray) (waitForWrite : Bool)
   | writeObserved (outputId : Nat) (output : HTTP.ObservedOutput) (waitForWrite : Bool)
   | writeFile (outputId : Nat) (headParts : Array ByteArray) (region : FileRegion) (waitForWrite : Bool)
+  /-- Finalization without terminal wire bytes (known-length body). The driver
+      marks the request final after already queued output tickets drain. -/
+  | streamFinished (requestId : Nat)
   | readEnabled (enabled : Bool)
   | drainClose
   | upgraded (head : RequestHead)
   | abort (reason : String)
 
 private inductive Phase where
-  | head | body | decide | application | output | upgraded | closing
+  | head | body | decide | application | output | streaming | upgraded | closing
   deriving BEq
 
 private inductive AfterOutput where
-  | body | application | nextRequest | close | upgrade
+  | body | application | streaming | nextRequest | close | upgrade
   deriving BEq
 
 /-- Pure connection state. The driver owns unread input and all output leases;
@@ -57,6 +62,8 @@ structure State where
   private date : Option ByteArray := none
   private now : Nat := 0
   private requestStartedAt : Nat := 0
+  private streamPlan : Option Streaming.Plan := none
+  private streamBytes : Nat := 0
 
 structure Step where
   state : State
@@ -77,6 +84,17 @@ def State.startedAt (state : State) : Nat := state.requestStartedAt
 def State.wantsInput (state : State) : Bool := state.phase == .head || state.phase == .body
 def State.isIdle (state : State) : Bool := state.phase == .head && !state.started
 def State.isClosing (state : State) : Bool := state.phase == .closing
+def State.canStreamChunk (state : State) (requestId : Nat) : Bool :=
+  state.phase == .streaming && state.requestId == requestId && state.streamPlan.isSome
+
+def State.canEndStream (state : State) (requestId : Nat) : Bool :=
+  state.canStreamChunk requestId
+
+/-- Whether the current request can receive declared chunked trailers. -/
+def State.streamSupportsTrailers (state : State) : Bool :=
+  match state.head with
+  | some head => Version.parse? head.version == some .http11
+  | none => false
 
 private def context (state : State) : EncodeContext :=
   match state.head with
@@ -99,6 +117,16 @@ private def output (state : State) (parts : Array ByteArray) (after : AfterOutpu
   let action := if state.config.trackOutput then
     Action.writeObserved id (observation state (parts.map WirePart.bytes) #[] status finalResponse) waitForWrite
     else .write id parts waitForWrite
+  { state := { state with phase := .output, outputId := id, afterOutput := after },
+    actions := [.readEnabled false, action] }
+
+private def streamOutput (state : State) (parts : Array ByteArray) (after : AfterOutput)
+    (status : Nat) (finalResponse : Bool) (payloadRanges : Array (Nat × Nat) := #[]) : Step :=
+  let id := state.outputId + 1
+  let action := if state.config.trackOutput then
+    Action.writeObserved id (observation state (parts.map WirePart.bytes)
+      payloadRanges status finalResponse) false
+    else .write id parts false
   { state := { state with phase := .output, outputId := id, afterOutput := after },
     actions := [.readEnabled false, action] }
 
@@ -267,6 +295,75 @@ def State.respond (state : State) (requestId : Nat) (reply : Reply) : Step :=
       | .nextRequest .close => outputReply state wire .close false reply.response.status reply.response.body.size
       | _ => fail state 500
 
+/-- Commit only a validated final response head. Upstream body slices can be
+offered one at a time after each output is accepted by the ordered driver.
+Known lengths keep Content-Length; otherwise HTTP/1.1 uses chunked framing. -/
+def State.beginStream (state : State) (requestId : Nat) (response : Response)
+    (knownLength : Option Nat := none) (declaredTrailers : Array String := #[]) : Step :=
+  if state.phase != .application || requestId != state.requestId then
+    abort state "unexpected HTTP stream response"
+  else if knownLength.any (· > state.config.maxStreamResponseBytes) then
+    fail state 500
+  else
+    let forceClose := state.ended || state.legacyBody || state.stopping
+    match Streaming.Plan.new response (context state) knownLength declaredTrailers forceClose with
+    | .error _ => fail state 500
+    | .ok plan =>
+      streamOutput { state with streamPlan := some plan, streamBytes := 0 }
+        #[plan.head] .streaming response.status false
+
+/-- One bounded body slice. The machine admits no next slice until the prior
+slice's output ticket has entered the driver's ordered queue. -/
+def State.streamChunk (state : State) (requestId : Nat) (bytes : ByteArray) : Step := Id.run do
+  if state.phase != .streaming || requestId != state.requestId then
+    return abort state "unexpected HTTP stream chunk"
+  else
+    let some plan := state.streamPlan | return abort state "missing HTTP stream plan"
+    if bytes.size > state.config.maxStreamResponseBytes - min state.streamBytes state.config.maxStreamResponseBytes then
+      return abort state "HTTP streamed response exceeds limit"
+    if let .contentLength length := plan.framing then
+      if bytes.size > length - min state.streamBytes length then
+        return abort state "HTTP stream Content-Length overrun"
+    match plan.chunk bytes with
+    | .error message => return abort state message
+    | .ok chunk =>
+      return streamOutput { state with streamBytes := state.streamBytes + bytes.size }
+        chunk.parts .streaming 0 false #[(chunk.payloadOffset, chunk.payloadLength)]
+
+/-- Validate the exact known length and trailer declaration before closing the
+response. Once a head has been sent, framing errors abort the connection. -/
+def State.endStream (state : State) (requestId : Nat) (trailers : Array Header := #[]) : Step := Id.run do
+  if state.phase != .streaming || requestId != state.requestId then
+    return abort state "unexpected HTTP stream end"
+  else
+    let some plan := state.streamPlan | return abort state "missing HTTP stream plan"
+    match plan.framing with
+    | .contentLength length =>
+      if state.streamBytes != length then return abort state "HTTP stream Content-Length mismatch"
+    | _ => pure ()
+    match plan.finish trailers with
+    | .error message => return abort state message
+    | .ok terminal =>
+      let close := state.ended || state.stopping ||
+        (match plan.next with | .nextRequest .close => true | _ => false)
+      let state := { state with streamPlan := none, streamBytes := 0 }
+      if terminal.isEmpty then
+        if close then
+          let nextState := { state with phase := .closing }
+          return { state := nextState, actions := [.streamFinished requestId, .drainClose] }
+        else
+          let nextState := { state with parser := Parser.new state.config.limits state.config.parserOptions, phase := .head, head := none, framing := .none, requestId := state.requestId + 1, legacyBody := false, started := false }
+          return { state := nextState, actions := [.streamFinished requestId, .readEnabled true] }
+      else
+        return streamOutput state #[terminal] (if close then .close else .nextRequest) 0 true
+
+/-- A partial streamed response cannot be replaced by a 502 status line. -/
+def State.abortStream (state : State) (requestId : Nat) : Step :=
+  if requestId != state.requestId ||
+      (state.phase != .streaming && !(state.phase == .output && state.streamPlan.isSome)) then
+    abort state "unexpected HTTP stream abort"
+  else abort state "upstream response failed during streaming"
+
 /-- A final response is acknowledged after all its parts enter the ordered
     native write queue. Continue/upgrade barriers require actual write completion. -/
 def State.outputAccepted (state : State) (outputId : Nat) : Step :=
@@ -277,6 +374,7 @@ def State.outputAccepted (state : State) (outputId : Nat) : Step :=
       let state := { state with phase := .body }
       if state.ended then state.finish else { state, actions := [.readEnabled true] }
     | .application => { state := { state with phase := .application } }
+    | .streaming => { state := { state with phase := .streaming } }
     | .close => { state := { state with phase := .closing }, actions := [.drainClose] }
     | .upgrade =>
       match state.head with

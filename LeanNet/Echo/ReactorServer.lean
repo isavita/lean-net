@@ -20,6 +20,10 @@ private def dispatch (event : Reactor.Event) : IO Unit := do
       throw (← LeanNet.Errno.error "reactor accept" code)
     if code == -(Int.ofNat (← LeanNet.FFI.errnoEbadf).toNat) then
       throw (← LeanNet.Errno.error "reactor owned descriptor (library bug)" code)
+  | .connected socket => do
+    let _ ← socket.close (by decide)
+    throw (IO.userError "echo server received an outbound connection")
+  | .connectTimer .. => throw (IO.userError "echo server received a connect timer")
   | .accepted _ | .written .. | .closed _ | .wake => pure ()
 
 private partial def loop (reactor : Reactor.Reactor) (group : Reactor.Group) : IO Unit := do

@@ -251,6 +251,7 @@ private def Driver.readCipher (driver : Driver) (id : LeanNet.Reactor.SocketId)
 
 private def Driver.nativeEvent (driver : Driver) : LeanNet.Reactor.Event → IO (Array HTTP.Transport.Event)
   | .accepted socket => do driver.attach socket; return #[]
+  | .connected _ => pure #[]
   | .read socket buffer offset length => do driver.readCipher socket.id buffer offset length; return #[]
   | .wireRead id buffer offset length => do driver.readCipher id buffer offset length; return #[]
   | .written _id operation count => do
@@ -285,6 +286,7 @@ private def Driver.nativeEvent (driver : Driver) : LeanNet.Reactor.Event → IO 
     return #[]
   | .timer socket kind => pure #[.timer socket.id kind]
   | .wireTimer id kind => pure #[.timer id kind]
+  | .connectTimer _ _ => pure #[]
   | .wake => pure #[.wake]
   | .error id flags code => do
     if !(← Errno.isInterrupted code) then

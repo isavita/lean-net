@@ -1,4 +1,5 @@
 import LeanNet.HTTP2.Connection
+import LeanNet.HTTP2.Machine
 import LeanNet.HTTP1.Machine
 
 /-! Head-stage admission: HTTP/2 streams pause at their validated head and
@@ -62,6 +63,7 @@ private def gated : IO Unit := do
   -- Admit, then feed the remaining DATA: the request completes normally.
   let (connection, _, events) ← ok (step.connection.admitHead 1)
   check events.isEmpty "admission delivered an incomplete request"
+  check (connection.hasAdmittedStream 1) "incomplete admitted upload lost its exchange"
   let rest := connection.feedSlice input step.consumed (input.size - step.consumed)
   check (rest.requests.size == 1 && (rest.requests[0]?.map (·.request.body)).getD ByteArray.empty == "hello".toUTF8) "admitted body not delivered"
   -- A second stream is rejected with 429 and Retry-After, before its body.
@@ -92,8 +94,65 @@ private def bodyLimit : IO Unit := do
   let (_, block) ← hp (HPACK.encode HPACK.Context.new (head "/small" #[{ name := "content-length".toUTF8, value := "100".toUTF8 }]))
   let headers ← wire ⟨1, 4, 1, block⟩
   let step := connection.feedSlice headers 0 headers.size
-  let (_, bytes, _) ← ok (step.connection.admitHead 1 (some 10))
+  let (connection, bytes, _) ← ok (step.connection.admitHead 1 (some 10))
   check ((← statusOf bytes) == some "413") "declared length above route bound accepted"
+  check (!connection.hasAdmittedStream 1) "immediate 413 retained an admitted exchange"
+
+private def immediateHeadOutcomes : IO Unit := do
+  let connection ← connect { headGate := true }
+  let (_, block) ← hp (HPACK.encode HPACK.Context.new (head "/bodyless"))
+  let headers ← wire ⟨1, 5, 1, block⟩
+  let step := connection.feedSlice headers 0 headers.size
+  let (connection, _, events) ← ok (step.connection.admitHead 1)
+  check (events.size == 1 && connection.hasAdmittedStream 1)
+    "bodyless admitted head lost its pending response exchange"
+  let connection ← connect { headGate := true }
+  let (_, block) ← hp (HPACK.encode HPACK.Context.new
+    (head "/expect" #[{ name := "expect".toUTF8, value := "unsupported".toUTF8 }]))
+  let headers ← wire ⟨1, 4, 1, block⟩
+  let step := connection.feedSlice headers 0 headers.size
+  let (connection, bytes, events) ← ok (step.connection.admitHead 1)
+  check ((← statusOf bytes) == some "417" && events.isEmpty && !connection.hasAdmittedStream 1)
+    "immediate 417 retained an admitted exchange"
+
+private def resetWithoutOutputTracking : IO Unit := do
+  let config : Connection.Config := { headGate := true, trackOutput := false }
+  let preface := "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".toUTF8
+  let setup := preface.append (← wire ⟨4, 0, 0, ByteArray.empty⟩)
+  let ready := (Machine.State.new config).feedSlice setup 0 setup.size
+  check (ready.consumed == setup.size) "machine setup did not consume preface"
+  let (_, block) ← hp (HPACK.encode HPACK.Context.new (head "/reset"))
+  let headers ← wire ⟨1, 4, 1, block⟩
+  let paused := ready.state.feedSlice headers 0 headers.size
+  check (paused.actions.any (fun | .headReady 1 .. => true | _ => false))
+    "machine did not pause gated head"
+  let admitted := paused.state.admitHead 1
+  check (admitted.state.hasAdmittedStream 1) "machine lost incomplete admitted exchange"
+  let timed := admitted.state.tick 100 1
+  check (timed.actions.any (fun | .responseAborted 1 .timeout => true | _ => false))
+    "request timeout did not cancel without output tracking"
+  check (!timed.state.hasAdmittedStream 1) "timed-out dispatch exchange remained live"
+  let rst ← wire ⟨3, 0, 1, ByteArray.mk #[0, 0, 0, 8]⟩
+  let reset := admitted.state.feedSlice rst 0 rst.size
+  let aborts := reset.actions.filter fun
+    | .responseAborted 1 .cancelled => true
+    | _ => false
+  check (aborts.length == 1 && !reset.state.hasAdmittedStream 1)
+    "peer reset did not cancel exactly once without output tracking"
+  let again := reset.state.feedSlice rst 0 rst.size
+  check (!again.actions.any (fun | .responseAborted 1 .cancelled => true | _ => false))
+    "closed stream emitted a duplicate cancellation"
+
+private def canceledHead : IO Unit := do
+  let connection ← connect { headGate := true }
+  let (_, block) ← hp (HPACK.encode HPACK.Context.new (head "/canceled"))
+  -- A bodyless head can be followed by a reset in the same read. The owner
+  -- must never receive a stale gate callback for the now-closed stream.
+  let input := (← wire ⟨1, 5, 1, block⟩) ++
+    (← wire ⟨3, 0, 1, ByteArray.mk #[0, 0, 0, 8]⟩)
+  let step := connection.feedSlice input 0 input.size
+  check (step.error.isNone && step.consumed == input.size) "reset after head failed"
+  check (step.heads.isEmpty && step.requests.isEmpty) "canceled head reached admission"
 
 private def ungated : IO Unit := do
   let connection ← connect {}
@@ -129,6 +188,9 @@ private def http1Limit : IO Unit := do
 def main : IO Unit := do
   gated
   bodyLimit
+  immediateHeadOutcomes
+  resetWithoutOutputTracking
+  canceledHead
   ungated
   http1Limit
   IO.println "HTTP/2 head gate and per-request body limit tests passed"
