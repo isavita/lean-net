@@ -60,11 +60,12 @@ jobs:
           test: false
           lint: false
       - name: Build reactor and echo
-        run: lake build lean-net-echo lean-net-http1 lean-net-platform-info lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-protocol-fuzz
+        run: lake build lean-net-echo lean-net-http1 lean-net-platform-info lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-protocol-fuzz lean-net-gateway-pool-test lean-net-gateway-engine-test lean-net-gateway-h1-streaming-test lean-net-gateway-h2-streaming-test
       - name: Pure HTTP/1 protocol machines
         run: |
           lake env lean --run test/HTTP1ParserV2Test.lean
           lake env lean --run test/HTTP1EncodingTest.lean
+          lake env lean --run test/HTTP1ClientResponseTest.lean
           lake env lean --run test/HTTP1MachineTest.lean
           lake env lean --run test/HTTP1FileTest.lean
           lake env lean --run test/HTTP1ShutdownTest.lean
@@ -85,6 +86,13 @@ jobs:
           lake env lean --run test/PriorityTest.lean
           lake env lean --run test/HTTP2MachineTest.lean
           lake env lean --run test/HTTP2FileTest.lean
+      - name: Gateway policy, wire and streaming machines
+        run: |
+          lake build LeanNet.Gate.Literal
+          lake env lean --run test/GateTest.lean
+          lake env lean --run test/GatewayWireTest.lean
+          .lake/build/bin/lean-net-gateway-h1-streaming-test
+          .lake/build/bin/lean-net-gateway-h2-streaming-test
       - name: Pure static selection, paths and dates
         run: lake env lean --run test/StaticSelectionTest.lean
       - name: Short deterministic protocol fuzz and controller invariants
@@ -111,6 +119,15 @@ jobs:
         run: lake env lean test/ReactorStateTest.lean
       - name: Native buffers, timers and generations
         run: .lake/build/bin/lean-net-reactor-native-test
+      - name: Gateway sockets, pool, and public CLI
+        run: |
+          lake env ${{ matrix.python }} test/test_gateway_runtime.py -v
+          lake env ${{ matrix.python }} test/test_gateway_cli.py -v
+      - name: Native upstream connect and resolver (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          python3 test/test_reactor_connect.py -v
+          python3 test/test_gateway_resolve.py -v
       - name: Worker echo and FFI setup ownership (Unix)
         if: runner.os != 'Windows'
         run: |

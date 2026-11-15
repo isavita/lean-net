@@ -24,7 +24,10 @@ access logs, graceful shutdown and opt-in certificate reload. The
 [production checklist status](docs/production-checklist.md) maps every
 production-readiness requirement to its implementation, tests and open gaps.
 The optional [request gate and gateway](docs/gateway.md) adds host and path
-policies, typed rejections and rate limits in front of the core server.
+policies, typed rejections, rate limits and configuration-bound upstream
+HTTP/1.1 forwarding. The separate TLS package provides verified HTTPS
+backends and secure per-worker connection reuse; the plain core server
+rejects HTTPS backends without that provider.
 
 ## Build and test
 

@@ -83,7 +83,11 @@ extern_lib tls_shim (pkg : NPackage __name__) := do
   let workerObj ← buildO (pkg.buildDir / "c" / "tls_worker.o") worker
     (#["-isystem", includeDir.toString] ++ flags)
     (#["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"] ++ threadFlags) compiler
-  buildStaticLib (pkg.staticLibDir / nameToStaticLib "tls_shim") #[obj, workerObj]
+  let gateway ← inputTextFile (pkg.dir / "c" / "tls_gateway.c")
+  let gatewayObj ← buildO (pkg.buildDir / "c" / "tls_gateway.o") gateway
+    (#["-isystem", includeDir.toString] ++ flags)
+    #["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"] compiler
+  buildStaticLib (pkg.staticLibDir / nameToStaticLib "tls_shim") #[obj, workerObj, gatewayObj]
 
 lean_exe «lean-net-tls» where
   root := `Main
@@ -107,6 +111,9 @@ lean_exe «lean-net-tls-fixture» where
 
 lean_exe «lean-net-tls-interruptible-test» where
   root := `test.TLSInterruptibleTest
+
+lean_exe «lean-net-tls-gateway-test» where
+  root := `test.TLSGatewayTest
 
 lean_exe «lean-net-tls-reactor-fixture» where
   root := `test.TLSReactorFixture

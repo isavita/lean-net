@@ -24,6 +24,10 @@ export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix
 lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture
 python3 tls/test/test_tls.py -v
 python3 tls/test/test_tls_reactor.py -v
+# Optional gateway TLS handshake, identity, trust and connection-reuse checks:
+lake -d tls build lean-net-tls-gateway-test
+python3 tls/test/test_tls_gateway.py -v
+python3 tls/test/test_tls_gateway_e2e.py -v
 ```
 
 Serve the default route with a PEM chain and matching unencrypted PEM key:
@@ -36,6 +40,13 @@ curl --cacert /path/to/ca.pem --http2 https://localhost:8443/
 # Or serve an immutable directory snapshot with an 8 MiB packed/resident budget:
 # ./tls/.lake/build/bin/lean-net-tls /path/to/cert-chain.pem /path/to/private-key.pem 8443 --static ./public --static-memory 8
 ```
+
+To proxy to HTTPS backends with a private CA, supply a gate policy and
+`--upstream-ca /path/to/roots.pem`. The gateway verifies the backend certificate
+and the policy's `verify` name, uses SNI for DNS names, and negotiates
+HTTP/1.1. Without `--upstream-ca`, it uses OpenSSL's configured default trust
+roots. The upstream client runs on the owning HTTP reactor; inbound TLS still
+uses the dedicated TLS worker described above.
 
 `ReactorServer.serveStaticRoot root tlsConfig catalogConfig httpConfig host port`
 provides the corresponding library API. Catalog preparation and compression

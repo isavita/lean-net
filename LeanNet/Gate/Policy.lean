@@ -51,7 +51,10 @@ structure Rules where
   timeoutMs : Option Nat := none
   limits : Array Nat := #[]
   checks : Array String := #[]
+  /-- Host allowlist. A matching route allowlist is checked separately. -/
   allow : Array Cidr := #[]
+  /-- Route allowlist; both nonempty allowlists must admit the peer. -/
+  routeAllow : Array Cidr := #[]
   deny : Array Cidr := #[]
   mtls : Array PrincipalRule := #[]
   headers : HeaderPolicy := {}
@@ -181,7 +184,9 @@ private def compileHeaders (rules : Array HeaderRule) (line : Nat) : Except Conf
     | .single name => if !validName name then throw ⟨line, s!"invalid header name '{name}'"⟩
                       out := { out with single := out.single.push name }
     | .oneOf name values => if !validName name then throw ⟨line, s!"invalid header name '{name}'"⟩
-                            out := { out with oneOf := out.oneOf.push (name, values.map (·.toLower.toUTF8)) }
+                            let bytes := values.map fun value =>
+                              (if name == "content-type" then value.toLower else value).toUTF8
+                            out := { out with oneOf := out.oneOf.push (name, bytes) }
     | .strip name => if !validName name then throw ⟨line, s!"invalid header name '{name}'"⟩
                      out := { out with strip := out.strip.push name }
   return out
@@ -211,7 +216,8 @@ private def compileRules (spec : Spec) (items : Items) (line : Nat) : Except Con
 private def inherit (host route : Rules) : Rules :=
   { body := route.body <|> host.body, timeoutMs := route.timeoutMs <|> host.timeoutMs,
     limits := host.limits ++ route.limits, checks := host.checks ++ route.checks,
-    allow := host.allow ++ route.allow, deny := host.deny ++ route.deny, mtls := host.mtls ++ route.mtls,
+    allow := host.allow, routeAllow := route.allow,
+    deny := host.deny ++ route.deny, mtls := host.mtls ++ route.mtls,
     headers := mergeHeaders host.headers route.headers }
 
 private def compileAction (backends : Array Backend) (patterns : Array HostPattern)
@@ -242,11 +248,18 @@ private def methodsOverlap (a b : Option (Array String)) : Bool :=
 def Policy.compile (spec : Spec) (generation : UInt64 := 0) : Except ConfigError Policy := do
   let limits := spec.limits
   if limits.maxHeaders == 0 || limits.maxHeaders > 1000 || limits.maxHeaderBytes < 256 ||
-      limits.maxHeaderBytes > 1048576 || limits.maxPathDepth == 0 || limits.maxPathDepth > 256 then
-    throw ⟨0, "limits out of range (headers 1-1000, header-bytes 256B-1MiB, path-depth 1-256)"⟩
+      limits.maxHeaderBytes > 1048576 || limits.maxTargetBytes == 0 ||
+      limits.maxTargetBytes > 1048576 || limits.maxPathDepth == 0 || limits.maxPathDepth > 256 then
+    throw ⟨0, "limits out of range (headers 1-1000, header-bytes 256B-1MiB, target-bytes 1B-1MiB, path-depth 1-256)"⟩
+  if spec.rates.size > 1024 then throw ⟨0, "too many rate limits (maximum 1024)"⟩
   for h : i in [:spec.rates.size] do
     let rate := spec.rates[i]
     if rate.tokens == 0 || rate.burst == 0 || rate.periodMs == 0 then throw ⟨0, s!"rate limit '{rate.name}' must be positive"⟩
+    if rate.tokens > 4294967295 || rate.periodMs > 4294967295 || rate.burst > 4294967295 then
+      throw ⟨0, s!"rate limit '{rate.name}' exceeds the native 32-bit range"⟩
+    if let .header name := rate.key then
+      if name.isEmpty || name != name.toLower || !name.toUTF8.data.all tokenByte then
+        throw ⟨0, s!"rate limit '{rate.name}' has an invalid key header name"⟩
     if (spec.rates.extract 0 i).any (·.name == rate.name) then throw ⟨0, s!"duplicate rate limit '{rate.name}'"⟩
   let mut backends : Array Backend := #[]
   for b in spec.backends do
@@ -258,7 +271,10 @@ def Policy.compile (spec : Spec) (generation : UInt64 := 0) : Except ConfigError
       serves := serves.push pattern
     if serves.isEmpty then throw ⟨0, s!"backend '{b.name}' must declare the hosts it serves"⟩
     if let some name := b.verify then
-      if !validHost name.toUTF8 then throw ⟨0, s!"backend '{b.name}': invalid TLS verify name '{name}'"⟩
+      if !validHost name.toUTF8 && (parseAddress name).isNone then
+        throw ⟨0, s!"backend '{b.name}': invalid TLS verify name '{name}'"⟩
+      if b.targets.any (·.scheme == .http) then
+        throw ⟨0, s!"backend '{b.name}': TLS verify requires HTTPS targets only"⟩
     for t in b.targets do
       if !validHost t.host.toUTF8 && (parseAddress t.host).isNone then
         throw ⟨0, s!"backend '{b.name}': invalid target host '{t.host}'"⟩
@@ -324,7 +340,8 @@ inductive Reason where
   | headerLimit | badHeader | badAuthority | unknownHost | misdirected | badPath
   | notFound | methodNotAllowed | ipDenied | clientCertRequired | principalDenied
   | missingHeader | forbiddenHeader | headerTooLarge | duplicateHeader | unsupportedValue
-  | upgradeRequired | denied | redirect | rateLimited | checkFailed | bodyTooLarge
+  | upgradeRequired | denied | redirect | rateLimited | limiterUnavailable | checkFailed | bodyTooLarge
+  | invalidTrailer
   deriving BEq, Repr, Inhabited
 
 def Reason.label : Reason → String
@@ -336,12 +353,15 @@ def Reason.label : Reason → String
   | .headerTooLarge => "header_too_large" | .duplicateHeader => "duplicate_header"
   | .unsupportedValue => "unsupported_value" | .upgradeRequired => "upgrade_required"
   | .denied => "denied" | .redirect => "redirect" | .rateLimited => "rate_limited"
+  | .limiterUnavailable => "limiter_unavailable"
   | .checkFailed => "check_failed" | .bodyTooLarge => "body_too_large"
+  | .invalidTrailer => "invalid_trailer"
 
 def Reason.all : Array Reason := #[.headerLimit, .badHeader, .badAuthority, .unknownHost, .misdirected,
   .badPath, .notFound, .methodNotAllowed, .ipDenied, .clientCertRequired, .principalDenied,
   .missingHeader, .forbiddenHeader, .headerTooLarge, .duplicateHeader, .unsupportedValue,
-  .upgradeRequired, .denied, .redirect, .rateLimited, .checkFailed, .bodyTooLarge]
+  .upgradeRequired, .denied, .redirect, .rateLimited, .limiterUnavailable, .checkFailed, .bodyTooLarge,
+  .invalidTrailer]
 
 def Reason.index (reason : Reason) : Nat := (Reason.all.findIdx? (· == reason)).getD 0
 
@@ -506,6 +526,7 @@ private def mediaValue (value : ByteArray) : ByteArray :=
 def Rules.check (rules : Rules) (facts : Transport.Facts) (headers : Array HTTP1.Header) :
     Except Rejection Unit := do
   if !rules.allow.isEmpty && !rules.allow.any (·.contains facts.peer) then throw (.make .ipDenied 403)
+  if !rules.routeAllow.isEmpty && !rules.routeAllow.any (·.contains facts.peer) then throw (.make .ipDenied 403)
   if rules.deny.any (·.contains facts.peer) then throw (.make .ipDenied 403)
   for rule in rules.mtls do
     if facts.principal.isNone then throw (.make .clientCertRequired 403)
@@ -522,13 +543,31 @@ def Rules.check (rules : Rules) (facts : Transport.Facts) (headers : Array HTTP1
     if (headers.filter (·.name == name)).size > 1 then throw (.make .duplicateHeader 400)
   for (name, values) in policy.oneOf do
     for field in headers do
-      if field.name == name && !values.contains (mediaValue field.value) then
-        throw (.make .unsupportedValue (if name == "content-type" then 415 else 400))
+      if field.name == name then
+        let actual := if name == "content-type" then mediaValue field.value else field.value
+        if !values.contains actual then
+          throw (.make .unsupportedValue (if name == "content-type" then 415 else 400))
 
 private def methodMatches (methods : Option (Array String)) (method : String) : Bool :=
   match methods with
   | none => true
   | some list => list.contains method || (method == "HEAD" && list.contains "GET")
+
+/-- A WebSocket route must see the actual opening protocol. A mere Upgrade
+    field does not authorize h2c or another raw protocol on that route. -/
+private def websocketHead (head : Admission.Head) : Bool := Id.run do
+  match head.kind with
+  | .upgrade =>
+    if head.protocol != .http11 || head.method != "GET" || !head.bodyless then return false
+    let upgrades := head.headers.filter (·.name == "upgrade")
+    if upgrades.size != 1 || !equalFold upgrades[0]!.value "websocket".toUTF8 then return false
+    match HTTP1.connectionTokens head.headers with
+    | .ok options => return options.contains "upgrade" && !options.contains "close"
+    | .error _ => return false
+  | .tunnel =>
+    return head.protocol == .http2 && head.method == "CONNECT" &&
+      head.requestedProtocol == some "websocket".toUTF8
+  | _ => return false
 
 /-- Pure head-stage admission: header invariants, authority, virtual host,
     TLS SNI agreement, path normalisation, routing and rules. Rate limits and
@@ -561,7 +600,7 @@ def admitHead (policy : Policy) (facts : Transport.Facts) (head : Admission.Head
           if head.kind == .internal then
             vhost.rules.check facts head.headers
             return build default .internal #[]
-          let path ← match normalizePath head.target policy.limits.maxPathDepth with
+          let path ← match normalizePath head.target policy.limits.maxPathDepth policy.limits.maxTargetBytes with
             | .ok path => pure path
             | .error _ => throw (.make .badPath 400)
           let method := if head.kind == .tunnel then "GET" else head.method
@@ -579,8 +618,9 @@ def admitHead (policy : Policy) (facts : Transport.Facts) (head : Admission.Head
                 let route := vhost.routes[r]
                 route.rules.check facts head.headers
                 match route.action, head.kind with
-                | .websocket _, .request => throw (.make .upgradeRequired 426 #[{ name := "upgrade", value := "websocket".toUTF8 }])
-                | .websocket _, _ => pure ()
+                | .websocket _, _ =>
+                  if !websocketHead head then
+                    throw (.make .upgradeRequired 426 #[{ name := "upgrade", value := "websocket".toUTF8 }])
                 | _, .tunnel => throw (.make .notFound 404)
                 | .deny status, _ => throw (.make .denied status)
                 | .redirect status location, _ =>
@@ -594,10 +634,15 @@ def admitHead (policy : Policy) (facts : Transport.Facts) (head : Admission.Head
             | none => throw (.make .notFound 404)
             | some action =>
               vhost.rules.check facts head.headers
-              match action with
-              | .deny status => throw (.make .denied status)
-              | .redirect status location => throw (.make .redirect status #[{ name := "location", value := location }])
-              | _ => return build path .fallback #[]
+              match action, head.kind with
+              | .websocket _, _ =>
+                if !websocketHead head then
+                  throw (.make .upgradeRequired 426 #[{ name := "upgrade", value := "websocket".toUTF8 }])
+                return build path .fallback #[]
+              | _, .tunnel => throw (.make .notFound 404)
+              | .deny status, _ => throw (.make .denied status)
+              | .redirect status location, _ => throw (.make .redirect status #[{ name := "location", value := location }])
+              | _, _ => return build path .fallback #[]
         else throw unknown
       else throw unknown
     else throw (.make .badHeader 400)

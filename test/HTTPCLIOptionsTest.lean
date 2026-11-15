@@ -13,7 +13,7 @@ private def parse (args : List String) : IO CLI.Options :=
 private def rejected (args : List String) : IO Unit :=
   match CLI.parse args with
   | .error _ => pure ()
-  | .ok _ => throw (IO.userError s!"accepted invalid access-log queue options: {args}")
+  | .ok _ => throw (IO.userError s!"accepted invalid CLI options: {args}")
 
 def main : IO Unit := do
   let plain ← parse []
@@ -37,4 +37,9 @@ def main : IO Unit := do
   rejected (base ++ ["--access-log-queue-capacity", "1024", "--access-log-queue-capacity", "4096"])
   for value in ["0", "3", "1023", "65537", "-1", "1.5", "abc", ""] do
     rejected (base ++ ["--access-log-queue-capacity", value])
-  IO.println "HTTP CLI access-log queue defaults, propagation, bounds and rejection cases passed"
+  let upstream ← parse ["--gate", "gateway.gate", "--upstream-ca", "roots.pem"]
+  check (upstream.upstreamCA.map (·.toString) == some "roots.pem") "upstream CA path lost"
+  rejected ["--upstream-ca", "roots.pem"]
+  rejected ["--gate", "gateway.gate", "--upstream-ca"]
+  rejected ["--gate", "gateway.gate", "--upstream-ca", "roots.pem", "--upstream-ca", "other.pem"]
+  IO.println "HTTP CLI defaults, upstream CA, bounds and rejection cases passed"

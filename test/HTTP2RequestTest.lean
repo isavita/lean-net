@@ -59,4 +59,11 @@ def main : IO Unit := do
   match validateTrailers #[h "content-length" "4"] with
   | .error _ => pure ()
   | .ok _ => throw (IO.userError "framing trailer was accepted")
+  for name in ["authorization", "cookie", "content-type", "expect"] do
+    match validateTrailers #[h name "spoofed"] with
+    | .error _ => pure ()
+    | .ok _ => throw (IO.userError s!"security-sensitive {name} trailer was accepted")
+  match validateTrailers #[h "x-checksum" "abc"] with
+  | .ok _ => pure ()
+  | .error e => throw (IO.userError s!"benign trailer was rejected: {e}")
   IO.println "HTTP/2 request tests passed"

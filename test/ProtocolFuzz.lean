@@ -145,6 +145,7 @@ private def h1Actions (initial : H1Capture) (actions : List HTTP1.Machine.Action
       pending := pending ++ next.actions
     | .writeObserved .. => throw (IO.userError "output tracking unexpectedly enabled in default HTTP1 fixture")
     | .writeFile .. => throw (IO.userError "HTTP1 generated file output without a file reply")
+    | .streamFinished .. => throw (IO.userError "HTTP1 generated an unsolicited streamed response")
     | .drainClose | .abort _ => capture := { capture with closed := capture.closed + 1 }
     | .readEnabled _ => pure ()
     | .upgraded _ => throw (IO.userError "HTTP1 unsolicited upgrade")
@@ -231,7 +232,9 @@ private def h2Actions (initial : H2Capture) (actions : List HTTP2.Machine.Action
       let output := parts.foldl ByteArray.append capture.output
       check (output.size <= 131072) "HTTP2 output exceeds harness bound"
       capture := { capture with output }
-    | .writeObserved .. | .requestStarted .. | .responseAborted .. |
+    | .responseAborted streamId _ =>
+      check (streamId.toNat % 2 == 1) "HTTP2 canceled a non-client stream"
+    | .writeObserved .. | .requestStarted .. |
       .writeTunnel .. | .tunnelData .. | .tunnelReset .. | .headReady .. =>
       throw (IO.userError "unexpected tracking, tunnel or admission action in default HTTP2 fixture")
     | .writePing .. => throw (IO.userError "keepalive unexpectedly enabled in default HTTP2 fixture")

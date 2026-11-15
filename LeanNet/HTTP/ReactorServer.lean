@@ -10,6 +10,7 @@ import LeanNet.HTTP.SecureHeaders
 import LeanNet.HTTP.Admin
 import LeanNet.HTTP.TraceContext
 import LeanNet.HTTP.Admission
+import LeanNet.Gateway.Engine
 import LeanNet.WebSocket.Server
 
 namespace LeanNet.HTTP
@@ -56,6 +57,10 @@ structure ReactorServerConfig where
   /-- Optional head-stage admission (see `LeanNet.HTTP.Admission`). `none`
       keeps the core server's behaviour unchanged. -/
   admission : Option Admission.Factory := none
+  /-- Opt-in per-worker upstream engine. Native socket capacity is reserved
+      separately from inbound maxClients, so proxy connections cannot steal
+      accepted-client slots. -/
+  gateway : Option Gateway.Config := none
   /-- Extra Prometheus exposition appended to the metrics endpoint and the
       admin port (e.g. gate counters). -/
   extraMetrics : IO ByteArray := pure ByteArray.empty
@@ -152,6 +157,19 @@ private structure RequestObservation where
 private structure Dispatch where
   handler : Option (Request → IO Reply) := none
   rewrite : Option (Request → Request) := none
+  proxy : Option Admission.ProxyPlan := none
+  postBody : Option (Request → IO (Except Admission.Rejection Request)) := none
+
+/-- At most one upstream body slice is retained per proxied response. The
+    worker offers it to the downstream protocol under its output and HTTP/2
+    flow-control budgets before resuming the upstream socket. -/
+private structure ProxyStream where
+  head : HTTP1.ClientResponse.Head
+  declared : Array String := #[]
+  pending : ByteArray := ByteArray.empty
+  offset : Nat := 0
+  finish : Option (Array HTTP1.ClientResponse.Header) := none
+  upstreamPaused : Bool := false
 
 private structure Client where
   socket : Transport.Endpoint
@@ -191,6 +209,7 @@ private structure Client where
   /-- Admission-selected request handlers keyed by HTTP/1 request ID or
       HTTP/2 stream ID; consumed when the request is dispatched. -/
   dispatch : Std.HashMap Nat Dispatch := {}
+  proxyStreams : Std.HashMap Nat ProxyStream := {}
 
 private structure WorkerState where
   clients : Std.HashMap Reactor.SocketId Client := {}
@@ -226,6 +245,7 @@ private structure Driver where
   reloadSeen : IO.Ref UInt64
   /-- This worker's admission hook, built on its own thread. -/
   admission : Option Admission.Hook := none
+  gateway : Option Gateway.Engine := none
 
 private def Driver.client? (driver : Driver) (id : Reactor.SocketId) : IO (Option Client) := do
   return (← driver.state.get).clients[id]?
@@ -366,6 +386,7 @@ private def Driver.setReading (driver : Driver) (id : Reactor.SocketId) (enabled
 private def Driver.forget (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
   let some client ← driver.client? id | return
   cleanupActions #[
+    (do if let some gateway := driver.gateway then gateway.cancelDownstream id),
     driver.closeObservations id (client.retirementOutcome.getD .error),
     driver.state.modify fun state => { state with clients := state.clients.erase id },
     releaseInput client,
@@ -384,9 +405,11 @@ private def Driver.retire (driver : Driver) (id : Reactor.SocketId)
     retired := true, retirementOutcome := some outcome, closing := true, reading := false,
     protocol := .raw, pipe := none, inputFront := [], inputBack := [], inputBytes := 0,
     h2Pipes := {}, h2Inputs := {}, h2Writes := {}, h2CloseDeadlines := {},
+    proxyStreams := {},
     outputs := [], outputBytes := 0, queuedFileBytes := 0,
     idleDeadline := none, requestDeadline := none, writeDeadline := none, pingDeadline := none }
   cleanupActions #[
+    (do if let some gateway := driver.gateway then gateway.cancelDownstream id),
     releaseInput client,
     (do
       if let some pipe := client.pipe then try pipe.onClose catch _ => pure ()
@@ -612,6 +635,17 @@ private def Driver.admit (driver : Driver) (id : Reactor.SocketId) (hook : Admis
   try hook.decide facts head
   catch _ => pure (.reject { status := 500 })
 
+private def Driver.secureReply (driver : Driver) (reply : Reply) : Reply :=
+  let secured := applySecurityHeaders
+    (driver.config.securityHeaders.fields driver.transport.secure) reply.response
+  { reply with response := secured }
+
+private def Driver.secureRejection (driver : Driver)
+    (rejection : Admission.Rejection) : Admission.Rejection :=
+  let response : HTTP1.Response := { status := rejection.status, headers := rejection.headers }
+  { rejection with headers := (applySecurityHeaders
+      (driver.config.securityHeaders.fields driver.transport.secure) response).headers }
+
 private def admissionHead1 (driver : Driver) (head : RequestHead) (framing : BodyFraming) : Admission.Head :=
   let authority := (head.headers.find? (·.name == "host")).map (·.value) |>.getD ByteArray.empty
   let upgrade := head.headers.any (·.name == "upgrade")
@@ -623,7 +657,8 @@ private def admissionHead1 (driver : Driver) (head : RequestHead) (framing : Bod
 
 private def admissionHead2 (driver : Driver) (head : HTTP2.RequestHead) : Admission.Head :=
   { protocol := .http2, method := head.method, target := head.target, authority := head.authority
-    scheme := some head.scheme, headers := head.headers, contentLength := head.contentLength
+    scheme := some head.scheme, requestedProtocol := head.protocol,
+    headers := head.headers, contentLength := head.contentLength
     kind := if head.protocol.isSome then .tunnel
       else if metricTarget driver head.target then .internal else .request }
 
@@ -638,6 +673,12 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
     | .readEnabled enabled => driver.setReading id enabled
     | .write outputId parts barrier => driver.appendOutput id (parts.map ByteSlice.full) (some outputId) barrier
     | .writeObserved outputId output barrier => driver.appendObserved id output (some outputId) barrier
+    | .streamFinished requestId =>
+      if let some current ← driver.client? id then
+        if let some observed := current.requests[requestId]? then
+          let finished := { observed with finalQueued := true }
+          driver.put id { current with requests := current.requests.insert requestId finished }
+          driver.finishObservation id requestId
     | .writeFile outputId heads region barrier =>
       driver.appendParts id ((heads.map (fun bytes => OutputPart.bytes (ByteSlice.full bytes))).push (.file region))
         (some outputId) barrier
@@ -659,14 +700,16 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
             driver.closeNow id
             return
           let .http1 machine := client.protocol | return
-          driver.applyStep id (machine.decideHead requestId (.reject (limitedReply driver.config rejection.reply)))
+          driver.applyStep id (machine.decideHead requestId
+            (.reject (limitedReply driver.config (driver.secureReply rejection.reply))))
           return
-        | .accept limit handler rewrite label =>
+        | .accept limit handler rewrite label proxy postBody =>
           driver.labelObservation id requestId label ""
           bodyLimit := limit
-          if handler.isSome || rewrite.isSome then
+          if handler.isSome || rewrite.isSome || proxy.isSome || postBody.isSome then
             if let some client ← driver.client? id then
-              driver.put id { client with dispatch := client.dispatch.insert requestId { handler, rewrite } }
+              let selected : Dispatch := { handler, rewrite, proxy, postBody }
+              driver.put id { client with dispatch := client.dispatch.insert requestId selected }
       let some client ← driver.client? id | return
       if client.retired then return
       let .http1 machine := client.protocol | return
@@ -692,7 +735,8 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
       let .http1 machine := client.protocol | return
       match decision with
       | .accept framing => driver.applyStep id (machine.decideHead requestId (.accept framing bodyLimit))
-      | .reject reply => driver.applyStep id (machine.decideHead requestId (.reject (limitedReply driver.config reply)))
+      | .reject reply => driver.applyStep id (machine.decideHead requestId
+          (.reject (limitedReply driver.config (driver.secureReply reply))))
       | .upgrade reply pipe =>
         driver.cancelRequest id
         let some client ← driver.client? id | return
@@ -704,12 +748,43 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
       let some client ← driver.client? id | return
       if client.retired then return
       let handler ← driver.takeDispatch id requestId
-      let reply ← try driver.reply id requestId request handler
-        catch _ => pure { response := { status := 500 }, options := { forceClose := true } }
+      let request ← match handler.bind (·.postBody) with
+        | none => pure (some request)
+        | some validate => match ← (try validate request catch _ =>
+            pure (.error { status := 500 })) with
+          | .ok checked => pure (some checked)
+          | .error rejection => do
+            driver.labelObservation id requestId none rejection.label
+            if let some current ← driver.client? id then
+              if let .http1 machine := current.protocol then
+                driver.applyStep id (machine.respond requestId
+                  (limitedReply driver.config (driver.secureReply rejection.reply)))
+            pure none
+      let some request := request | continue
+      let reply? ← match handler.bind (·.proxy) with
+        | some plan =>
+          match driver.gateway with
+          | none => pure (some { response := { status := 503 } })
+          | some gateway => do
+            let request ← driver.traced id requestId request
+            let request := match handler.bind (·.rewrite) with
+              | some rewrite => rewrite request | none => request
+            let result ← try
+                some <$> gateway.start { downstream := id, requestId } plan request (← driver.now)
+              catch _ => pure none
+            pure <| match result with
+              | some outcome? => outcome?.map (·.reply)
+              | none => some { response := { status := 502 } }
+        | none => do
+          let reply ← try driver.reply id requestId request handler
+            catch _ => pure { response := { status := 500 }, options := { forceClose := true } }
+          pure (some reply)
+      let some reply := reply? | return
       let some client ← driver.client? id | return
       if client.retired then return
       let .http1 machine := client.protocol | return
-      driver.applyStep id (machine.respond requestId (limitedReply driver.config reply))
+      driver.applyStep id (machine.respond requestId
+        (limitedReply driver.config (driver.secureReply reply)))
     | .upgraded _ =>
       if client.h2cUpgrade.isSome then
         -- The 101 barrier completed; `pump` switches this client to HTTP/2.
@@ -1072,6 +1147,12 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
         | .cancelled => Observability.Outcome.cancelled
         | .error => .error
         | .timeout => .timeout
+      if let some gateway := driver.gateway then
+        gateway.cancelTicket { downstream := id, requestId := streamId.toNat }
+      if let some current ← driver.client? id then
+        driver.put id { current with
+          proxyStreams := current.proxyStreams.erase streamId.toNat,
+          dispatch := current.dispatch.erase streamId.toNat }
       driver.abortObservation id streamId.toNat outcome
     | .drainClose => close := true
     | .headReady streamId head _ =>
@@ -1081,16 +1162,20 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
         | none => pure (.accept none none none none)
       match verdict with
       | .reject rejection => driver.labelObservation id streamId.toNat none rejection.label
-      | .accept _ _ _ label => driver.labelObservation id streamId.toNat label ""
+      | .accept _ _ _ label _ _ => driver.labelObservation id streamId.toNat label ""
       let step := match verdict with
         | .reject rejection =>
           if rejection.drop then machine.rejectHead streamId 421 #[]
-          else machine.rejectHead streamId rejection.status rejection.headers
-        | .accept limit _ _ _ => machine.admitHead streamId limit
-      if let .accept _ handler rewrite _ := verdict then
-        if handler.isSome || rewrite.isSome then
+          else
+            let rejection := driver.secureRejection rejection
+            machine.rejectHead streamId rejection.status rejection.headers
+        | .accept limit _ _ _ _ _ => machine.admitHead streamId limit
+      if let .accept _ handler rewrite _ proxy postBody := verdict then
+        if step.state.hasAdmittedStream streamId &&
+            (handler.isSome || rewrite.isSome || proxy.isSome || postBody.isSome) then
           if let some current ← driver.client? id then
-            driver.put id { current with dispatch := current.dispatch.insert streamId.toNat { handler, rewrite } }
+            let selected : Dispatch := { handler, rewrite, proxy, postBody }
+            driver.put id { current with dispatch := current.dispatch.insert streamId.toNat selected }
       if let some current ← driver.client? id then
         driver.put id { current with protocol := .http2 step.state, kick := true }
       actions := step.actions ++ actions
@@ -1130,15 +1215,50 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
           actions := response.actions ++ actions
         continue
       let handler ← driver.takeDispatch id event.streamId.toNat
-      let reply ← try driver.reply id event.streamId.toNat event.request handler
-        catch _ => pure { response := { status := 500 } }
-      let pushes ← if machine.canPush && !metricTarget driver event.request.target then
-        try driver.handlers.onPush event.request catch _ => pure #[]
+      let request ← match handler.bind (·.postBody) with
+        | none => pure (some event.request)
+        | some validate => match ← (try validate event.request catch _ =>
+            pure (.error { status := 500 })) with
+          | .ok checked => pure (some checked)
+          | .error rejection => do
+            driver.labelObservation id event.streamId.toNat none rejection.label
+            if let some current ← driver.client? id then
+              if let .http2 machine := current.protocol then
+                let rejection := driver.secureRejection rejection
+                let response := machine.respond event.streamId
+                  (limitedReply driver.config rejection.reply) #[]
+                driver.put id { current with protocol := .http2 response.state, kick := true }
+                actions := response.actions ++ actions
+            pure none
+      let some request := request | continue
+      let reply? ← match handler.bind (·.proxy) with
+        | some plan =>
+          match driver.gateway with
+          | none => pure (some { response := { status := 503 } })
+          | some gateway => do
+            let request ← driver.traced id event.streamId.toNat request
+            let request := match handler.bind (·.rewrite) with
+              | some rewrite => rewrite request | none => request
+            let result ← try
+                some <$> gateway.start { downstream := id, requestId := event.streamId.toNat }
+                  plan request (← driver.now)
+              catch _ => pure none
+            pure <| match result with
+              | some outcome? => outcome?.map (·.reply)
+              | none => some { response := { status := 502 } }
+        | none => do
+          let reply ← try driver.reply id event.streamId.toNat request handler
+            catch _ => pure { response := { status := 500 } }
+          pure (some reply)
+      let some reply := reply? | continue
+      let pushes ← if (handler.bind (·.proxy)).isNone && machine.canPush && !metricTarget driver request.target then
+        try driver.handlers.onPush request catch _ => pure #[]
         else pure #[]
       let some current ← driver.client? id | return
       if current.retired then return
       let .http2 machine := current.protocol | return
-      let response := machine.respond event.streamId (limitedReply driver.config reply) pushes
+      let response := machine.respond event.streamId
+        (limitedReply driver.config (driver.secureReply reply)) pushes
       driver.put id { current with protocol := .http2 response.state, kick := true }
       actions := response.actions ++ actions
   -- Preserve the generic queue's per-ticket part bound for custom large
@@ -1150,6 +1270,178 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
 private def Driver.failH2 (driver : Driver) (id : Reactor.SocketId)
     (machine : HTTP2.Machine.State) (error : HTTP2.ProtocolError) : IO Unit :=
   driver.applyH2Step id (machine.fail error)
+
+private def Driver.setProxyStream (driver : Driver) (id : Reactor.SocketId)
+    (requestId : Nat) (value : Option ProxyStream) : IO Unit := do
+  if let some client ← driver.client? id then
+    let streams := match value with
+      | some stream => client.proxyStreams.insert requestId stream
+      | none => client.proxyStreams.erase requestId
+    driver.put id { client with proxyStreams := streams }
+
+private def Driver.proxyReply (driver : Driver) (id : Reactor.SocketId)
+    (requestId : Nat) (reply : Reply) : IO Unit := do
+  let some client ← driver.client? id | return
+  let secured := applySecurityHeaders (driver.config.securityHeaders.fields driver.transport.secure)
+    reply.response
+  let reply := limitedReply driver.config { reply with response := secured }
+  match client.protocol with
+  | .http1 machine => driver.applyStep id (machine.respond requestId reply)
+  | .http2 machine =>
+    if requestId <= 2147483647 then
+      driver.applyH2Step id (machine.respond requestId.toUInt32 reply #[])
+  | _ => pure ()
+
+private def Driver.abortProxyStream (driver : Driver) (id : Reactor.SocketId)
+    (requestId : Nat) : IO Unit := do
+  let some client ← driver.client? id | return
+  driver.setProxyStream id requestId none
+  match client.protocol with
+  | .http1 machine => driver.applyStep id (machine.abortStream requestId)
+  | .http2 machine =>
+    if requestId <= 2147483647 then
+      driver.applyH2Step id (machine.abortResponseStream requestId.toUInt32)
+  | _ => pure ()
+
+private def Driver.proxyOutcomes (driver : Driver) (outcomes : Array Gateway.Outcome) : IO Unit := do
+  for outcome in outcomes do
+    let id := outcome.ticket.downstream
+    let requestId := outcome.ticket.requestId
+    let some client ← driver.client? id | continue
+    if client.retired || client.closing then continue
+    match outcome.stream with
+    | none =>
+      if client.proxyStreams.contains requestId then
+        driver.abortProxyStream id requestId
+      else driver.proxyReply id requestId outcome.reply
+    | some (.start head) =>
+      if client.proxyStreams.contains requestId then
+        driver.abortProxyStream id requestId
+        continue
+      let .ok decoded := Gateway.decodeReply head ByteArray.empty
+        | do
+          if let some gateway := driver.gateway then gateway.cancelTicket outcome.ticket
+          driver.proxyReply id requestId { response := { status := 502 } }
+          continue
+      let secured := applySecurityHeaders (driver.config.securityHeaders.fields driver.transport.secure)
+        decoded.response
+      let reply := limitedReply driver.config { decoded with response := secured }
+      let .ok declared := Gateway.declaredTrailers head
+        | do
+          if let some gateway := driver.gateway then gateway.cancelTicket outcome.ticket
+          driver.proxyReply id requestId { response := { status := 502 } }
+          continue
+      let length : Option Nat := match head.framing with
+        | .contentLength value => some value
+        | _ => none
+      if reply.response.status != head.status.toNat ||
+          length.any (· > driver.config.machine.maxStreamResponseBytes) then
+        if let some gateway := driver.gateway then gateway.cancelTicket outcome.ticket
+        driver.proxyReply id requestId { response := { status := 502 } }
+        continue
+      match client.protocol with
+      | .http1 machine =>
+        let declared := if length.isNone && machine.streamSupportsTrailers then declared else #[]
+        driver.setProxyStream id requestId (some { head, declared })
+        driver.applyStep id (machine.beginStream requestId reply.response length declared)
+      | .http2 machine =>
+        if requestId > 2147483647 then continue
+        match machine.beginResponseStream requestId.toUInt32 reply.response with
+        | .ok step =>
+          driver.setProxyStream id requestId (some { head, declared })
+          driver.applyH2Step id step
+        | .error _ =>
+          if let some gateway := driver.gateway then gateway.cancelTicket outcome.ticket
+          driver.proxyReply id requestId { response := { status := 502 } }
+      | _ =>
+        if let some gateway := driver.gateway then gateway.cancelTicket outcome.ticket
+    | some (.data bytes) =>
+      let some stream := client.proxyStreams[requestId]? | do
+        if let some gateway := driver.gateway then gateway.cancelTicket outcome.ticket
+        continue
+      if stream.offset < stream.pending.size || bytes.isEmpty || bytes.size > 65536 then
+        if let some gateway := driver.gateway then gateway.cancelTicket outcome.ticket
+        driver.abortProxyStream id requestId
+      else
+        driver.setProxyStream id requestId (some {
+          stream with pending := bytes, offset := 0, upstreamPaused := true })
+    | some (.finish trailers) =>
+      if let some stream := client.proxyStreams[requestId]? then
+        driver.setProxyStream id requestId (some { stream with finish := some trailers })
+    | some .abort => driver.abortProxyStream id requestId
+
+/-- Offer at most one bounded body piece per stream per pass. A blocked HTTP/2
+    flow window or an HTTP/1 output acknowledgement leaves the slice owned by
+    this client. The upstream stays read-paused until that slice is accepted. -/
+private def Driver.pumpProxyStreams (driver : Driver) : IO Unit := do
+  let clients := (← driver.state.get).clients.toArray
+  for (id, snapshot) in clients do
+    if snapshot.retired || snapshot.closing then continue
+    for (requestId, _) in snapshot.proxyStreams.toArray do
+      let some client ← driver.client? id | continue
+      let some stream := client.proxyStreams[requestId]? | continue
+      if client.retired || client.closing then continue
+      let ceiling := min driver.config.maxOutputBytes 262144
+      let available := driver.config.maxOutputBytes - min client.outputBytes driver.config.maxOutputBytes
+      let pending := stream.pending.size - min stream.offset stream.pending.size
+      if pending > 0 then
+        if client.outputBytes >= ceiling || available <= 128 then continue
+        let count := min pending (min 16384 (available - 128))
+        if count == 0 then continue
+        let bytes := stream.pending.extract stream.offset (stream.offset + count)
+        match client.protocol with
+        | .http1 machine =>
+          if !machine.canStreamChunk requestId then continue
+          let nextOffset := stream.offset + count
+          let next := if nextOffset == stream.pending.size then
+            { stream with pending := ByteArray.empty, offset := 0 }
+            else { stream with offset := nextOffset }
+          driver.setProxyStream id requestId (some next)
+          driver.applyStep id (machine.streamChunk requestId bytes)
+        | .http2 machine =>
+          if requestId > 2147483647 then continue
+          match machine.tryStreamData requestId.toUInt32 bytes with
+          | .error _ => driver.abortProxyStream id requestId
+          | .ok none => pure ()
+          | .ok (some (consumed, step)) =>
+            let nextOffset := stream.offset + consumed
+            let next := if nextOffset == stream.pending.size then
+              { stream with pending := ByteArray.empty, offset := 0 }
+              else { stream with offset := nextOffset }
+            driver.setProxyStream id requestId (some next)
+            driver.applyH2Step id step
+        | _ => driver.abortProxyStream id requestId
+        continue
+      if let some trailers := stream.finish then
+        match client.protocol with
+        | .http1 machine =>
+          if !machine.canStreamChunk requestId then continue
+          let .ok decoded := Gateway.decodeReply stream.head ByteArray.empty trailers
+            | do driver.abortProxyStream id requestId; continue
+          let downstreamTrailers := decoded.options.trailers.filter
+            (fun field => stream.declared.contains field.name.toLower)
+          driver.setProxyStream id requestId none
+          driver.applyStep id (machine.endStream requestId downstreamTrailers)
+        | .http2 machine =>
+          if requestId > 2147483647 then continue
+          let .ok decoded := Gateway.decodeReply stream.head ByteArray.empty trailers
+            | do driver.abortProxyStream id requestId; continue
+          match machine.endResponseStream requestId.toUInt32 decoded.options.trailers with
+          | .ok step =>
+            driver.setProxyStream id requestId none
+            driver.applyH2Step id step
+          | .error _ => driver.abortProxyStream id requestId
+        | _ => driver.abortProxyStream id requestId
+        continue
+      if stream.upstreamPaused && client.outputBytes < ceiling then
+        let ready := match client.protocol with
+          | .http1 machine => machine.canStreamChunk requestId
+          | .http2 _ => true
+          | _ => false
+        if ready then
+          if let some gateway := driver.gateway then
+            driver.setProxyStream id requestId (some { stream with upstreamPaused := false })
+            driver.proxyOutcomes (← gateway.resume { downstream := id, requestId } (← driver.now))
 
 private def Driver.rawResult (driver : Driver) (id : Reactor.SocketId) (result : RawResult) : IO Unit := do
   if result.abortNow then driver.closeNow id; return
@@ -1629,8 +1921,21 @@ private def Driver.pollEvents (driver : Driver) (timeout : Int32) (admitting : B
   | .completions count =>
     driver.refresh
     let mut events := #[]
+    let mut inbound := #[]
     for index in [:count] do
       let native ← driver.reactor.event index.toUInt32
+      -- Drain every upstream completion before dispatching any downstream
+      -- request from this batch. An idle socket with unsolicited bytes is
+      -- discarded before a new request can check it out.
+      let consumed ← match driver.gateway with
+        | none => pure false
+        | some gateway => do
+          let (consumed, outcomes) ← gateway.onNative native (← driver.now)
+          driver.proxyOutcomes outcomes
+          pure consumed
+      if consumed then continue
+      inbound := inbound.push native
+    for native in inbound do
       if !admitting then
         if let .accepted socket := native then
           if ← socket.id.isLive driver.reactor then
@@ -1653,7 +1958,10 @@ private partial def Driver.loop (driver : Driver) : IO Unit := do
   driver.serveReloads
   driver.refresh
   driver.events (← driver.transport.poll)
+  if let some gateway := driver.gateway then
+    driver.proxyOutcomes (← gateway.pump (← driver.now))
   driver.pumpAll
+  driver.pumpProxyStreams
   let ready ← driver.hasWork
   let providerReady ← driver.transport.hasWork
   driver.pollEvents (if ready || providerReady then 0 else 100)
@@ -1673,7 +1981,10 @@ private def Driver.drain (driver : Driver) : IO Unit := do
   while active && (← Reactor.nowMs) < applicationCutoff do
     driver.refresh
     driver.events (← driver.transport.poll)
+    if let some gateway := driver.gateway then
+      driver.proxyOutcomes (← gateway.pump (← driver.now))
     driver.pumpAll
+    driver.pumpProxyStreams
     active := !(← driver.state.get).clients.isEmpty
     if active then
       let ready ← driver.hasWork
@@ -1743,7 +2054,8 @@ private def runWorker (resources : WithWorkerResources) (config : ReactorServerC
     let admission ← match config.admission with
       | some factory => some <$> factory workerId
       | none => pure none
-    let driver : Driver := { admission, reactor, group, config, handlers, transport, clientLimit, state, observer,
+    let gateway ← config.gateway.mapM (fun options => Gateway.Engine.new reactor options)
+    let driver : Driver := { admission, gateway, reactor, group, config, handlers, transport, clientLimit, state, observer,
                              resetErrno, control := workerId == 0, reloadSeen }
     try
       driver.loop
@@ -1751,8 +2063,10 @@ private def runWorker (resources : WithWorkerResources) (config : ReactorServerC
     finally
       let state ← driver.state.get
       let cleanup := state.clients.toArray.map fun (id, _) => driver.forget id
-      cleanupActions (cleanup.push (do
-        if let some observer := driver.observer then observer.lane.publish (← driver.state.get).counters))
+      let cleanup := cleanup.push (do
+        if let some observer := driver.observer then observer.lane.publish (← driver.state.get).counters)
+      let cleanup := cleanup.push (do if let some engine := gateway then engine.close)
+      cleanupActions cleanup
 
 /-- Run the optional local admin port on its own dedicated thread for the
     lifetime of the worker pool. It reads only published snapshots. -/
@@ -1815,9 +2129,11 @@ def serveWorkerFactory (resources : WithWorkerResources) (config : ReactorServer
       withAdmin config workers (some hub) <|
         withWorkerPool host port workers config.server.maxClients config.native
           (runWorker resources config (some hub))
+          ((config.gateway.map (·.pool.maxTotal)).getD 0)
   else
     withWorkerPool host port workers config.server.maxClients config.native
       (runWorker resources config none)
+      ((config.gateway.map (·.pool.maxTotal)).getD 0)
 
 /-- Attach a transport bracket while constructing callbacks on each owner. -/
 def serveFactoryWithTransport (provider : Transport.WithWorker)

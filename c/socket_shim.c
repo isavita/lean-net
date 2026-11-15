@@ -697,3 +697,4 @@ lean_object *shim_poll(b_lean_obj_arg entries, int32_t timeout_ms) {
 
 #endif /* POSIX compatibility shim */
 #include "reactor_ffi.h"
+#include "gateway_resolve.h"

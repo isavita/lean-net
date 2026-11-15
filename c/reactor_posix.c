@@ -69,7 +69,7 @@ typedef struct rn_conn {
     uint32_t head_write, tail_write;
     uint32_t next_closed;
     int close_error;
-    uint8_t state; /* 0 free, 1 fresh, 2 bound, 3 listener, 4 connected, 5 closing */
+    uint8_t state; /* 0 free, 1 fresh, 2 bound, 3 listener, 4 connected, 5 closing, 6 connecting */
     uint8_t interest;
     uint8_t paused;
     uint8_t eof;
@@ -399,6 +399,48 @@ int rn_socket_new(rn_reactor *r, uint64_t *out) {
     *out = rn_token(index, generation); return 0;
 }
 
+int rn_connect(rn_reactor *r, uint64_t token, const uint8_t *address,
+               uint32_t address_length, uint16_t port) {
+    if (!r || !address || (address_length != 4 && address_length != 16) || !port)
+        return -EINVAL;
+    rn_conn *c; int error = rn_conn_get(r, token, &c);
+    if (error) return error;
+    if (c->state != 1) return -EINVAL;
+    struct sockaddr_storage storage; memset(&storage, 0, sizeof(storage));
+    socklen_t length;
+    if (address_length == 4) {
+        struct sockaddr_in *v4 = (struct sockaddr_in *)&storage;
+        v4->sin_family = AF_INET; v4->sin_port = htons(port);
+        memcpy(&v4->sin_addr, address, 4); length = sizeof(*v4);
+    } else {
+        struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&storage;
+        v6->sin6_family = AF_INET6; v6->sin6_port = htons(port);
+        memcpy(&v6->sin6_addr, address, 16); length = sizeof(*v6);
+    }
+    int fd = socket(address_length == 4 ? AF_INET : AF_INET6, SOCK_STREAM, 0);
+    if (fd < 0) return -errno;
+    error = rn_nonblocking(fd);
+    if (!error) error = rn_sigpipe(fd);
+    int one = 1;
+    if (!error && setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) < 0)
+        error = -errno;
+    if (!error && connect(fd, (struct sockaddr *)&storage, length) < 0 &&
+        errno != EINPROGRESS && errno != EWOULDBLOCK && errno != EINTR)
+        error = -errno;
+    if (error) {
+        int closed = rn_close_fd(fd);
+        return closed ? closed : error;
+    }
+    c->fd = fd; c->state = 6;
+    error = rn_interest(r, rn_index(token), 2);
+    if (error) {
+        int closed = rn_close_fd(fd);
+        c->fd = -1; c->state = 1; c->interest = 0;
+        return closed ? closed : error;
+    }
+    return 0;
+}
+
 static int rn_format_peer(const struct sockaddr_storage *address, char *out, size_t capacity) {
     if (address->ss_family == AF_INET) {
         const struct sockaddr_in *v4 = (const struct sockaddr_in *)address;
@@ -713,6 +755,27 @@ static int rn_adopt_accepts(rn_reactor *r) {
 static int rn_accept_exhausted(int e) {
     return e == EMFILE || e == ENFILE || e == ENOBUFS || e == ENOMEM;
 }
+static int rn_connect_ready(rn_reactor *r, uint32_t index) {
+    rn_conn *c = &r->connections[index];
+    uint64_t token = rn_token(index, c->generation);
+    int value = 0; socklen_t length = sizeof(value);
+    if (getsockopt(c->fd, SOL_SOCKET, SO_ERROR, &value, &length) < 0)
+        value = errno;
+    else if (length != sizeof(value)) value = EIO;
+    if (value) {
+        int emitted = rn_emit(r, RN_ERROR, token, 0, 0, 0, 0, -value, 0);
+        if (emitted) return emitted;
+        return rn_close_connection_impl(r, token);
+    }
+    int error = rn_interest(r, index, 1);
+    if (error) {
+        int emitted = rn_emit(r, RN_ERROR, token, 0, 0, 0, 0, error, RN_SETUP_ERROR);
+        if (emitted) return emitted;
+        return rn_close_connection_impl(r, token);
+    }
+    c->state = 4;
+    return rn_emit(r, RN_CONNECT_COMPLETE, token, 0, 0, 0, 0, 0, 0);
+}
 static int rn_accept_ready(rn_reactor *r, uint32_t index) {
     rn_conn *listener = &r->connections[index];
     uint64_t listener_token = rn_token(index, listener->generation);
@@ -1012,7 +1075,11 @@ static void rn_due_timers(rn_reactor *r, uint64_t now) {
             if (t->deadline_tick <= target) {
                 if (r->event_count == r->config.max_events) { r->timer_backlog = 1; r->tick = target; return; }
                 uint32_t kind = index % RN_TIMER_KINDS;
-                (void)rn_emit(r, RN_TIMER, t->connection, kind, 0, 0, 0, (int64_t)t->deadline_ms, 0);
+                uint32_t ci = rn_index(t->connection);
+                uint32_t flags = ci < r->config.max_connections &&
+                    r->connections[ci].state == 6 ? RN_CONNECTING_TIMER : 0;
+                (void)rn_emit(r, RN_TIMER, t->connection, kind, 0, 0, 0,
+                              (int64_t)t->deadline_ms, flags);
                 rn_timer_remove(r, index);
             }
             index = next;
@@ -1062,7 +1129,7 @@ static void rn_compact_canceled_events(rn_reactor *r) {
     uint32_t written = 0;
     for (uint32_t i = 0; i < r->event_count; ++i) {
         rn_event event = r->events[i];
-        if (event.kind == RN_ACCEPTED || event.kind == RN_READ ||
+        if (event.kind == RN_ACCEPTED || event.kind == RN_CONNECT_COMPLETE || event.kind == RN_READ ||
             event.kind == RN_EOF || event.kind == RN_TIMER) {
             rn_conn *c;
             if (rn_conn_get(r, event.connection, &c) != 0) {
@@ -1160,6 +1227,11 @@ int rn_step(rn_reactor *r, int timeout_ms) {
         rn_conn *c;
         if (rn_conn_get(r, token, &c)) continue; /* stale queued readiness after close */
         uint32_t index = rn_index(token);
+        if (c->state == 6 && (failed || readable || writable)) {
+            error = rn_connect_ready(r, index);
+            if (error) return rn_step_failed(r, error);
+            continue;
+        }
         if (failed) {
             int e = 0; socklen_t length = sizeof(e);
             if (getsockopt(c->fd, SOL_SOCKET, SO_ERROR, &e, &length) < 0) e = errno;

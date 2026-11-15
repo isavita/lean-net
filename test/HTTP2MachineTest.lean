@@ -86,7 +86,22 @@ def main : IO Unit := do
   let result := (← boot).feedSlice input 0 input.size
   let output ← frames (writes result)
   check (requests result == #[3] && closes result == 0 && result.state.wantsInput &&
-    output.any (fun f => f.kind == 3 && f.streamId == 1) && !output.any (fun f => f.kind == 7)) "stream isolation"
+    output.any (fun f => f.kind == 3 && f.streamId == 1) && !output.any (fun f => f.kind == 7) &&
+    result.actions.any (fun | .responseAborted 1 .error => true | _ => false))
+    "stream isolation and local reset cancellation"
+
+  -- A discarded DATA frame can replenish connection credit before emitting
+  -- RST_STREAM in the same byte part. Cancellation must scan past that frame.
+  let limited : Connection.Config := { maxRequestBodyBytes := 1, maxBufferedRequestBytes := 1 }
+  let state ← boot limited
+  let opening ← request 1 #[] false
+  let opened := state.feedSlice opening 0 opening.size
+  let data ← wire ⟨0, 0, 1, ByteArray.mk (Array.replicate 16384 65)⟩
+  let discarded := opened.state.feedSlice data 0 data.size
+  let output ← frames (writes discarded)
+  check (output.size == 2 && output[0]!.kind == 8 && output[1]!.kind == 3 &&
+    discarded.actions.any (fun | .responseAborted 1 .error => true | _ => false))
+    "WINDOW_UPDATE before local RST suppressed cancellation"
 
   let bad := ByteArray.mk #[0,0,7,6,0,0,0,0,0, 0,0,0,0,0,0,0]
   let result := (← boot).feedSlice bad 0 bad.size

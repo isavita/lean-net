@@ -27,6 +27,8 @@ structure Options where
   websocketOrigin : Option String := none
   /-- TLS only: PEM CA bundle used to verify client certificates (mTLS). -/
   clientCA : Option System.FilePath := none
+  /-- TLS executable only: PEM CA roots for outbound HTTPS backends. -/
+  upstreamCA : Option System.FilePath := none
   requireClientCert : Bool := false
   /-- TLS only: DER OCSP response stapled for the default certificate. -/
   ocspResponse : Option System.FilePath := none
@@ -67,6 +69,12 @@ private def collect (args : List String) (options : Options) : Except String Opt
     else if path.isEmpty || path.startsWith "--" then .error "--client-ca requires a PEM file"
     else collect rest { options with clientCA := some (System.FilePath.mk path) }
   | "--client-ca" :: [] => .error "--client-ca requires a PEM file"
+  | "--upstream-ca" :: path :: rest =>
+    if options.upstreamCA.isSome then .error "--upstream-ca may be supplied once"
+    else if path.isEmpty || path.startsWith "--" || path.any (· == '\x00') then
+      .error "--upstream-ca requires a PEM file"
+    else collect rest { options with upstreamCA := some (System.FilePath.mk path) }
+  | "--upstream-ca" :: [] => .error "--upstream-ca requires a PEM file"
   | "--ocsp-response" :: path :: rest =>
     if options.ocspResponse.isSome then .error "--ocsp-response may be supplied once"
     else if path.isEmpty || path.startsWith "--" then .error "--ocsp-response requires a DER file"
@@ -163,6 +171,8 @@ def parse (args : List String) : Except String Options := do
     throw "--http2-ping-timeout-ms requires --http2-ping-ms"
   if options.requireClientCert && options.clientCA.isNone then
     throw "--require-client-cert requires --client-ca"
+  if options.upstreamCA.isSome && options.gateFile.isNone then
+    throw "--upstream-ca requires --gate"
   return options
 
 /-- Listening address chosen by `--host`, else the caller's default. -/
@@ -223,14 +233,15 @@ def Options.withGate (options : Options) (http : ReactorServerConfig)
     let metrics := http.extraMetrics
     use { http with
       admission := some live.factory
+      gateway := some {}
       onReload := do previous; live.reloadFile path
       extraMetrics := do return (← metrics) ++ (← live.metrics) }
 
 def Options.serve (options : Options) (host : String := "127.0.0.1")
     (port : UInt16 := 8080) : IO Unit := do
   if options.reloadCertsMs.isSome then throw (IO.userError "--reload-certs-ms requires the TLS server")
-  if options.clientCA.isSome || options.ocspResponse.isSome then
-    throw (IO.userError "--client-ca, --require-client-cert and --ocsp-response require the TLS server")
+  if options.clientCA.isSome || options.ocspResponse.isSome || options.upstreamCA.isSome then
+    throw (IO.userError "--client-ca, --require-client-cert, --upstream-ca and --ocsp-response require the TLS server")
   let http ← options.httpConfig
   options.withGate http fun http => do
   if let some root := options.staticRoot then

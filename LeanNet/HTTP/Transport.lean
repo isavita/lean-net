@@ -110,6 +110,9 @@ private def plainEndpoint (socket : Reactor.Socket .connected) : Endpoint := {
 
 private def plainEvent : Reactor.Event → IO (Array Event)
   | .accepted socket => pure #[.ready (plainEndpoint socket) .detect]
+  | .connected socket => do
+    let _ ← socket.close (by decide)
+    throw (IO.userError "inbound HTTP transport received an outbound connection")
   | .read socket buffer offset length => pure #[.read socket.id buffer offset length none]
   | .written id operation count => pure #[.written id operation count]
   | .eof socket => pure #[.eof socket.id]
@@ -122,6 +125,7 @@ private def plainEvent : Reactor.Event → IO (Array Event)
     throw (IO.userError "cleartext provider received ciphertext")
   | .wireEOF _ | .wireTimer .. =>
     throw (IO.userError "cleartext provider received a TLS connection event")
+  | .connectTimer .. => throw (IO.userError "cleartext provider received a connect timer")
 
 /-- The cleartext provider keeps all buffer and write ownership in the reactor. -/
 def plain : Worker := { event := plainEvent, poll := pure #[], hasWork := pure false }

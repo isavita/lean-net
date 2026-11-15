@@ -169,7 +169,8 @@ def validateRequestHead (fields : Array HPACK.Header) (maxBodyBytes : Nat := 104
   return { method := methodText, scheme := schemeBytes, authority := authorityBytes, target := pathBytes, headers := headers, contentLength := length, protocol }
 
 /-- Validate trailing fields without merging them into the request headers. -/
-def validateTrailers (fields : Array HPACK.Header) : Except String (Array HTTP1.Header) := do
+private def checkTrailers (fields : Array HPACK.Header) (forbidden : String → Bool) :
+    Except String (Array HTTP1.Header) := do
   let mut result : Array HTTP1.Header := #[]
   for field in fields do
     let name := field.name.toList
@@ -177,11 +178,20 @@ def validateTrailers (fields : Array HPACK.Header) : Except String (Array HTTP1.
         name.any (fun c => c.toNat >= 65 && c.toNat <= 90) || !validValue field.value then
       throw "invalid HTTP/2 trailer field"
     let some text := String.fromUTF8? field.name | throw "invalid trailer name"
-    if ["connection", "proxy-connection", "keep-alive", "upgrade", "transfer-encoding",
-        "content-length", "host", "trailer", "te"].contains text then
+    if forbidden text then
       throw "forbidden HTTP/2 trailer field"
     result := result.push { name := text, value := field.value }
   return result
+
+def validateTrailers (fields : Array HPACK.Header) : Except String (Array HTTP1.Header) :=
+  checkTrailers fields HTTP1.forbiddenTrailerName
+
+/-- Responses may carry credentials as trailers; their names are marked
+    sensitive by the encoder. Framing and connection control remain forbidden. -/
+def validateResponseTrailers (fields : Array HPACK.Header) : Except String (Array HTTP1.Header) :=
+  checkTrailers fields fun name =>
+    ["connection", "proxy-connection", "keep-alive", "upgrade", "transfer-encoding",
+     "content-length", "host", "trailer", "te"].contains name
 
 /-- Convert a completed HTTP/2 request to the shared application router type. -/
 def RequestHead.complete (head : RequestHead) (body : ByteArray) (trailers : Array HTTP1.Header := #[]) : Except String HTTP1.Request := do

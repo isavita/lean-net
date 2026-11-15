@@ -65,6 +65,10 @@ private structure Exchange where
   bodySize : Nat := 0
   trailers : Array HTTP1.Header := #[]
   pending : Option PendingResponse := none
+  /-- A gateway response committed HEADERS without buffering its body. DATA
+      is admitted one bounded frame at a time under peer flow credit. -/
+  streaming : Bool := false
+  streamedBytes : Nat := 0
   delivered : Bool := false
   startedAt : Nat := 0
   priority : Priority := {}
@@ -246,6 +250,13 @@ def Connection.goAway (connection : Connection) (error : ProtocolError) : ByteAr
 
 private def findStream (connection : Connection) (id : UInt32) : Option Exchange :=
   connection.streams.find? (fun entry => entry.stream.id == id)
+
+/-- True after a head decision only while its exchange can still produce a
+    request or receive its response. Immediate 413/417 refusals remove the
+    exchange, so owners must not retain a dispatch callback for them. -/
+def Connection.hasAdmittedStream (connection : Connection) (id : UInt32) : Bool :=
+  connection.failure.isNone &&
+    (findStream connection id).any (fun entry => entry.head.isSome && !entry.awaitingAdmission)
 /-- Metadata is borrowed from the bounded active exchange table. Callers capture
     it before queue/drain transitions can close and remove the exchange. -/
 def Connection.outputMetadata (connection : Connection) (id : UInt32) : Option (HTTP1.RequestHead × Nat) := do
@@ -271,7 +282,7 @@ private def removeStream (connection : Connection) (id : UInt32) : Connection :=
     read. Routers should dispatch only while this predicate remains true. -/
 def Connection.canRespond (connection : Connection) (id : UInt32) : Bool :=
   connection.failure.isNone && match findStream connection id with
-  | some entry => entry.delivered && entry.pending.isNone
+  | some entry => entry.delivered && entry.pending.isNone && !entry.streaming
   | none => false
 
 private def markReset (connection : Connection) (id : UInt32) : Except ProtocolError Connection := do
@@ -915,7 +926,7 @@ private def checkPeerHeaders (connection : Connection) (id : UInt32) (fields : A
 private def encodedTrailers (connection : Connection) (id : UInt32) (trailers : Array HTTP1.Header) :
     Except ProtocolError (Array HPACK.Header) := do
   let fields := trailers.map (fun header => ({ name := header.name.toLower.toUTF8, value := header.value, sensitive := sensitiveName header.name.toLower } : HPACK.Header))
-  match validateTrailers fields with
+  match validateResponseTrailers fields with
   | .error message => throw (streamError id .internalError message)
   | .ok _ => pure ()
   checkPeerHeaders connection id fields
@@ -928,7 +939,8 @@ private def encodedTrailers (connection : Connection) (id : UInt32) (trailers : 
 def Connection.informational (connection : Connection) (id : UInt32) (response : HTTP1.Response) :
     Except ProtocolError (Connection × ByteArray) := do
   let some entry := findStream connection id | throw (streamError id .streamClosed "response stream is closed")
-  if !entry.delivered || entry.pending.isSome || response.status < 100 || response.status >= 200 ||
+  if !entry.delivered || entry.pending.isSome || entry.streaming ||
+      response.status < 100 || response.status >= 200 ||
       response.status == 101 || !response.body.isEmpty then
     throw (streamError id .internalError "invalid informational HTTP/2 response")
   match ({ response with status := 200 } : HTTP1.Response).validate "GET" with
@@ -944,7 +956,8 @@ def Connection.informational (connection : Connection) (id : UInt32) (response :
 private def queueResponseBody (connection : Connection) (id : UInt32) (response : HTTP1.Response)
     (body : ResponseBody) (trailers : Array HTTP1.Header) : Except ProtocolError (Connection × ByteArray) := do
   let some entry := findStream connection id | throw (streamError id .streamClosed "response stream is closed")
-  if !entry.delivered || entry.pending.isSome then throw (streamError id .protocolError "response is not expected")
+  if !entry.delivered || entry.pending.isSome || entry.streaming then
+    throw (streamError id .protocolError "response is not expected")
   let some head := entry.head | throw (streamError id .internalError "missing request head")
   if connection.failure.isSome then throw (streamError id .streamClosed "connection failed")
   match body with
@@ -988,6 +1001,77 @@ def Connection.queueResponse (connection : Connection) (id : UInt32) (response :
 def Connection.queueFileResponse (connection : Connection) (id : UInt32) (response : HTTP1.Response)
     (region : FileRegion) (trailers : Array HTTP1.Header := #[]) : Except ProtocolError (Connection × ByteArray) :=
   queueResponseBody connection id response (.file region) trailers
+
+/-- Commit a final response head without retaining the body. A normal response
+omits Content-Length and remains open for bounded DATA. HEAD and bodyless
+statuses finish in their HEADERS frame. -/
+def Connection.beginResponseStream (connection : Connection) (id : UInt32)
+    (response : HTTP1.Response) : Except ProtocolError (Connection × ByteArray) := do
+  let some entry := findStream connection id | throw (streamError id .streamClosed "response stream is closed")
+  if !entry.delivered || entry.pending.isSome || entry.streaming || entry.tunnel ||
+      connection.failure.isSome then
+    throw (streamError id .protocolError "streaming response is not expected")
+  let some head := entry.head | throw (streamError id .internalError "missing request head")
+  if !response.body.isEmpty then throw (streamError id .internalError "streaming head must not contain a body")
+  match response.validate head.method with
+  | .ok _ => pure ()
+  | .error message => throw (streamError id .internalError message)
+  let bodyForbidden := head.method == "HEAD" || response.status == 204 ||
+    response.status == 205 || response.status == 304
+  let mut fields ← responseFields connection id response
+  if response.status == 205 then
+    fields := fields.push { name := "content-length".toUTF8, value := "0".toUTF8 }
+  checkPeerHeaders connection id fields
+  let (encoder, headers) ← encodedHeaders connection.encoder fields id bodyForbidden connection.peerFrameSize
+  if headers.size > connection.config.maxOutputBatchBytes then
+    throw (streamError id .internalError "streaming response head exceeds output budget")
+  let (stream, _) ← entry.stream.apply .server (.headers .outbound bodyForbidden)
+  let next := { connection with encoder }
+  if bodyForbidden then return (removeStream next id, headers)
+  return (putStream next { entry with stream, streaming := true, streamedBytes := 0 }, headers)
+
+/-- Emit at most one DATA frame. The caller retains `bytes.drop consumed` and
+retries it after WINDOW_UPDATE. `none` is ordinary flow-control backpressure
+and leaves the connection unchanged. A gateway should offer at most 64 KiB. -/
+def Connection.tryStreamData (connection : Connection) (id : UInt32) (bytes : ByteArray) :
+    Except ProtocolError (Option (Connection × ByteArray × Nat)) := do
+  let some entry := findStream connection id | throw (streamError id .streamClosed "response stream is closed")
+  if !entry.streaming || entry.pending.isSome || connection.failure.isSome ||
+      entry.stream.state == .halfClosedLocal || entry.stream.state == .closed ||
+      bytes.isEmpty || bytes.size > 65536 then
+    throw (streamError id .protocolError "invalid streaming response DATA")
+  if entry.streamedBytes + bytes.size > connection.config.maxResponseBodyBytes then
+    throw (streamError id .internalError "streamed response exceeds body limit")
+  let count := min bytes.size (min 16384 (min connection.peerFrameSize
+    (min (connection.config.maxOutputBatchBytes - 9)
+      (min connection.flow.sendWindow.toNat entry.stream.sendWindow.toNat))))
+  if count == 0 then return none
+  let some (flow, stream) := connection.flow.sendData entry.stream count false | return none
+  let (stream, _) ← stream.apply .server (.data .outbound false)
+  let output ← wire ⟨0, 0, id, bytes.extract 0 count⟩
+  return some (putStream { connection with flow }
+    { entry with stream, streamedBytes := entry.streamedBytes + count }, output, count)
+
+/-- Finish the streamed response after the final body byte has been handed to
+the downstream writer. An empty final DATA frame uses no flow credit; optional
+trailers are encoded as terminal HEADERS. -/
+def Connection.endResponseStream (connection : Connection) (id : UInt32)
+    (trailers : Array HTTP1.Header := #[]) : Except ProtocolError (Connection × ByteArray) := do
+  let some entry := findStream connection id | throw (streamError id .streamClosed "response stream is closed")
+  if !entry.streaming || entry.pending.isSome || connection.failure.isSome ||
+      entry.stream.state == .halfClosedLocal || entry.stream.state == .closed then
+    throw (streamError id .protocolError "streaming response is not active")
+  if trailers.isEmpty then
+    let (stream, _) ← entry.stream.apply .server (.data .outbound true)
+    let _ := stream
+    return (removeStream connection id, ← wire ⟨0, 1, id, ByteArray.empty⟩)
+  let fields ← encodedTrailers connection id trailers
+  let (encoder, output) ← encodedHeaders connection.encoder fields id true connection.peerFrameSize
+  if output.size > connection.config.maxOutputBatchBytes then
+    throw (streamError id .internalError "streaming trailers exceed output budget")
+  let (stream, _) ← entry.stream.apply .server (.headers .outbound true)
+  let _ := stream
+  return (removeStream { connection with encoder } id, output)
 
 /-- Commit an RFC8441 extended CONNECT response without END_STREAM. -/
 def Connection.acceptTunnel (connection : Connection) (id : UInt32)
@@ -1214,6 +1298,7 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
       connection := { connection with parser := FrameParser.new connection.config.maxFrameSize }
       let priorTunnel := (findStream connection frame.streamId).any (·.tunnel)
       let priorAccepted := (findStream connection frame.streamId).any (·.tunnelAccepted)
+      let priorRequest := (findStream connection frame.streamId).any (·.head.isSome)
       let previousMetadata := if connection.config.trackOutput && (frame.kind == 1 || frame.kind == 9) then
         connection.outputMetadata frame.streamId else none
       match handleFrame connection frame with
@@ -1233,10 +1318,16 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
           let start := if flag frame.flags 8 then 1 else 0
           tunnelData := tunnelData.push { streamId := frame.streamId, data := frame.payload.extract start (frame.payload.size - padding), endStream := flag frame.flags 1 }
         if frame.kind == 3 && priorTunnel then tunnelResets := tunnelResets.push frame.streamId
+        -- A peer reset is a lifecycle event even without output observation.
+        -- Closed/reset streams cannot issue a second cancellation.
+        -- Output tracking can retain a physical write ticket after the pure
+        -- exchange has closed; a peer reset still cancels that ticket.
+        if frame.kind == 3 && (priorRequest || connection.config.trackOutput) &&
+            !peerResets.contains frame.streamId then
+          peerResets := peerResets.push frame.streamId
         if connection.config.pingIntervalMs != 0 && frame.kind == 6 && flag frame.flags 1 then
           pingAcks := pingAcks.push (readPingNonce frame.payload)
         if connection.config.trackOutput then
-          if frame.kind == 3 then peerResets := peerResets.push frame.streamId
           if (frame.kind == 1 || frame.kind == 9) && previousMetadata.isNone then
             if let some (head, startedAt) := connection.outputMetadata frame.streamId then
               started := started.push { streamId := frame.streamId, head, startedAt }
@@ -1250,7 +1341,11 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
         if !tunnelData.isEmpty || events.any (fun e => e.tunnelHead.isSome || (e.gateHead.isSome && e.gateOpen)) then break
     if outputSize > connection.config.maxOutputBatchBytes then
       return failedStep connection (connError .enhanceYourCalm "connection output batch exceeded") consumed output requests peerResets started pingAcks
-  return { connection, consumed, output, requests := requests.filter (fun event => connection.canRespond event.streamId), peerResets, started, pingAcks, tunnelData, tunnelResets, heads }
+  -- A later frame in this read may reset a bodyless stream before the owner
+  -- can decide its head. Do not queue admission for a stream already gone.
+  let validHeads := heads.filter fun event =>
+    (findStream connection event.streamId).any (·.awaitingAdmission)
+  return { connection, consumed, output, requests := requests.filter (fun event => connection.canRespond event.streamId), peerResets, started, pingAcks, tunnelData, tunnelResets, heads := validHeads }
 
 /-- Mark peer EOF. Partial framing is fatal; incomplete requests are canceled, while accepted requests and queued responses can finish draining. -/
 def Connection.finish (connection : Connection) : Connection.Step := Id.run do

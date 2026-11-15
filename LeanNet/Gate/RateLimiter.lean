@@ -45,11 +45,19 @@ structure Handle where
 def withLimiter (spec : Spec) (workers : Nat) (use : Handle → IO α) (keyedSlots : Nat := 65536)
     (routeCapacity : Option Nat := none) : IO α := do
   if spec.rates.isEmpty then throw (IO.userError "rate limiter needs at least one ratelimit rule")
+  -- These values cross a UInt32 FFI boundary. Check them before conversion so
+  -- an oversized configuration cannot wrap into a smaller, permissive limit.
+  if workers == 0 || workers > 256 then
+    throw (IO.userError "rate limiter workers must be between 1 and 256")
+  if keyedSlots > 16777216 then
+    throw (IO.userError "rate limiter keyed slots exceed the native maximum")
   let compiled ← match Policy.compile spec with
     | .ok policy => pure policy.routeCount
     | .error error => throw (IO.userError (toString error))
   -- Route-keyed rules reserve one bucket per route, plus headroom for reloads.
   let routeCount := max compiled (routeCapacity.getD compiled)
+  if routeCount >= 65536 then
+    throw (IO.userError "rate limiter route capacity exceeds 65535")
   let raw ← ffiNew (encodeRules spec.rates routeCount) workers.toUInt32 keyedSlots.toUInt32
     (← IO.getRandomBytes 16) (← IO.monoMsNow).toUInt64
   let code := Errno.decode raw

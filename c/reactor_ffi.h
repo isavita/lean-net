@@ -60,6 +60,14 @@ lean_object *shim_reactor_socket_new(uint64_t handle) {
     int rc = rn_socket_new(rn_handle(handle), &token);
     return rn_io_number(rc < 0 ? rc : (int64_t)token);
 }
+lean_object *shim_reactor_connect(uint64_t handle, uint64_t token,
+                                 b_lean_obj_arg address, uint16_t port) {
+    if (handle == 0 || port == 0) return rn_io_number(-EINVAL);
+    size_t length = lean_sarray_size((lean_object *)address);
+    if (length != 4 && length != 16) return rn_io_number(-EINVAL);
+    return rn_io_number(rn_connect(rn_handle(handle), token,
+        lean_sarray_cptr((lean_object *)address), (uint32_t)length, port));
+}
 lean_object *shim_reactor_bind(uint64_t handle, uint64_t token, b_lean_obj_arg host, uint16_t port, uint8_t reuse) {
     if (handle == 0 || reuse > 1) return rn_io_number(-EINVAL);
     return rn_io_number(rn_bind(rn_handle(handle), token, lean_string_cstr(host), port, reuse));

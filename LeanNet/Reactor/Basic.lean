@@ -27,6 +27,12 @@ structure Socket (state : SocketState) where
   private reactor : Reactor
   private token : UInt64
 
+/-- Pending outbound connect. It has no plaintext or TLS write capability. -/
+structure Connecting where
+  private mk ::
+  private reactor : Reactor
+  private token : UInt64
+
 /-- A non-actionable, reactor-scoped identity for completion accounting. -/
 structure SocketId where
   private mk ::
@@ -35,6 +41,9 @@ structure SocketId where
   deriving BEq, Hashable
 
 def Socket.id (socket : Socket state) : SocketId := ⟨socket.reactor.handle, socket.token⟩
+
+def Connecting.id (connecting : Connecting) : SocketId :=
+  ⟨connecting.reactor.handle, connecting.token⟩
 
 /-- A reactor-owned receive buffer. Retained ByteArray views prevent reuse. -/
 structure Buffer where
@@ -170,6 +179,40 @@ def Socket.close (socket : Socket state) (_open : state ≠ .closed) : IO (Socke
   ensureAlive socket.reactor
   checkedZero "reactor close" (← FFI.Reactor.close socket.reactor.handle socket.token)
   return ⟨socket.reactor, socket.token⟩
+
+/-- The address is a 4-byte IPv4 or 16-byte IPv6 network-order IP. Resolve
+    hostnames outside the reactor thread. Initiation failure retires the fresh
+    slot; asynchronous failure arrives as `.error` then `.closed`. -/
+def Socket.startConnect (socket : Socket .fresh) (address : ByteArray)
+    (port : UInt16) : IO Connecting := do
+  ensureAlive socket.reactor
+  if (address.size != 4 && address.size != 16) || port == 0 then
+    let _ ← socket.close (by decide)
+    throw (IO.userError "outbound address must be a 4- or 16-byte IP and port nonzero")
+  let raw ← FFI.Reactor.connect socket.reactor.handle socket.token address port
+  let result := LeanNet.Errno.decode raw
+  if result < 0 then
+    let _ ← socket.close (by decide)
+    throw (← LeanNet.Errno.error "reactor connect" result)
+  checkedZero "reactor connect" raw
+  return ⟨socket.reactor, socket.token⟩
+
+/-- Cancel pending connect; later native completions cannot reuse its token. -/
+def Connecting.close (connecting : Connecting) : IO Unit := do
+  ensureAlive connecting.reactor
+  checkedZero "reactor cancel connect"
+    (← FFI.Reactor.close connecting.reactor.handle connecting.token)
+
+def Connecting.armTimer (connecting : Connecting) (kind : UInt32)
+    (deadlineMs : UInt64) : IO Unit := do
+  ensureAlive connecting.reactor
+  checkedZero "reactor connect timer"
+    (← FFI.Reactor.armTimer connecting.reactor.handle connecting.token kind deadlineMs)
+
+def Connecting.cancelTimer (connecting : Connecting) (kind : UInt32) : IO Unit := do
+  ensureAlive connecting.reactor
+  checkedZero "reactor cancel connect timer"
+    (← FFI.Reactor.cancelTimer connecting.reactor.handle connecting.token kind)
 
 def Buffer.view (buffer : Buffer) : IO ByteArray := do
   ensureAlive buffer.reactor
@@ -384,6 +427,7 @@ def Socket.cancelTimer (socket : Socket .connected) (kind : UInt32) : IO Unit :=
 
 inductive Event where
   | accepted (socket : Socket .connected)
+  | connected (socket : Socket .connected)
   | read (socket : Socket .connected) (buffer : Buffer) (offset length : UInt32)
   | written (socket : SocketId) (operation : UInt64) (count : Nat)
   | eof (socket : Socket .connected)
@@ -394,6 +438,7 @@ inductive Event where
   | wireRead (socket : SocketId) (buffer : Buffer) (offset length : UInt32)
   | wireEOF (socket : SocketId)
   | wireTimer (socket : SocketId) (kind : UInt32)
+  | connectTimer (socket : SocketId) (kind : UInt32)
 
 inductive PollResult where
   | interrupted
@@ -426,10 +471,12 @@ def Reactor.event (reactor : Reactor) (index : UInt32) : IO Event := do
     if (event.flags &&& 8) != 0 then return .wireEOF ⟨reactor.handle, event.connection⟩
     return .eof ⟨reactor, event.connection⟩
   | 5 =>
+    if (event.flags &&& 16) != 0 then return .connectTimer ⟨reactor.handle, event.connection⟩ event.operation.toUInt32
     if (event.flags &&& 8) != 0 then return .wireTimer ⟨reactor.handle, event.connection⟩ event.operation.toUInt32
     return .timer ⟨reactor, event.connection⟩ event.operation.toUInt32
   | 6 => return .closed ⟨reactor, event.connection⟩
   | 8 => return .wake
+  | 9 => return .connected ⟨reactor, event.connection⟩
   | _ => throw (IO.userError "reactor returned an invalid completion kind")
 
 /-- Setup-time reactor collection; each later worker owns one member. -/
