@@ -45,7 +45,9 @@ class AbruptCloseServer(TLSServer):
                         break
                     request.extend(data)
                 secure.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\npartial")
-                os.close(secure.detach())
+                # A detached socket is a Winsock handle on Windows, which
+                # os.close() cannot close; use the cross-platform socket API.
+                socket.close(secure.detach())
             except (OSError, ssl.SSLError):
                 conn.close()
 
