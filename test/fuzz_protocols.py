@@ -21,6 +21,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "test/ProtocolFuzz.lean"
+RUNTIME_SOURCE = ROOT / 'test/fuzz_runtime.c'
+BOOTSTRAP_MARKER = 'FUZZ_RUNTIME_INIT thread_stack_bytes=67108864 phase=before_module_initialization'
 
 
 def stop(process):
@@ -108,10 +110,15 @@ def main():
               "linux_main_stack_soft_bytes": stack_bytes if sys.platform == 'linux' else None,
               "linux_main_stack_hard_limit": stack_hard,
               "linux_startup_resource_samples": [], "linux_startup_sample_limit": 32,
-              "lean_runtime_resource_note": "The pure fuzzer runs serially on its existing process thread. Linux sets a lazy 64 MiB main-stack soft limit under the existing hard limit, preserving the unchanged 2 GiB address-space cap. Any lazily created Lean task worker is limited to one and a 64 MiB stack.",
-              "lean_runtime_investigation_note": "The earlier pool-stack diagnosis was not established: v4.35 task-manager construction is lazy and does not preallocate worker stacks. Startup samples record actual VA/RSS/thread counts and largest mappings; no mandatory allocator VA baseline or physical-memory budget increase is assumed.",
+              "fuzz_runtime_source_sha256": hashlib.sha256(RUNTIME_SOURCE.read_bytes()).hexdigest(),
+              "early_runtime_bootstrap": 'required_fuzz_only_static_object' if not args.interpret else 'unavailable_in_explicit_interpreter_mode',
+              "ci_acceptance_eligible": not args.interpret,
+              "lean_runtime_resource_note": "Only the compiled fuzzer links a static constructor that sets Lean thread stacks to 64 MiB before generated module initialization. The serial main runs on its existing process thread; Linux also sets its lazy stack soft limit to 64 MiB within the existing hard limit. The 2 GiB Linux address-space cap is unchanged. No server or shared native archive links this constructor.",
+              "lean_runtime_investigation_note": "Pinned v4.35 initializes its libuv lthread during module initialization, before lean_run_main reads stack environment variables. Earlier eager task-pool/mandatory allocator-overhead hypotheses were not established; the task manager is lazy. Linux startup samples retain actual VA/RSS/thread counts and largest mappings. Interpreter mode cannot use the fuzz-only static bootstrap and is not CI acceptance.",
               "lean_runtime_sources": ['https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/object.cpp',
-                                       'https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/thread.cpp'],
+                                       'https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/thread.cpp',
+                                       'https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/init_module.cpp',
+                                       'https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/libuv.cpp'],
               "driver_sha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(),
               "compiled_binary_sha256": None if args.interpret else hashlib.sha256(args.binary.read_bytes()).hexdigest(),
               "execution_mode": "explicit_interpreter" if args.interpret else "compiled", "passed": False}
@@ -148,11 +155,16 @@ def main():
                 stop(process)
             report["exit_code"] = process.returncode
         text = log_path.read_text(errors="replace")
+        bootstrap_at, start_at = text.find(BOOTSTRAP_MARKER), text.find('FUZZ_START ')
+        report['runtime_bootstrap_marker_seen'] = bootstrap_at >= 0
+        report['runtime_bootstrap_precedes_fuzz_start'] = 0 <= bootstrap_at < start_at
         matches = re.findall(r"FUZZ_CASE index=(\d+) seed=(\d+)", text)
         report["last_case"] = {"index": int(matches[-1][0]), "seed": int(matches[-1][1])} if matches else None
         success = f"FUZZ_OK seed={seed} cases={cases} max_input_bytes={maximum} "
         if process.returncode or success not in text or re.search(r"panic|out of memory|stack overflow|FUZZ_FAILURE", text, re.I):
             raise RuntimeError("fuzz failed; inspect fuzz.log and last_case for exact reproduction")
+        if not args.interpret and not report['runtime_bootstrap_precedes_fuzz_start']:
+            raise RuntimeError('compiled fuzzer requires its early runtime bootstrap marker before FUZZ_START')
         report["passed"] = True
     except BaseException as error:
         failure = error

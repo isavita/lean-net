@@ -89,6 +89,17 @@ lean_exe «lean-net-static-fixture» where
 
 lean_exe «lean-net-protocol-fuzz» where
   root := `test.ProtocolFuzz
+  moreLinkObjs := #[`@/«lean-net-fuzz-runtime»]
+
+/-- Bound early Lean runtime threads before generated module initialization.
+    This object belongs only to the serial protocol-fuzz executable. -/
+target «lean-net-fuzz-runtime» pkg : System.FilePath := do
+  let source ← inputTextFile (pkg.dir / "test" / "fuzz_runtime.c")
+  let includeDir ← getLeanIncludeDir
+  let compiler := if System.Platform.isWindows then "gcc" else "cc"
+  buildO (pkg.buildDir / "c" / "fuzz_runtime.o") source
+    #["-isystem", includeDir.toString]
+    #["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"] compiler
 
 lean_exe «lean-net-observability-fixture» where
   root := `test.ObservabilityReactorFixture

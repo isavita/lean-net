@@ -49,15 +49,25 @@ The serial child explicitly uses `LEAN_NUM_THREADS=1`,
 report. It runs on its existing process thread. Linux sets that thread's lazy
 stack soft limit to 64MiB only when the existing hard limit permits it, while
 retaining the unchanged 2GiB address-space cap. Lean v4.35 defaults to a 1GiB
-stack for a newly created runtime thread. Its task-manager constructor is
-lazy: the earlier assumption that pool initialization preallocated worker
-stacks was not established and is not used to claim mandatory allocator
-overhead. Up to 32 bounded Linux startup samples record actual VA, RSS,
+stack for a newly created runtime thread. Its generated module initialization
+starts a libuv thread **before** `lean_run_main` reads those environment
+variables. The compiled fuzz target therefore links `test/fuzz_runtime.c`
+directly: its static constructor sets runtime thread stacks to 64MiB before
+module initialization. Its source SHA-256 is recorded, and compiled mode
+requires its `FUZZ_RUNTIME_INIT` marker before `FUZZ_START`. This object is
+exclusive to the fuzz executable; servers and the shared native archive do
+not link it. Explicit interpreter mode cannot use that static bootstrap and
+is labelled ineligible for CI acceptance.
+
+The task-manager constructor is lazy: earlier eager-pool and mandatory
+allocator-overhead hypotheses were not established. Up to 32 bounded Linux startup samples record actual VA, RSS,
 thread counts and largest mappings. A flushed `FUZZ_START` distinguishes
 startup from the fixed adversarial prelude before the first `FUZZ_CASE`.
 These settings change no cases or protocol limits. See the pinned runtime
 [task-pool source](https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/object.cpp)
-and [thread/stack source](https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/thread.cpp).
+and [thread/stack source](https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/thread.cpp),
+plus [module initialization](https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/init_module.cpp)
+and [early libuv thread creation](https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/libuv.cpp).
 
 Each report records the exact source, binary, seed, limits and runtime settings.
 Short CI runs and the long profile remain separate evidence; neither proves
