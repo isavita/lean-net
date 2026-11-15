@@ -64,3 +64,7 @@ python3 test/soak.py --count 10000
 ```
 
 Run the focused suites in [test/README.md](test/README.md). The executable entry points `lean-net-http1` and `lean-net-tls` use the same library APIs; their flags are listed in the [server](docs/server.md) and [TLS](tls/README.md) guides.
+
+## License
+
+Apache-2.0. Copyright 2026 Aleksandar Dimov. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
