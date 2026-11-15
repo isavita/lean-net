@@ -241,4 +241,5 @@ lean_object *shim_reactor_waker_release(uint64_t h) {
 }
 
 #include "reactor_group_ffi.h"
+#include "ratelimit.h"
 #endif

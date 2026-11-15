@@ -120,6 +120,7 @@ jobs:
           python3 test/test_http1_reactor.py -v
           python3 test/test_graceful_shutdown.py -v
           python3 test/test_resilience.py -v
+          python3 test/test_ratelimit.py -v
           python3 test/test_admin.py -v
       - name: Worker echo and FFI setup ownership (Windows)
         if: runner.os == 'Windows'

@@ -6,6 +6,8 @@ open LeanNet LeanNet.HTTP LeanNet.HTTP1 LeanNet.Gate
 
 private def policy := "
 limits { headers 40 ; header-bytes 8KiB }
+ratelimit perclient 3/m burst 3 by client-ip
+ratelimit perroute 2/m burst 2 by route
 host api.test, api.test:8443 {
   tls sni off
   headers { forbid x-internal-* ; strip x-debug }
@@ -14,6 +16,9 @@ host api.test, api.test:8443 {
   route *        /admin/*        -> deny 403
   route GET      /legacy         -> app
   route GET      /keyed          -> app item { check api-key }
+  route GET      /limited        -> app item { limit perclient }
+  route GET      /route-a        -> app item { limit perroute }
+  route GET      /route-b        -> app item { limit perroute }
 }
 host *.tenant.test { tls sni off ; route * /* -> app tenant }
 on unknown-host 421
@@ -38,5 +43,6 @@ private def server : Handlers := {
 def main (args : List String) : IO Unit := do
   let some port := args.head?.bind String.toNat? | throw (IO.userError "expected port")
   let spec ← IO.ofExcept ((Spec.parse policy).mapError toString)
-  let factory ← IO.ofExcept ((Gate.factory { spec, app }).mapError toString)
-  ReactorServer.serveWithHandlers server { admission := some factory } "127.0.0.1" port.toUInt16
+  RateLimiter.withLimiter spec 1 fun limits => do
+    let factory ← IO.ofExcept ((Gate.factory { spec, app, limiter := some limits.limiter }).mapError toString)
+    ReactorServer.serveWithHandlers server { admission := some factory } "127.0.0.1" port.toUInt16

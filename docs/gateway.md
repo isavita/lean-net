@@ -115,6 +115,39 @@ on unknown-host 421                                # or: close (drop silently)
 - **Actions.** `websocket` routes require an upgrade (426 otherwise).
   HTTP/2 extended CONNECT requires a `websocket` route.
 
+## Rate limits
+
+`ratelimit NAME RATE [burst N] [by KEY]` declares a rule, and `limit NAME`
+applies it to a host or route. RATE is `N/s`, `N/m`, `N/h` or `N/<duration>`.
+Keys:
+- `route` (the default) gives each route its own bucket;
+- `global` shares one bucket across everything that uses the rule;
+- `client-ip`, `principal` (verified mTLS SAN) and `header NAME` key per
+  client.
+
+Wrap the workers in `Gate.RateLimiter.withLimiter spec workers` and pass
+`handle.limiter` to `Gate.Config`.
+
+The native limiter (`c/ratelimit.h`) implements GCRA. That is a token bucket
+stored as one 64-bit theoretical arrival time, so there are no
+window-boundary bursts and `Retry-After` is exact.
+- **`global` and `route` rules** reserve leases of up to about 5 ms of
+  traffic per worker with one compare-and-swap, then spend them without
+  atomics. Reservation precedes spending, so admissions never exceed rate ×
+  time + burst. Leased cells that expire unused are lost: at most workers ×
+  lease per lease period.
+- **Keyed rules** use one fixed table of 64-bit words (a 24-bit tag and a
+  40-bit TAT in 100 µs units). The table is indexed by SipHash-2-4 under a
+  random per-process key and probed over four slots. A new key evicts the
+  slot with the oldest arrival time. Tag collisions share a budget, which is
+  stricter, never looser. Memory is `keyedSlots × 8` bytes (default 64Ki
+  slots = 512 KiB).
+- Limits are per process. A fleet-wide quota needs an external coordinator.
+- `test/ratelimit_test.c` checks under AddressSanitizer/UBSan and
+  ThreadSanitizer that 8 contending threads never exceed the burst, that
+  sustained throughput stays within rate × time + burst, that route scopes
+  are independent, and that eviction never over-admits.
+
 ## Guarantees and their limits
 
 `Admitted` has a private constructor; only `admitHead` creates it. It

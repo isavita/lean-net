@@ -23,7 +23,7 @@ def free_port():
         return probe.getsockname()[1]
 
 
-class GateWire(unittest.TestCase):
+class FixtureCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.port = free_port()
@@ -49,6 +49,8 @@ class GateWire(unittest.TestCase):
         output, _, status = text.rpartition("\n")
         return int(status), output
 
+
+class GateWire(FixtureCase):
     def test_routes_and_captures(self):
         for mode in MODES:
             with self.subTest(mode=mode):
@@ -99,6 +101,20 @@ class GateWire(unittest.TestCase):
         self.assertEqual(self.get("/items/1", "api.test:8443")[0], 200)
         # A port-less pattern (api.test) covers every port.
         self.assertEqual(self.get("/items/1", "api.test:9999")[0], 200)
+
+
+class GateRateLimits(FixtureCase):
+    def test_client_ip_limit_returns_429_with_retry_after(self):
+        statuses = [self.get("/limited", "api.test", mode)[0] for mode in ("--http1.1", "--http2-prior-knowledge", "--http1.1")]
+        self.assertEqual(statuses, [200, 200, 200], "burst shared across protocols")
+        status, output = self.get("/limited")
+        self.assertEqual(status, 429)
+        retry = [line for line in output.lower().splitlines() if line.startswith("retry-after:")]
+        self.assertTrue(retry and int(retry[0].split(":")[1]) >= 1, output)
+
+    def test_route_keyed_limits_are_per_route(self):
+        self.assertEqual([self.get("/route-a")[0] for _ in range(3)], [200, 200, 429])
+        self.assertEqual([self.get("/route-b")[0] for _ in range(3)], [200, 200, 429])
 
 
 class GateLiteral(unittest.TestCase):
