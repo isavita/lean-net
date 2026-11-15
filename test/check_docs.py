@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -83,7 +84,8 @@ def blocks_in(path):
 
 
 def command(args, *, cwd=ROOT, timeout=240):
-    result = subprocess.run(args, cwd=cwd, text=True, capture_output=True, timeout=timeout)
+    result = subprocess.run(args, cwd=cwd, text=True, encoding="utf-8", errors="replace",
+                            capture_output=True, timeout=timeout)
     if result.returncode:
         raise AssertionError(f"command failed: {args}\n{result.stdout}\n{result.stderr}")
     return result.stdout
@@ -141,9 +143,9 @@ def classify_program(block, previous):
 
 def check_require(block, directory):
     directory.mkdir()
-    (directory / "lean-toolchain").write_text((ROOT / "lean-toolchain").read_text())
+    (directory / "lean-toolchain").write_text((ROOT / "lean-toolchain").read_text(encoding="utf-8"), encoding="utf-8")
     (directory / "lakefile.lean").write_text(
-        "import Lake\nopen Lake DSL\npackage doc_dependency_consumer\n" + block.code)
+        "import Lake\nopen Lake DSL\npackage doc_dependency_consumer\n" + block.code, encoding="utf-8")
     command(["lake", "update"], cwd=directory)
     module = "LeanNetTLS" if "lean-net-tls" in block.code else "LeanNet"
     command(["lake", "build", module], cwd=directory)
@@ -201,9 +203,9 @@ def exercise(binary, kind, port, directory, policy):
         if kind == "gateway":
             assert policy is not None, "gateway example has no documented policy"
             (directory / "gate.policy").write_text(policy.replace(
-                "127.0.0.1:9000", f"127.0.0.1:{upstream_port}"))
+                "127.0.0.1:9000", f"127.0.0.1:{upstream_port}"), encoding="utf-8")
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
-        with tempfile.TemporaryFile(mode="w+") as log:
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as log:
             process = subprocess.Popen([str(binary)], cwd=directory, stdout=log, stderr=log,
                                        creationflags=flags)
             try:
@@ -286,9 +288,22 @@ def main():
             json.loads(block.code)
             continue
         raise AssertionError(f"{block.label}: unclassified documentation fence {block.language!r}")
+    bash = shutil.which("bash")
+    if sys.platform == "win32":
+        git = shutil.which("git")
+        candidates = [Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"]
+        if git:
+            candidates.insert(0, Path(git).parent.parent / "bin/bash.exe")
+        # Windows' System32/bash.exe launches WSL; use the Git Bash shell
+        # required by the repository's Windows workflows instead.
+        bash = next((str(path) for path in candidates if path.is_file()), None)
+    assert bash, "Bash is required for documentation syntax checks (Git Bash on Windows)"
     for block in shell:
-        result = subprocess.run(["bash", "-n"], input=block.code, text=True, capture_output=True)
-        assert result.returncode == 0, f"{block.label}: {result.stderr}"
+        result = subprocess.run([bash, "--noprofile", "--norc", "-n"],
+                                input=block.code.encode("utf-8"), capture_output=True)
+        assert result.returncode == 0, (
+            f"{block.label}: Bash exit {result.returncode}: "
+            f"{result.stdout.decode('utf-8', 'replace')}{result.stderr.decode('utf-8', 'replace')}")
     with tempfile.TemporaryDirectory(prefix="lean-net-doc-examples-") as temporary:
         directory = Path(temporary)
         programs, fragments, previous = [], [], {}
@@ -305,25 +320,25 @@ def main():
                 programs.append((block, kind, rewrite_port(source, port, block.label), port))
         workspace = directory / "programs"
         workspace.mkdir()
-        (workspace / "lean-toolchain").write_text((ROOT / "lean-toolchain").read_text())
+        (workspace / "lean-toolchain").write_text((ROOT / "lean-toolchain").read_text(encoding="utf-8"), encoding="utf-8")
         targets = [f"doc-{index}" for index in range(len(programs))]
         config = ('import Lake\nopen Lake DSL\npackage doc_examples\n'
                   f'require «lean-net-tls» from "{(ROOT / "tls").as_posix()}"\n')
         for index, (_, _, source, _) in enumerate(programs):
             config += f'@[default_target] lean_exe «doc-{index}» where\n  root := `Doc{index}\n'
-            (workspace / f"Doc{index}.lean").write_text(source)
-        (workspace / "lakefile.lean").write_text(config)
+            (workspace / f"Doc{index}.lean").write_text(source, encoding="utf-8")
+        (workspace / "lakefile.lean").write_text(config, encoding="utf-8")
         command(["lake", "update"], cwd=workspace)
         command(["lake", "build", *targets, "LeanNet.Gate.Literal"], cwd=workspace)
         for index, (block, source) in enumerate(fragments):
             path = workspace / f"Fragment{index}.lean"
-            path.write_text(source)
+            path.write_text(source, encoding="utf-8")
             command(["lake", "env", "lean", str(path)], cwd=workspace)
             print(f"PASS Lean declarations {block.label}", flush=True)
         for index, block in enumerate(policies):
             path = workspace / f"Policy{index}.lean"
             path.write_text('import LeanNet.Gate.Literal\n'
-                            f'def policy : LeanNet.Gate.Spec := gate% {lean_string(block.code)}\n')
+                            f'def policy : LeanNet.Gate.Spec := gate% {lean_string(block.code)}\n', encoding="utf-8")
             command(["lake", "env", "lean", str(path)], cwd=workspace)
             print(f"PASS policy {block.label}", flush=True)
         policy = next((block.code for block in policies if block.path == ROOT / "docs/gateway.md"), None)

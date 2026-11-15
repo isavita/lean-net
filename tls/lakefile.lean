@@ -11,6 +11,22 @@ private def tlsLibraryPath (name : String) : IO System.FilePath := do
   unless ← path.pathExists do throw <| IO.userError s!"missing OpenSSL library: {path}"
   return path
 
+private def nativeDynlib (directory : System.FilePath) (source : Job System.FilePath)
+    (name : String) : SpawnM (Job Dynlib) :=
+  source.mapM fun source => do
+    if System.Platform.isWindows || System.Platform.isOSX then
+      return { path := source, name }
+    -- Keep host CRT libraries out of the search path. SONAME aliases also let
+    -- `lake env` load the selected OpenSSL when pkg-config uses a custom prefix.
+    IO.FS.createDirAll directory
+    let some fileName := source.fileName | error "native library has no file name"
+    let some parent := source.parent | error "native library has no parent directory"
+    for entry in ← parent.readDir do
+      if entry.fileName == fileName || entry.fileName.startsWith (fileName ++ ".") then
+        if (← entry.path.metadata).type == .file then
+          proc { cmd := "ln", args := #["-sfn", entry.path.toString, (directory / entry.fileName).toString] }
+    return { path := directory / fileName, name }
+
 package «lean-net-tls» where
   version := v!"0.1.1"
   description := "TLS, mTLS, SNI and verified HTTPS upstreams for lean-net"
@@ -84,13 +100,13 @@ target «lean-net-openssl-ssl» _pkg : System.FilePath := do
 target «lean-net-openssl-crypto» _pkg : System.FilePath := do
   inputBinFile (← tlsLibraryPath "crypto")
 
-target «lean-net-openssl-ssl-shared» _pkg : Dynlib := do
+target «lean-net-openssl-ssl-shared» pkg : Dynlib := do
   let file ← inputBinFile (← tlsLibraryPath "ssl")
-  file.mapM fun path => pure { path, name := "ssl" }
+  nativeDynlib pkg.sharedLibDir file "ssl"
 
-target «lean-net-openssl-crypto-shared» _pkg : Dynlib := do
+target «lean-net-openssl-crypto-shared» pkg : Dynlib := do
   let file ← inputBinFile (← tlsLibraryPath "crypto")
-  file.mapM fun path => pure { path, name := "crypto" }
+  nativeDynlib pkg.sharedLibDir file "crypto"
 
 @[default_target]
 lean_lib LeanNetTLS

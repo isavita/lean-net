@@ -13,6 +13,8 @@ lake -d examples build
 | 3 | [TlsStatic.lean](TlsStatic.lean) | TLS/ALPN, static files, compression, ranges and validators | 8443 |
 | 4 | [Gateway.lean](Gateway.lean) | Host policy, header validation, rate limits and upstream pools | 8083 |
 
+For a separate Lake project, copy the chosen source to `Main.lean` and add the dependency from the [core installation guide](../README.md#install). `TlsStatic.lean` uses the [TLS dependency](../tls/README.md#install) instead. Each source file is self-contained.
+
 ## 1. Basic HTTP server
 
 ```sh

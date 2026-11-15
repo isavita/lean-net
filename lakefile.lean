@@ -19,6 +19,22 @@ private def compilerLibraryPath (name : String) : IO System.FilePath := do
     throw <| IO.userError s!"cannot locate native system library: {name}"
   return path
 
+private def nativeDynlib (directory : System.FilePath) (source : Job System.FilePath)
+    (name : String) : SpawnM (Job Dynlib) :=
+  source.mapM fun source => do
+    if System.Platform.isWindows || System.Platform.isOSX then
+      return { path := source, name }
+    -- An unrestricted system -L directory can override Lean's bundled libc.
+    -- Only expose this DSO and its SONAME aliases in Lake's native library dir.
+    IO.FS.createDirAll directory
+    let some fileName := source.fileName | error "native library has no file name"
+    let some parent := source.parent | error "native library has no parent directory"
+    for entry in ← parent.readDir do
+      if entry.fileName == fileName || entry.fileName.startsWith (fileName ++ ".") then
+        if (← entry.path.metadata).type == .file then
+          proc { cmd := "ln", args := #["-sfn", entry.path.toString, (directory / entry.fileName).toString] }
+    return { path := directory / fileName, name }
+
 package «lean-net» where
   version := v!"0.1.1"
   description := "TCP, HTTP/1.1, HTTP/2, WebSocket and reverse proxy libraries for Lean 4"
@@ -84,9 +100,9 @@ target «lean-net-brotli-encoder» _pkg : System.FilePath := do
 target «lean-net-brotli-common» _pkg : System.FilePath := do
   inputBinFile (← codecLibraryPath "libbrotlicommon" "libbrotlicommon.dll.a" "libbrotlicommon.dylib" "libbrotlicommon.a")
 
-target «lean-net-zlib-shared» _pkg : Dynlib := do
+target «lean-net-zlib-shared» pkg : Dynlib := do
   let file ← inputBinFile (← codecLibraryPath "zlib" "libz.dll.a" "libz.dylib" "libz.so")
-  file.mapM fun path => pure { path, name := "z" }
+  nativeDynlib pkg.sharedLibDir file "z"
 
 target «lean-net-brotli-encoder-shared» _pkg : Dynlib := do
   let file ← inputBinFile (← codecLibraryPath "libbrotlienc" "libbrotlienc.dll.a" "libbrotlienc.dylib" "libbrotlienc.so")

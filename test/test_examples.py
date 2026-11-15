@@ -38,7 +38,7 @@ def server(name, arguments):
     if not binary.is_file():
         raise AssertionError(f"build examples first: missing {binary}")
     port = unused_port()
-    with tempfile.TemporaryFile(mode="w+") as log:
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as log:
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
         process = subprocess.Popen([str(binary), *map(str, arguments(port))],
                                    cwd=ROOT, stdout=log, stderr=log, creationflags=flags)
