@@ -151,6 +151,9 @@ jobs:
       - name: Echo acceptance
         if: runner.os != 'Windows'
         run: python3 test/test_echo.py -v
+      - name: HTTP/1.1 and h2c connection churn
+        if: runner.os != 'Windows'
+        run: python3 test/soak.py --count 10000 --warmup 500 --batch 1000 --concurrency 16
       - name: Native signal and endpoint ownership
         if: runner.os != 'Windows'
         run: |
