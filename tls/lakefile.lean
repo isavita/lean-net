@@ -28,7 +28,7 @@ private def nativeDynlib (directory : System.FilePath) (source : Job System.File
     return { path := directory / fileName, name }
 
 package «lean-net-tls» where
-  version := v!"0.1.1"
+  version := v!"0.1.2"
   description := "TLS, mTLS, SNI and verified HTTPS upstreams for lean-net"
   keywords := #["networking", "http", "http2", "tls", "mtls", "openssl", "ffi"]
   homepage := "https://isavita.github.io/lean-net/LeanNetTLS.html"

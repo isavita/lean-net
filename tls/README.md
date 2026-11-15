@@ -16,7 +16,7 @@ export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix
 In a consumer `lakefile.lean`:
 
 ```lean
-require «lean-net-tls» from git "https://github.com/isavita/lean-net" @ "v0.1.1" / "tls"
+require «lean-net-tls» from git "https://github.com/isavita/lean-net" @ "v0.1.2" / "tls"
 ```
 
 The TLS package depends on the core package. Build it in this repository with `lake -d tls build lean-net-tls`.

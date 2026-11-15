@@ -36,7 +36,7 @@ private def nativeDynlib (directory : System.FilePath) (source : Job System.File
     return { path := directory / fileName, name }
 
 package «lean-net» where
-  version := v!"0.1.1"
+  version := v!"0.1.2"
   description := "TCP, HTTP/1.1, HTTP/2, WebSocket and reverse proxy libraries for Lean 4"
   keywords := #["networking", "http", "http2", "websocket", "proxy", "tcp", "ffi"]
   homepage := "https://isavita.github.io/lean-net/"
