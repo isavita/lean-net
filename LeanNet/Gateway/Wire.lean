@@ -53,9 +53,19 @@ def peerText (peer : ByteArray) : Option ByteArray := Id.run do
 private def hopField (name : String) : Bool :=
   ["connection", "keep-alive", "proxy-connection", "te", "trailer",
    "transfer-encoding", "upgrade", "proxy-authenticate", "proxy-authorization",
-   "content-length", "host", "expect", "forwarded", "x-forwarded-for",
-   "x-forwarded-host", "x-forwarded-proto", "x-forwarded-by", "x-real-ip",
-   "x-client-cert", "x-ssl-client-cert", "x-remote-user", "via"].contains name
+   "content-length", "host", "expect", "via"].contains name
+
+/-- Client fields must not become proxy attestation for the upstream. In
+    particular RFC 9440 certificate fields and common deployment-specific
+    identity prefixes are never forwarded from an untrusted request. -/
+private def untrustedIdentityField (name : String) : Bool :=
+  ["forwarded", "x-real-ip", "x-remote-user", "client-cert",
+   "client-cert-chain"].contains name ||
+  name.startsWith "x-forwarded-" || name.startsWith "x-ssl-" ||
+  name.startsWith "x-client-" || name.startsWith "ssl-client-"
+
+private def barredRequestField (name : String) : Bool :=
+  hopField name || untrustedIdentityField name
 
 private def responseHopField (name : String) : Bool :=
   ["connection", "keep-alive", "proxy-connection", "proxy-authenticate",
@@ -121,12 +131,12 @@ def encodeRequest (a : Admitted) (request : Request) : Except WireError (Array B
   for field in request.headers do
     if !fieldOk field then throw .invalidHeader
     let name := field.name.toLower
-    if !hopField name && !name.startsWith "x-forwarded-" && !nominated.contains name then
+    if !barredRequestField name && !nominated.contains name then
       head := appendHeader head field.name field.value
   for field in request.trailers do
     if !fieldOk field then throw .invalidTrailer
     let name := field.name.toLower
-    if forbiddenTrailerName name || hopField name || name.startsWith "x-forwarded-" ||
+    if forbiddenTrailerName name || barredRequestField name ||
         nominated.contains name then throw .invalidTrailer
     trailers := trailers.push field
   head := appendHeader head "Forwarded" (forwardedValue a)

@@ -193,6 +193,9 @@ private def run (port : UInt16) : IO Unit := do
             started := true
           | _ => fail "unexpected outcome before stream start"
       check started "gateway did not start a streamed response"
+      let activeOutcomes ← engine.pump ((← Reactor.nowMs) + 5001)
+      check activeOutcomes.isEmpty "idle reaper aborted an active upstream response"
+      check ((← engine.pool.size) == 1) "idle reaper discarded an active upstream lease"
 
       backend.send reactor "hello".toUTF8
       let mut firstChunk := false
@@ -228,6 +231,9 @@ private def run (port : UInt16) : IO Unit := do
         | _ => fail "unexpected streamed response outcome"
       check (secondChunk && finished) "streaming response did not complete after resume"
       check ((← engine.pool.size) == 1) "clean streamed response did not retain idle upstream"
+      let idleOutcomes ← engine.pump ((← Reactor.nowMs) + 6501)
+      check idleOutcomes.isEmpty "idle reaper produced a spurious gateway response"
+      check ((← engine.pool.size) == 0) "worker pump did not expire an idle upstream socket"
 
       backend.reset
       let brokenStream : Ticket := { downstream := listener.id, requestId := 6 }

@@ -79,6 +79,7 @@ private structure PendingResolve where
 private structure State where
   jobs : Std.HashMap Reactor.SocketId Job := {}
   retired : Array Reactor.SocketId := #[]
+  nextReapMs : UInt64 := 0
   nextTarget : Nat := 0
   resolved : Std.HashMap String (ByteArray × UInt64) := {}
   resolving : Std.HashMap String ResolveTask := {}
@@ -547,9 +548,20 @@ def Engine.onNative (engine : Engine) (event : Reactor.Event) (nowMs : UInt64) :
   | _ => pure ()
   return (true, outcomes)
 
-/-- Retry pending writes when native buffers become available; expire connects
-whose pool entry has already been removed under capacity pressure. -/
+/-- Retry pending writes when native buffers become available; periodically
+expire idle connections and timed-out connects without a new checkout. -/
 def Engine.pump (engine : Engine) (nowMs : UInt64) : IO (Array Outcome) := do
+  -- Idle sockets must expire even when no new checkout puts the pool under
+  -- capacity pressure. Limit the O(pool size) pass to one short interval;
+  -- active leases remain owned by their response jobs.
+  let state ← engine.state.get
+  if nowMs >= state.nextReapMs then
+    let interval := max 1 (min 1000 (min engine.config.pool.idleTimeoutMs.toNat
+      engine.config.pool.connectTimeoutMs.toNat))
+    let nextReapMs := if nowMs.toNat + interval > 18446744073709551615 then nowMs
+      else nowMs + interval.toUInt64
+    engine.state.modify fun state => { state with nextReapMs }
+    engine.pool.reap nowMs
   let mut outcomes := #[]
   let pending := (← engine.state.get).pendingResolve
   engine.state.modify fun state => { state with pendingResolve := #[] }

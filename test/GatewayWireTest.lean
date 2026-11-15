@@ -22,6 +22,10 @@ private def admitted : IO Admitted := do
       headers := #[field "host" "example.com", field "connection" "x-secret",
         field "x-secret" "do-not-forward", field "x-forwarded-for" "1.2.3.4",
         field "forwarded" "for=1.2.3.4", field "x-forwarded-client-cert" "spoofed-cert",
+        field "client-cert" "spoofed-client-cert", field "client-cert-chain" "spoofed-chain",
+        field "x-ssl-client-verify" "spoofed-verification",
+        field "x-client-principal" "spoofed-principal",
+        field "ssl-client-subject" "spoofed-subject",
         field "x-real-ip" "spoofed-ip", field "x-useful" "value"] }
   let facts := Transport.Facts.forTesting false (peer := ByteArray.mk #[10, 2, 3, 4])
   match admitHead policy facts head with
@@ -42,7 +46,10 @@ def main : IO Unit := do
   check (head.startsWith "POST /admin?x=1 HTTP/1.1\r\n") "request target or method not admission-bound"
   check (head.contains "Host: example.com\r\n") "Host not admission-bound"
   check (!head.contains "do-not-forward" && !head.contains "1.2.3.4" &&
-    !head.contains "spoofed-cert" && !head.contains "spoofed-ip") "untrusted headers crossed hop"
+    !head.contains "spoofed-cert" && !head.contains "spoofed-ip" &&
+    !head.contains "spoofed-client-cert" && !head.contains "spoofed-chain" &&
+    !head.contains "spoofed-verification" && !head.contains "spoofed-principal" &&
+    !head.contains "spoofed-subject") "untrusted headers crossed hop"
   check (head.contains "Forwarded: for=\"10.2.3.4\";proto=http;host=\"example.com\"\r\n")
     "Forwarded was not rebuilt"
   check (head.contains "X-Forwarded-For: 10.2.3.4\r\n") "X-Forwarded-For was not rebuilt"
@@ -55,7 +62,9 @@ def main : IO Unit := do
   check (match encodeRequest a trailer with | .error .invalidTrailer => true | _ => false)
     "framing trailer accepted"
   for name in #["forwarded", "x-forwarded-for", "x-forwarded-client-cert",
-      "x-real-ip", "x-client-cert", "via", "x-ssl-client-cert"] do
+      "x-real-ip", "x-client-cert", "via", "x-ssl-client-cert",
+      "x-ssl-client-verify", "x-client-principal", "ssl-client-subject",
+      "client-cert", "client-cert-chain"] do
     let spoofed := { requestFor a with trailers := #[field name "spoofed"] }
     check (match encodeRequest a spoofed with | .error .invalidTrailer => true | _ => false)
       s!"identity trailer {name} crossed hop"
