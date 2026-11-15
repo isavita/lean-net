@@ -458,10 +458,12 @@ private def Driver.syncWriteTimer (driver : Driver) (id : Reactor.SocketId) : IO
   -- Outputs are appended in monotonic start order. Only the queue head can
   -- precede an in-flight write; walking every queued response adds no evidence.
   let mut earliest := client.outputs.head?.map (·.started)
-  for slot in state.slots do
-    if let some flight := slot.flight then
-      if flight.owner == id then
-        earliest := some (min (earliest.getD flight.started) flight.started)
+  -- `inFlight` changes with the matching slot record on this owner thread.
+  if client.inFlight > 0 then
+    for slot in state.slots do
+      if let some flight := slot.flight then
+        if flight.owner == id then
+          earliest := some (min (earliest.getD flight.started) flight.started)
   let wanted ← match earliest with
     | none => pure none
     | some start => some <$> deadline start driver.config.server.writeTimeoutMs
