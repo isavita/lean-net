@@ -61,3 +61,7 @@ tls/.lake/build/bin/lean-net-tls ./chain.pem ./key.pem --host 0.0.0.0 \
 ```
 
 TLS-specific flags are `--client-ca PEM`, `--require-client-cert`, `--ocsp-response DER`, `--reload-certs-ms MS`, and `--upstream-ca PEM` (with `--gate`). Common HTTP flags are listed in [server configuration](../docs/server.md). `--reload-certs-ms` accepts 1–3,600,000 ms; SIGHUP requests a reload even without a periodic interval in this executable.
+
+## License
+
+Apache-2.0. Copyright 2026 Aleksandar Dimov. See [LICENSE](../LICENSE) and [NOTICE](../NOTICE).
