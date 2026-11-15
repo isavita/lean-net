@@ -128,10 +128,32 @@ class PublicCliPushAcceptance(unittest.TestCase):
                 peer.ping_barrier()
                 self.assertEqual(peer.promises, {})
 
+    def check_log_queue_rejections(self, secure):
+        binary = TLS_BIN if secure else HTTP_BIN
+        prefix = [str(binary)]
+        if secure:
+            prefix += [str(self.certificates.chains[0]), str(self.certificates.keys[0])]
+        for options in (
+            ["--access-log-queue-capacity"],
+            ["--access-log-queue-capacity", "4096"],
+            *[["--access-log", os.devnull, "--access-log-queue-capacity", value]
+              for value in ("0", "3", "65537", "-1", "1.5", "abc", "")],
+            ["--access-log", os.devnull, "--access-log-queue-capacity", "1024",
+             "--access-log-queue-capacity", "4096"],
+        ):
+            with self.subTest(secure=secure, options=options):
+                result = subprocess.run(prefix + [str(unused_port())] + options,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        timeout=10, check=False)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(b"--access-log-queue-capacity", result.stdout)
+
     def test_plaintext_public_cli(self):
+        self.check_log_queue_rejections(secure=False)
         self.check_transport(secure=False)
 
     def test_verified_tls_public_cli(self):
+        self.check_log_queue_rejections(secure=True)
         self.check_transport(secure=True)
 
 

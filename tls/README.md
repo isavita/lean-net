@@ -45,6 +45,10 @@ not zero-copy TLS. The [static-file guide](../docs/static-files.md) explains
 locked-memory limits, ranges, validators, encodings and explicit ownership.
 
 The executable binds `127.0.0.1` and starts one HTTP reactor per available core.
+The shared `--access-log-queue-capacity RECORDS` option requires `--access-log`
+and sets each worker's bounded log queue to a power of two from 1 to 65536;
+the default remains 1024. See [production controls](../docs/production-hardening.md)
+for helper installation, mapping limits and visible overflow counters.
 `Server.serveWithConfig` preserves single-worker ownership of a supplied Router.
 `ReactorServer.serveFactory` builds independent advanced HTTP handlers on each
 worker and accepts `Reactor.Config` plus `HTTP.ReactorServerConfig`. Configure

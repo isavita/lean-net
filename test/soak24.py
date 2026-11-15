@@ -41,8 +41,9 @@ LOG_HEALTH_METRICS = {
     'io_errors': 'lean_net_access_log_io_errors_total',
     'pending': 'lean_net_access_log_pending_records',
 }
-# Global native limits: at most256 worker lanes, each at most65536 records.
-# Actual CLI queues are smaller. Pending is transient, not a zero-valued gate.
+# Defensive native ceiling for legacy direct helper calls. Actual live checks
+# use each service's validated worker-count * queue-capacity limit instead.
+LOG_DEFAULT_QUEUE_CAPACITY = 1024
 LOG_MAX_PENDING_RECORDS = 256 * 65536
 METRIC_LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+([^\s]+)(?:\s+[^\s]+)?$')
 LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"(?:,|$)')
@@ -391,14 +392,14 @@ def metrics(server, ca, clients):
     if response.status != 200 or len(body) > 65536 or not response.isclosed() or response.will_close:
         raise RuntimeError('invalid, oversized or nonpersistent metrics response')
     text = body.decode('utf-8')
-    log_health(text)
+    log_health(text, checked_log_queue_limits(server['log_queue_limits']))
     return {name: counter(text, selector) for name, selector in server['metrics'].items()}, text
 
 
-def log_health(text):
-    """Fixed native schema; independent of the four configured request selectors."""
+def log_health(text, pending_limit=LOG_MAX_PENDING_RECORDS):
+    """Fixed native schema; live callers supply the configured queue bound."""
     health = {key: counter(text, {'name': name}) for key, name in LOG_HEALTH_METRICS.items()}
-    check_log_health(health)
+    check_log_health(health, pending_limit)
     return health
 
 
@@ -428,11 +429,78 @@ def check_keepalive_progress(before, current, require_progress=True):
                 raise RuntimeError('server PING keepalive stopped progressing')
 
 
-def check_log_health(health):
+def check_log_health(health, pending_limit=LOG_MAX_PENDING_RECORDS):
+    if type(pending_limit) is not int or not 0 <= pending_limit <= LOG_MAX_PENDING_RECORDS:
+        raise RuntimeError('invalid access log configured queue bounds')
     if health['dropped'] or health['io_errors']:
         raise RuntimeError('access log dropped records or reported an I/O error')
-    if health['pending'] > LOG_MAX_PENDING_RECORDS:
-        raise RuntimeError('access log pending records exceed native global queue bounds')
+    if health['pending'] > pending_limit:
+        raise RuntimeError('access log pending records exceed configured native queue bounds')
+
+
+def log_queue_options(server):
+    """Parse only the CLI options needed to determine the native lane bound."""
+    arguments = server['args']
+    def integer_option(flag, default, minimum, maximum):
+        if any(value.startswith(flag + '=') for value in arguments):
+            raise ValueError('use separate ' + flag + ' argument tokens')
+        if arguments.count(flag) > 1:
+            raise ValueError('duplicate ' + flag + ' configuration')
+        if flag not in arguments:
+            return default
+        index = arguments.index(flag) + 1
+        if index == len(arguments) or not re.fullmatch(r'[0-9]+', arguments[index]):
+            raise ValueError(flag + ' requires a decimal count')
+        value = int(arguments[index])
+        if not minimum <= value <= maximum:
+            raise ValueError('invalid ' + flag + ' count')
+        return value
+    workers = integer_option('--workers', 0, 0, 256)
+    max_clients = integer_option('--max-clients', 32, 1, 1000000)
+    capacity = integer_option('--access-log-queue-capacity', LOG_DEFAULT_QUEUE_CAPACITY, 1, 65536)
+    if capacity & (capacity - 1):
+        raise ValueError('--access-log-queue-capacity must be a power of two')
+    if '--access-log-queue-capacity' in arguments and arguments.count('--access-log') != 1:
+        raise ValueError('--access-log-queue-capacity requires --access-log')
+    if workers > max_clients:
+        raise ValueError('configured workers exceed max-clients')
+    return workers, max_clients, capacity
+
+
+def active_cpu_count():
+    """Match Reactor.cpuCount; startup-only, never inferred from load rates."""
+    if os.name == 'nt':
+        import ctypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        count = kernel.GetActiveProcessorCount
+        count.argtypes = [ctypes.c_uint16]
+        count.restype = ctypes.c_uint32
+        value = count(0xffff)  # ALL_PROCESSOR_GROUPS, as in reactor_group.c.
+        if value == 0:
+            raise ValueError('active CPU count failed: ' + str(ctypes.get_last_error()))
+    else:
+        value = os.sysconf('SC_NPROCESSORS_ONLN')
+    if type(value) is not int or value <= 0:
+        raise ValueError('active CPU count must be positive')
+    return value
+
+
+def log_queue_limits(server):
+    workers, max_clients, capacity = log_queue_options(server)
+    resolved = workers or min(256, max_clients, active_cpu_count())
+    limits = {'workers': resolved, 'queue_capacity': capacity, 'pending_limit': resolved * capacity}
+    checked_log_queue_limits(limits)
+    return limits
+
+
+def checked_log_queue_limits(limits):
+    if (not isinstance(limits, dict) or set(limits) != {'workers', 'queue_capacity', 'pending_limit'} or
+        any(type(value) is not int for value in limits.values()) or
+        not 1 <= limits['workers'] <= 256 or not 1 <= limits['queue_capacity'] <= 65536 or
+        limits['queue_capacity'] & (limits['queue_capacity'] - 1) or
+        limits['pending_limit'] != limits['workers'] * limits['queue_capacity']):
+        raise RuntimeError('invalid access log configured queue bounds')
+    return limits['pending_limit']
 
 
 def probe(server, ca, clients):
@@ -530,6 +598,7 @@ def validate(config, smoke):
             raise ValueError('loader rate and connection count must be exact integers')
         if not isinstance(server['args'], list) or not all(isinstance(value, str) for value in server['args']):
             raise ValueError('server args must be an array of literal argument strings')
+        log_queue_options(server)
         keepalive_options(server)
         if any(value == '--reload-certs-ms' or value.startswith('--reload-certs-ms=') for value in server['args']):
             raise ValueError('periodic certificate reload must be disabled during the strict soak')
@@ -550,11 +619,17 @@ def assess_sample(previous, current, baseline, require_rate=True):
     if not names or len(set(names)) != len(names) or names != [row['name'] for row in previous['servers']] or names != [row['name'] for row in baseline['servers']]:
         raise RuntimeError('resource sample server identity/order changed')
     for before, row, first in zip(previous['servers'], current['servers'], baseline['servers']):
+        pending_limit = checked_log_queue_limits(first.get('log_queue_limits'))
+        checked_log_queue_limits(before.get('log_queue_limits'))
+        checked_log_queue_limits(row.get('log_queue_limits'))
+        if (before.get('log_queue_limits') != first['log_queue_limits'] or
+            row.get('log_queue_limits') != first['log_queue_limits']):
+            raise RuntimeError('access log configured queue bounds changed during measurement')
         check_keepalive_progress(None, first['keepalive'])
         # The two-second final publication guard can fall between probes.
         check_keepalive_progress(before['keepalive'], row['keepalive'], elapsed >= 30)
         for value in (first['log_health'], before['log_health'], row['log_health']):
-            check_log_health(value)
+            check_log_health(value, pending_limit)
         for key in ('accepted', 'written', 'dropped', 'io_errors'):
             if row['log_health'][key] < before['log_health'][key]:
                 raise RuntimeError('access log counter reset/decrease during measurement')
@@ -640,6 +715,9 @@ def assess_full_window(baseline, final, servers, require_rate=True):
 def run(args):
     config = json.loads(args.config.read_text())
     duration, warmup, tail, interval = validate(config, args.smoke_seconds)
+    # Resolve automatic workers once and make the same exact count explicit in
+    # the native command. Later CPU/default changes cannot inflate sample bounds.
+    configured_log_limits = {server['name']: log_queue_limits(server) for server in config['servers']}
     if args.output.exists():
         raise ValueError('output already exists; choose fresh evidence directory')
     args.output.mkdir(parents=True)
@@ -669,8 +747,9 @@ def run(args):
               'active_http2_keepalive': {server['name']: keepalive_options(server) for server in config['servers']},
               'counter_publication_max_lag_seconds': 1,
               'access_log_health_metrics': LOG_HEALTH_METRICS,
-              'access_log_health_policy': 'Dropped and I/O-error counters must be zero, including baseline. Accepted/written counters cannot decrease. Transient pending records are allowed within native queue bounds; no equality or zero-pending assertion is made while traffic is active or after metrics shutdown. Helper draining/join is covered by bounded shutdown and separate native tests.',
-              'measurement_boundary_note': 'Each sample independently requires 10000 completed-minus-probes RPS per server. Published snapshots may lag 1s; each final full-window conservative rate deducts two own offered-rate seconds plus own possible in-flight requests ONCE (21400 for 10 connections at 1020 RPS/client). No aggregate can compensate for an instance shortfall.',
+              'access_log_queue_limits': configured_log_limits,
+              'access_log_health_policy': 'Dropped and I/O-error counters must be zero, including baseline. Accepted/written counters cannot decrease. Each service has an immutable pending-record bound equal to its resolved native workers times its configured per-worker queue capacity (default1024); samples validate that product and unchanged bound. No equality or zero-pending assertion is made while traffic is active or after metrics shutdown. Helper draining/join is covered by bounded shutdown and separate native tests.',
+              'measurement_boundary_note': 'Each sample independently requires 10000 completed-minus-probes RPS per server. Published snapshots may lag 1s; each final full-window conservative rate deducts two own offered-rate seconds plus own possible in-flight requests ONCE (21400 for 10 connections at 1020 RPS/client; 30400 for 100 connections at 102 RPS/client). No aggregate can compensate for an instance shortfall.',
               'passed': False, 'smoke_completed': False, 'servers': [], 'loaders': [],
               'h2load_binary_sha256': digest(h2load),
               'helper_source_sha256': {name: digest(ROOT / name) for name in ('c/access_log.c', 'c/access_log_helper.c')},
@@ -712,7 +791,9 @@ def run(args):
             peer = probe_clients[server['name']]
             keepalive = {'received': peer.pings_received, 'acknowledged': peer.pings_acknowledged}
             check_keepalive_progress(None, keepalive)
-            rows.append({'name': server['name'], 'counters': counters, 'log_health': log_health(text), 'keepalive': keepalive,
+            rows.append({'name': server['name'], 'counters': counters,
+                         'log_queue_limits': dict(server['log_queue_limits']),
+                         'log_health': log_health(text, checked_log_queue_limits(server['log_queue_limits'])), 'keepalive': keepalive,
                          'probes_completed': completed_probes[server['name']], **resources})
             if label in ('measurement_start', 'measurement_end'):
                 (args.output / (server['name'] + '-' + label + '.prom')).write_text(text)
@@ -731,6 +812,7 @@ def run(args):
     try:
         for item in config['servers']:
             server = dict(item)
+            server['log_queue_limits'] = dict(configured_log_limits[server['name']])
             original = Path(server['binary']).resolve()
             server_artifacts = artifacts / server['name']; server_artifacts.mkdir()
             snapshot = server_artifacts / original.name
@@ -749,6 +831,10 @@ def run(args):
             substitutions = {'port': str(server['port']), 'cert': str(certificates.chains[0]), 'key': str(certificates.keys[0]),
                              'null': os.devnull, 'helper': str(helper_snapshot.resolve())}
             arguments = [part.format(**substitutions) for part in server['args']]
+            if '--workers' in arguments:
+                arguments[arguments.index('--workers') + 1] = str(server['log_queue_limits']['workers'])
+            else:
+                arguments += ['--workers', str(server['log_queue_limits']['workers'])]
             if any(part.startswith('--log-helper=') for part in arguments):
                 raise ValueError('use separate --log-helper argument tokens')
             if arguments.count('--log-helper') > 1:

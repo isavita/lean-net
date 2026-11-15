@@ -19,6 +19,7 @@ jobs:
           lake build lean-net-http1-fixture lean-net-http2-fixture lean-net-event-ffi-test lean-net-transport-test lean-net-ffi-live lean-net-pool-lifetime-test
           lake build
           lake env lean test/LeanNetTest.lean
+          lake env lean --run test/HTTPCLIOptionsTest.lean
           lake env lean --run test/HTTP1Test.lean
           lake env lean --run test/HTTP1HeaderEventTest.lean
           lake env lean --run test/HTTP1ResponseTest.lean

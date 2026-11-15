@@ -558,7 +558,7 @@ class ObservabilityWire(unittest.TestCase):
         self.assertEqual(len(server.records()), 2)
 
     def test_public_cli_static_range_head_and_conditional(self):
-        server = self.start(kind="plain")
+        server = self.start(kind="plain", extra_args=("--access-log-queue-capacity", "4096"))
         response = server.http(b"/binary.bin", headers=[(b"Range", b"bytes=1-3")])
         self.assertEqual((response.status, response.body), (206, BINARY[1:4]))
         etag = response.headers[b"etag"]
@@ -582,7 +582,7 @@ class TLSObservabilityWire(unittest.TestCase):
         return Running(self, kind="tls")
 
     def test_verified_http1_file_and_head(self):
-        server = self.start()
+        server = Running(self, kind="tls", extra_args=("--access-log-queue-capacity", "4096"))
         self.assertEqual(server.http(b"/binary.bin").body, BINARY)
         self.assertEqual(server.http(b"/binary.bin", b"HEAD").headers[b"content-length"], b"5")
         _, records = server.wait(success=2, started=2, body_bytes=5, logs=2)

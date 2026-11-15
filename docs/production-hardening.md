@@ -83,6 +83,16 @@ increments `lean_net_access_log_dropped_total`. Writer errors surface to the
 server. `lean_net_access_log_pending_records` exposes accepted records still
 awaiting completion. A metrics-only configuration starts no helper.
 
+Both public CLIs accept `--access-log-queue-capacity RECORDS` alongside
+`--access-log PATH`. The value is a power of two from 1 to 65536 and counts
+records per worker; omission preserves the default of 1024. For example,
+`--access-log /dev/null --access-log-queue-capacity 4096` allows bounded
+scheduling bursts without changing the helper's write behavior. Larger queues
+increase the shared mapping, which remains capped at 64 MiB across all workers;
+configurations exceeding that bound fail startup. Capacity does not suppress
+the dropped-record counter or retry dropped records. The option may appear
+once and requires an access-log sink.
+
 Records contain timestamp, duration, worker, protocol, status, outcome, payload
 bytes, method and sanitized target. Query strings, fragments and non-origin
 URI details are removed. Headers are never passed to the logger. Target and

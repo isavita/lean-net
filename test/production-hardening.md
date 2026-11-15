@@ -109,6 +109,24 @@ The wire harness accepts the observability binary/helper environment overrides
 and `LEAN_NET_KEEPALIVE_TRANSPORT_BIN` for immutable snapshots. These focused
 tests do not establish full-duration soak acceptance.
 
+## Access-log queue configuration
+
+After the shared CLI module and both public binaries are built, run:
+
+```sh
+lake env lean --run test/HTTPCLIOptionsTest.lean
+python3 test/test_http2_cli.py -v
+python3 test/test_observability.py -v
+```
+
+The pure options test checks the unchanged 1024-record default, explicit
+capacity propagation, option ordering and both valid boundaries. Both public
+CLI wire cases reject missing, duplicate, nondecimal, out-of-range and
+non-power-of-two values, including a capacity without `--access-log`.
+Existing public plain and TLS observability cases also serve and log responses
+with an explicit 4096-record queue per worker. Queue overflow behavior and
+its dropped-record counter retain their separate controlled helper-stall test.
+
 ## Actual 24-hour soak
 
 The installed `h2load nghttp2/1.71.0 --help` was inspected before selecting the

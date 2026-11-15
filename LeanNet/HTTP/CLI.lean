@@ -9,6 +9,7 @@ structure Options where
   staticMemoryMiB : Nat := 8
   metrics : Bool := false
   accessLog : Option System.FilePath := none
+  accessLogQueueCapacity : Option Nat := none
   logHelper : Option System.FilePath := none
   reloadCertsMs : Option Nat := none
   pingIntervalMs : Option Nat := none
@@ -59,6 +60,15 @@ private def collect (args : List String) (options : Options) : Except String Opt
     else if path.isEmpty || path.startsWith "--" then .error "--access-log requires a path"
     else collect rest { options with accessLog := some (System.FilePath.mk path) }
   | "--access-log" :: [] => .error "--access-log requires a path"
+  | "--access-log-queue-capacity" :: count :: rest =>
+    if options.accessLogQueueCapacity.isSome then .error "--access-log-queue-capacity may be supplied once"
+    else match count.toNat? with
+      | some value =>
+        if value == 0 || value > 65536 || value &&& (value - 1) != 0 then
+          .error "--access-log-queue-capacity must be a power of two between 1 and 65536"
+        else collect rest { options with accessLogQueueCapacity := some value }
+      | none => .error "--access-log-queue-capacity requires a decimal record count"
+  | "--access-log-queue-capacity" :: [] => .error "--access-log-queue-capacity requires a record count"
   | "--log-helper" :: path :: rest =>
     if options.logHelper.isSome then .error "--log-helper may be supplied once"
     else if path.isEmpty || path.startsWith "--" then .error "--log-helper requires an executable path"
@@ -94,6 +104,8 @@ def parse (args : List String) : Except String Options := do
     throw "--static-memory requires --static"
   if options.logHelper.isSome && options.accessLog.isNone then
     throw "--log-helper requires --access-log"
+  if options.accessLogQueueCapacity.isSome && options.accessLog.isNone then
+    throw "--access-log-queue-capacity requires --access-log"
   if options.pingTimeoutMs.isSome && options.pingIntervalMs.isNone then
     throw "--http2-ping-timeout-ms requires --http2-ping-ms"
   return options
@@ -116,7 +128,9 @@ def Options.httpConfig (options : Options) : IO ReactorServerConfig := do
           let executable ← IO.appPath
           let directory := executable.parent.getD (System.FilePath.mk ".")
           pure (directory / (if System.Platform.isWindows then "lean-net-access-log-helper.exe" else "lean-net-access-log-helper"))
-      pure (some { path, helperBinary := helper : Observability.AccessConfig })
+      pure (some {
+        path, helperBinary := helper,
+        queueCapacity := options.accessLogQueueCapacity.getD 1024 : Observability.AccessConfig })
   return {
     workers := options.workers
     server := { maxClients := options.maxClients }

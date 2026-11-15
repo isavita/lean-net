@@ -1,5 +1,5 @@
 {
-  "duration_seconds": 86400,
+  "duration_seconds": 86460,
   "warmup_seconds": 300,
   "tail_seconds": 30,
   "sample_seconds": 60,
@@ -20,7 +20,9 @@
         "--workers",
         "8",
         "--access-log",
-        "{null}"
+        "{null}",
+        "--access-log-queue-capacity",
+        "4096"
       ],
       "path": "/",
       "body_hex": "48656c6c6f2066726f6d206c65616e2d6e6574210a",
@@ -56,17 +58,19 @@
         "--http2-ping-timeout-ms",
         "10000",
         "--max-clients",
-        "128",
+        "256",
         "--workers",
         "8",
         "--access-log",
-        "{null}"
+        "{null}",
+        "--access-log-queue-capacity",
+        "4096"
       ],
       "path": "/",
       "body_hex": "48656c6c6f2066726f6d206c65616e2d6e6574210a",
       "metrics_path": "/metrics",
-      "connections": 10,
-      "rps_per_client": 1020,
+      "connections": 100,
+      "rps_per_client": 102,
       "metrics": {
         "completed": {
           "name": "lean_net_successful_completed_requests_total"

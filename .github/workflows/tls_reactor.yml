@@ -85,6 +85,8 @@ jobs:
         run: |
           lake build lean-net-http1 lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-observability-fixture lean-net-deferred-transport-fixture lean-net-keepalive-transport-fixture
           lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture lean-net-tls-static-fixture lean-net-tls-reload-fixture lean-net-tls-worker-lifetime-test
+      - name: Public CLI queue configuration
+        run: lake env lean --run test/HTTPCLIOptionsTest.lean
       - name: Context ownership and policy sanitizers
         if: runner.os != 'Windows'
         run: ${{ matrix.python }} tls/test/test_tls_context_native.py -v

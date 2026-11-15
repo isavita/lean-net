@@ -5,8 +5,9 @@ import os
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
-from soak24 import ClockGuard, assess_sample, assess_full_window, check_keepalive_progress, counter, loader_command, loader_completion_bounds, log_health, parse_load, sample_process_family, validate, DAY, LOG_HEALTH_METRICS, LOG_MAX_PENDING_RECORDS
+from soak24 import ClockGuard, assess_sample, assess_full_window, check_keepalive_progress, checked_log_queue_limits, counter, loader_command, loader_completion_bounds, log_health, log_queue_limits, parse_load, sample_process_family, validate, DAY, LOG_HEALTH_METRICS, LOG_MAX_PENDING_RECORDS
 
 
 def config():
@@ -20,12 +21,78 @@ def config():
 def sample(time, completed, probes=0):
     return {'monotonic': time, 'wall_epoch_seconds': time + 1000, 'servers': [dict(name=name, counters={'completed': completed, 'errors': 0, 'timeouts': 0, 'resets': 0},
                  log_health={'accepted': completed, 'written': completed - 1, 'dropped': 0, 'io_errors': 0, 'pending': 1},
+                 log_queue_limits={'workers': 8, 'queue_capacity': 1024, 'pending_limit': 8192},
                  keepalive={'received': int(time), 'acknowledged': int(time)},
                  probes_completed=probes, rss_bytes=10000, fds_or_handles=20,
                  family=[{'pid': index + 10, 'parent_pid': 1, 'start_identity': 'fixed', 'rss_bytes': 10000, 'fds_or_handles': 20}]) for index, name in enumerate(['plain', 'tls'])]}
 
 
 class SoakAccounting(unittest.TestCase):
+    def test_log_queue_capacity_derives_exact_old_and_new_native_bounds(self):
+        server = config()['servers'][0]
+        server['args'] += ['--workers', '8', '--access-log', '{null}']
+        original = log_queue_limits(server)
+        self.assertEqual(original, {'workers': 8, 'queue_capacity': 1024, 'pending_limit': 8192})
+        server['args'] += ['--access-log-queue-capacity', '4096']
+        larger = log_queue_limits(server)
+        self.assertEqual(larger, {'workers': 8, 'queue_capacity': 4096, 'pending_limit': 32768})
+        text = '\n'.join(f'{name} {8193 if key == "pending" else 10000 if key == "accepted" else 1807 if key == "written" else 0}'
+                         for key, name in LOG_HEALTH_METRICS.items())
+        with self.assertRaisesRegex(RuntimeError, 'configured native queue bounds'):
+            log_health(text, original['pending_limit'])
+        self.assertEqual(log_health(text, larger['pending_limit'])['pending'], 8193)
+        with self.assertRaisesRegex(RuntimeError, 'configured queue bounds'):
+            log_health(text, LOG_MAX_PENDING_RECORDS + 1)
+        for invalid in ['0', '3', '65537', '-1', 'True', '1.5']:
+            bad = deepcopy(server); bad['args'][-1] = invalid
+            with self.subTest(capacity=invalid), self.assertRaises(ValueError):
+                validate({'servers': [bad, config()['servers'][1]]}, None)
+        no_log = config(); no_log['servers'][0]['args'] += ['--access-log-queue-capacity', '4096']
+        with self.assertRaisesRegex(ValueError, 'requires --access-log'):
+            validate(no_log, None)
+        duplicate = deepcopy(server); duplicate['args'] += ['--access-log-queue-capacity', '1024']
+        with self.assertRaisesRegex(ValueError, 'duplicate'):
+            log_queue_limits(duplicate)
+
+    def test_automatic_log_workers_resolve_once_to_native_worker_formula(self):
+        server = config()['servers'][0]
+        server['args'] += ['--max-clients', '3', '--workers', '0']
+        with mock.patch('soak24.active_cpu_count', return_value=64) as cpu_count:
+            self.assertEqual(log_queue_limits(server), {'workers': 3, 'queue_capacity': 1024, 'pending_limit': 3072})
+            cpu_count.assert_called_once()
+        server['args'][-1] = '2'
+        with mock.patch('soak24.active_cpu_count', side_effect=AssertionError('explicit workers must not query CPU')):
+            self.assertEqual(log_queue_limits(server)['pending_limit'], 2048)
+        server['args'][-1] = '4'
+        with self.assertRaisesRegex(ValueError, 'exceed max-clients'):
+            log_queue_limits(server)
+
+    def test_sample_log_limits_cannot_be_forged_changed_or_removed(self):
+        before, after = sample(10, 1000), sample(15, 52000)
+        for limits in [None, {'workers': 8, 'queue_capacity': 1024, 'pending_limit': 32768},
+                       {'workers': True, 'queue_capacity': 1024, 'pending_limit': 1024},
+                       {'workers': 8, 'queue_capacity': 3, 'pending_limit': 24}]:
+            bad = deepcopy(after); bad['servers'][0]['log_queue_limits'] = limits
+            with self.subTest(limits=limits), self.assertRaisesRegex(RuntimeError, 'configured queue bounds'):
+                assess_sample(before, bad, before)
+        changed = deepcopy(after)
+        changed['servers'][0]['log_queue_limits'] = {'workers': 8, 'queue_capacity': 4096, 'pending_limit': 32768}
+        with self.assertRaisesRegex(RuntimeError, 'bounds changed'):
+            assess_sample(before, changed, before)
+        for value in (before, after):
+            for row in value['servers']:
+                row['log_queue_limits'] = {'workers': 8, 'queue_capacity': 4096, 'pending_limit': 32768}
+        after['servers'][0]['log_health']['pending'] = 32768
+        assess_sample(before, after, before)
+        after['servers'][0]['log_health']['pending'] += 1
+        with self.assertRaisesRegex(RuntimeError, 'configured native queue bounds'):
+            assess_sample(before, after, before)
+        after['servers'][0]['log_health']['pending'] = 1
+        for key in ('dropped', 'io_errors'):
+            bad = deepcopy(after); bad['servers'][0]['log_health'][key] = 1
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'access log dropped'):
+                assess_sample(before, bad, before)
+
     def test_mac_sleep_and_joint_clock_gap_cannot_pass(self):
         guard = ClockGuard(1000, 100)
         guard.check(1001, 101)
@@ -193,7 +260,7 @@ class SoakAccounting(unittest.TestCase):
             bad = deepcopy(after); bad['servers'][0]['log_health'][key] = before['servers'][0]['log_health'][key] - 1
             with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'log counter reset'):
                 assess_sample(before, bad, before)
-        bad = deepcopy(after); bad['servers'][0]['log_health']['pending'] = LOG_MAX_PENDING_RECORDS + 1
+        bad = deepcopy(after); bad['servers'][0]['log_health']['pending'] = before['servers'][0]['log_queue_limits']['pending_limit'] + 1
         with self.assertRaisesRegex(RuntimeError, 'queue bounds'):
             assess_sample(before, bad, before)
 
