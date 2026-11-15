@@ -71,7 +71,10 @@ class Server:
 
     def stop(self):
         if self.process.poll() is None:
-            self.process.send_signal(signal.SIGINT if sys.platform != "win32" else signal.CTRL_BREAK_EVENT)
+            if sys.platform == "win32":
+                self.process.kill()
+            else:
+                self.process.send_signal(signal.SIGINT)
             try:
                 self.process.wait(10)
             except subprocess.TimeoutExpired:
