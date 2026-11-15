@@ -2,6 +2,8 @@
 
 TLS transport for [lean-net](../README.md). It serves HTTP/1.1 and HTTP/2 on the same listener using ALPN, with SNI certificates, mTLS client identity, certificate reload, and verified HTTPS upstream connections.
 
+[API reference](https://isavita.github.io/lean-net/LeanNetTLS.html).
+
 ## Install
 
 Use the repository's Lean toolchain. Install `pkg-config`, OpenSSL 1.1.1 or newer, zlib, and Brotli development libraries. On macOS with Homebrew:
@@ -14,7 +16,7 @@ export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix
 In a consumer `lakefile.lean`:
 
 ```lean
-require «lean-net-tls» from git "https://github.com/isavita/lean-net" @ "main" / "tls"
+require «lean-net-tls» from git "https://github.com/isavita/lean-net" @ "v0.1.0" / "tls"
 ```
 
 The TLS package depends on the core package. Build it in this repository with `lake -d tls build lean-net-tls`.

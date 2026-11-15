@@ -3,6 +3,11 @@ open Lake DSL
 
 package «lean-net» where
   version := v!"0.1.0"
+  description := "TCP, HTTP/1.1, HTTP/2, WebSocket and reverse proxy libraries for Lean 4"
+  keywords := #["networking", "http", "http2", "websocket", "proxy", "tcp", "ffi"]
+  homepage := "https://isavita.github.io/lean-net/"
+  license := "Apache-2.0"
+  licenseFiles := #["LICENSE", "NOTICE"]
   moreLinkArgs := run_io do
     let output ← IO.Process.output { cmd := "pkg-config", args := #["--libs", "zlib", "libbrotlienc", "libbrotlicommon"] }
     if output.exitCode != 0 then throw <| IO.userError "zlib and Brotli development libraries are required"

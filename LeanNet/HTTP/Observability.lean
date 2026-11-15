@@ -13,7 +13,7 @@ structure AccessConfig where
       Device/FIFO sinks never rotate; unrelated paths remain untouched. -/
   maxFileBytes : Nat := 16 * 1024 * 1024
   fileCount : Nat := 4
-  startupTimeoutMs : Nat := 2000
+  startupTimeoutMs : Nat := 10000
   shutdownTimeoutMs : Nat := 2000
   pollIntervalMs : Nat := 10
 
@@ -205,7 +205,7 @@ def withHub (workers : Nat) (access : Option AccessConfig := none) (use : Hub �
   let original ← IO.mkRef (none : Option IO.Error)
   try
     captureFailure original (do
-      let cutoff := (← IO.monoMsNow) + (access.map (·.startupTimeoutMs)).getD 2000
+      let cutoff := (← IO.monoMsNow) + (access.map (·.startupTimeoutMs)).getD 10000
       repeat
         if (← IO.monoMsNow) >= cutoff then throw (IO.userError "access log startup deadline exceeded")
         let raw ← FFI.Observability.ready handle

@@ -53,6 +53,8 @@ Use [`HTTP.Static.serveRoot`](static-files.md) to serve an immutable directory. 
 
 The access-log queue defaults to 1,024 records per worker. `queueCapacity` accepts powers of two from 1 to 65,536. Put `lean-net-access-log-helper` beside the server executable or set `helperBinary` explicitly. A full queue drops records and increments `lean_net_access_log_dropped_total`.
 
+`AccessConfig.startupTimeoutMs` defaults to 10,000 ms for helper readiness; `shutdownTimeoutMs` defaults to 2,000 ms.
+
 ## Supplied executables
 
 ```sh

@@ -2,12 +2,14 @@
 
 Lean 4 libraries for TCP, HTTP/1.0, HTTP/1.1, HTTP/2, and WebSocket servers. The optional [`lean-net-tls`](tls/README.md) package adds TLS, mTLS, SNI, and ALPN. Both packages use the same HTTP handlers and native reactor on Linux, macOS, and Windows.
 
+[API reference](https://isavita.github.io/lean-net/LeanNet.html).
+
 ## Install
 
 Use the Lean version in [`lean-toolchain`](lean-toolchain). Install `pkg-config`, zlib, and Brotli development libraries (`zlib`, `libbrotlienc`, `libbrotlicommon`); Windows builds also need MinGW GCC and matching import libraries. In a consumer `lakefile.lean`:
 
 ```lean
-require «lean-net» from git "https://github.com/isavita/lean-net" @ "main"
+require «lean-net» from git "https://github.com/isavita/lean-net" @ "v0.1.0"
 ```
 
 For macOS with Homebrew zlib, set `PKG_CONFIG_PATH="$(brew --prefix zlib)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"` before building. The TLS package also needs OpenSSL 1.1.1 or newer; see [TLS setup](tls/README.md).
@@ -64,6 +66,8 @@ python3 test/soak.py --count 10000
 ```
 
 Run the focused suites in [test/README.md](test/README.md). The executable entry points `lean-net-http1` and `lean-net-tls` use the same library APIs; their flags are listed in the [server](docs/server.md) and [TLS](tls/README.md) guides.
+
+Generate the API reference with `lake -d docs build LeanNetDocs:docs`. Serve `docs/.lake/build/doc` over HTTP to browse it locally.
 
 ## License
 
