@@ -9,16 +9,27 @@ inductive Action where
   | write (parts : Array ByteArray)
   | writeParts (parts : Array WirePart)
   | writeObserved (output : HTTP.ObservedOutput)
+  /-- One ordered control ticket; `pingWritten` acknowledges its physical fence. -/
+  | writePing (nonce : UInt64) (bytes : ByteArray)
   | requestStarted (streamId : UInt32) (head : HTTP1.RequestHead) (startedAt : Nat)
   | responseAborted (streamId : UInt32) (reason : HTTP.ResponseAbortReason)
   | request (event : RequestEvent)
   | drainClose
+
+private structure PingProbe where
+  nonce : UInt64
+  /-- None while queued: only physical completion starts the ACK timeout. -/
+  deadline : Option Nat := none
 
 structure State where
   private connection : Connection
   private config : Connection.Config
   private started : Bool := false
   private closing : Bool := false
+  private now : Nat := 0
+  private nextPingAt : Option Nat := none
+  private ping : Option PingProbe := none
+  private nextPingNonce : Nat := 1
 
 structure Step where
   state : State
@@ -34,6 +45,8 @@ inductive Input where
   | finish
   | goAway (code : ErrorCode := .noError)
   | date (value : ByteArray)
+  | pingTimer (now : Nat)
+  | pingWritten (nonce : UInt64) (now : Nat)
 
 def State.new (config : Connection.Config := {}) : State :=
   { connection := Connection.newWithConfig config, config }
@@ -52,7 +65,7 @@ def State.hasPartialInput (state : State) : Bool := state.connection.hasPartialI
 def State.wantsInput (state : State) : Bool := !state.closing
 
 def State.setTime (state : State) (now : Nat) : State :=
-  { state with connection := state.connection.setTime now }
+  { state with connection := state.connection.setTime now, now }
 
 def State.setDate (state : State) (date : ByteArray) : State :=
   { state with connection := state.connection.setDate date }
@@ -60,6 +73,42 @@ def State.setDate (state : State) (date : ByteArray) : State :=
 private def writes (parts : Array ByteArray) : List Action :=
   let parts := parts.filter (fun bytes => !bytes.isEmpty)
   if parts.isEmpty then [] else [.write parts]
+
+private def State.clearKeepalive (state : State) : State :=
+  if state.ping.isNone && state.nextPingAt.isNone then state
+  else { state with ping := none, nextPingAt := none }
+
+private def clockError : ProtocolError :=
+  ⟨.internalError, .connection, "HTTP/2 keepalive clock exceeds native timer range"⟩
+
+private def State.scheduleKeepalive (state : State) : Except ProtocolError State := do
+  if state.config.pingIntervalMs == 0 then return state
+  if state.closing || !state.started || !state.connection.canKeepalive then return state.clearKeepalive
+  if state.now > 9223372036854775807 then throw clockError
+  let state := if state.ping.isNone && state.nextPingAt.isNone then
+    { state with nextPingAt := some (state.now + state.config.pingIntervalMs) } else state
+  if state.nextPingAt.any (· > 9223372036854775807) ||
+      state.ping.any (fun ping => ping.deadline.any (· > 9223372036854775807)) then throw clockError
+  return state
+
+/-- One native timer covers either the next periodic probe or its ACK deadline.
+    A queued but not physically completed PING deliberately has no ACK timer. -/
+def State.keepaliveDeadline (state : State) : Option Nat :=
+  if state.config.pingIntervalMs == 0 || state.closing || !state.started || !state.connection.canKeepalive then none
+  else match state.ping with
+    | some ping => ping.deadline
+    | none => state.nextPingAt
+
+private def State.acknowledgePings (state : State) (acks : Array UInt64) : State := Id.run do
+  if state.config.pingIntervalMs == 0 then return state
+  let some ping := state.ping | return state
+  if !acks.contains ping.nonce then return state
+  return { state with ping := none, nextPingAt := some (state.now + state.config.pingIntervalMs) }
+
+private def fatal (state : State) (error : ProtocolError) (output : Array ByteArray := #[])
+    (consumed : Nat := 0) : Step :=
+  { state := { state.clearKeepalive with closing := true }, consumed,
+    actions := writes (output.push (state.connection.goAway error)) ++ [.drainClose] }
 
 private def observedParts (previous current : Connection) (parts : Array WirePart)
     (headerStatus : Nat := 0) (resetReason : HTTP.ResponseAbortReason := .error) :
@@ -131,17 +180,16 @@ private def progress (state : State) (connection : Connection)
     (output : Array ByteArray := #[]) (requests : Array RequestEvent := #[])
     (consumed : Nat := 0) (observations : Option (List Action) := none) : Step := Id.run do
   let state := { state with connection }
+  let state ← if state.config.pingIntervalMs == 0 then pure state else
+    match state.scheduleKeepalive with
+    | .ok next => pure next
+    | .error error => return fatal state error output consumed
   let mut requestActions := []
   for request in requests do requestActions := Action.request request :: requestActions
   let actions := observations.getD (writes output) ++ requestActions.reverse
   if connection.draining && connection.drainComplete then
     return { state := { state with closing := true }, consumed, actions := actions ++ [.drainClose] }
   return { state, consumed, actions }
-
-private def fatal (state : State) (error : ProtocolError) (output : Array ByteArray := #[])
-    (consumed : Nat := 0) : Step :=
-  { state := { state with closing := true }, consumed,
-    actions := writes (output.push (state.connection.goAway error)) ++ [.drainClose] }
 
 private def outputStep (state : State) (connection : Connection) (output : Array ByteArray)
     (status : Nat := 0) (reason : HTTP.ResponseAbortReason := .error) : Step :=
@@ -152,6 +200,7 @@ private def outputStep (state : State) (connection : Connection) (output : Array
 
 private def connectionStep (state : State) (result : Connection.Step)
     (reason : HTTP.ResponseAbortReason := .error) : Step := Id.run do
+  let state := state.acknowledgePings result.pingAcks
   let mut actions := writes result.output
   if state.config.trackOutput then
     match observedParts state.connection result.connection (result.output.map WirePart.bytes) 100 reason with
@@ -163,7 +212,7 @@ private def connectionStep (state : State) (result : Connection.Step)
   -- output. Closing here must not manufacture a duplicate GOAWAY.
   if result.error.isSome then
     return {
-      state := { state with connection := result.connection, closing := true }
+      state := { state.clearKeepalive with connection := result.connection, closing := true }
       consumed := result.consumed
       actions := actions ++ [.drainClose] }
   return progress state result.connection result.output result.requests result.consumed
@@ -267,6 +316,7 @@ def State.drain (state : State) : Step :=
     | .error error => fatal state error
 
 def State.tick (state : State) (now timeoutMs : Nat) : Step :=
+  let state := if state.config.pingIntervalMs == 0 then state else state.setTime now
   if state.closing then { state }
   else match state.connection.expireRequests now timeoutMs with
     | .ok (connection, wire) => outputStep state connection #[wire] 0 .timeout
@@ -281,6 +331,48 @@ def State.goAway (state : State) (code : ErrorCode := .noError) : Step :=
     | .ok (connection, wire) => progress state connection #[wire]
     | .error error => fatal state error
 
+/-- A physical completion arms one absolute ACK deadline. Duplicate or stale
+    completions cannot extend it or affect a later probe. -/
+def State.pingWritten (state : State) (nonce : UInt64) (now : Nat) : Step := Id.run do
+  if state.closing || !state.connection.canKeepalive || state.config.pingIntervalMs == 0 then
+    return { state := state.clearKeepalive }
+  let some ping := state.ping | return { state }
+  if ping.nonce != nonce || ping.deadline.isSome then return { state }
+  let state := state.setTime now
+  let deadline := now + state.config.pingTimeoutMs
+  if now > 9223372036854775807 || deadline > 9223372036854775807 then return fatal state clockError
+  return { state := { state with ping := some { ping with deadline := some deadline } } }
+
+/-- Active probes are independent of request activity, with at most one queued
+    or awaiting-ACK nonce. The ordinary write deadline bounds an unsent probe. -/
+def State.pingTimer (state : State) (now : Nat) : Step := Id.run do
+  let state := state.setTime now
+  let state ← match state.scheduleKeepalive with
+    | .ok state => pure state
+    | .error error => return fatal state error
+  if state.closing || !state.started || state.config.pingIntervalMs == 0 || !state.connection.canKeepalive then
+    return { state }
+  if let some ping := state.ping then
+    if ping.deadline.any (· <= now) then
+      let result := fatal state ⟨.protocolError, .connection, "HTTP/2 PING acknowledgement timed out"⟩
+      let aborted := if state.config.trackOutput then
+        state.connection.activeRequestIds.toList.map (fun id => Action.responseAborted id .timeout) else []
+      return { result with actions := aborted ++ result.actions }
+    return { state }
+  if !state.nextPingAt.any (· <= now) then return { state }
+  if state.nextPingNonce > 18446744073709551615 then
+    return fatal state ⟨.internalError, .connection, "HTTP/2 PING nonce exhausted"⟩
+  let nonce := UInt64.ofNat state.nextPingNonce
+  let mut payload := ByteArray.emptyWithCapacity 8
+  for index in [:8] do
+    payload := payload.push (UInt8.ofNat (nonce.toNat / 2 ^ (8 * (7 - index))))
+  let bytes ← match (Frame.mk 6 0 0 payload).encode with
+    | .ok bytes => pure bytes
+    | .error error => return fatal state error
+  return { state := { state with
+    ping := some { nonce }, nextPingAt := none,
+    nextPingNonce := state.nextPingNonce + 1 }, actions := [.writePing nonce bytes] }
+
 /-- Sans-IO entry point: Bytes → State → Step State (List Action). -/
 def step (input : Input) (state : State) : Step :=
   match input with
@@ -292,5 +384,7 @@ def step (input : Input) (state : State) : Step :=
   | .finish => state.finish
   | .goAway code => state.goAway code
   | .date value => { state := state.setDate value }
+  | .pingTimer now => state.pingTimer now
+  | .pingWritten nonce now => state.pingWritten nonce now
 
 end LeanNet.HTTP2.Machine

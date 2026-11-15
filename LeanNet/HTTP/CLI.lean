@@ -11,6 +11,8 @@ structure Options where
   accessLog : Option System.FilePath := none
   logHelper : Option System.FilePath := none
   reloadCertsMs : Option Nat := none
+  pingIntervalMs : Option Nat := none
+  pingTimeoutMs : Option Nat := none
   workers : Nat := 0
   maxClients : Nat := 32
   positional : List String := []
@@ -22,6 +24,22 @@ private def collect (args : List String) (options : Options) : Except String Opt
   | "--" :: rest => .ok { options with positional := options.positional.reverse ++ rest }
   | "--enable-push" :: rest => collect rest { options with enablePush := true }
   | "--metrics" :: rest => collect rest { options with metrics := true }
+  | "--http2-ping-ms" :: interval :: rest =>
+    if options.pingIntervalMs.isSome then .error "--http2-ping-ms may be supplied once"
+    else match interval.toNat? with
+      | some value =>
+        if value == 0 || value > 3600000 then .error "--http2-ping-ms must be between 1 and 3600000"
+        else collect rest { options with pingIntervalMs := some value }
+      | none => .error "--http2-ping-ms requires a decimal millisecond interval"
+  | "--http2-ping-ms" :: [] => .error "--http2-ping-ms requires a millisecond interval"
+  | "--http2-ping-timeout-ms" :: interval :: rest =>
+    if options.pingTimeoutMs.isSome then .error "--http2-ping-timeout-ms may be supplied once"
+    else match interval.toNat? with
+      | some value =>
+        if value == 0 || value > 3600000 then .error "--http2-ping-timeout-ms must be between 1 and 3600000"
+        else collect rest { options with pingTimeoutMs := some value }
+      | none => .error "--http2-ping-timeout-ms requires a decimal millisecond interval"
+  | "--http2-ping-timeout-ms" :: [] => .error "--http2-ping-timeout-ms requires a millisecond interval"
   | "--workers" :: count :: rest =>
     match count.toNat? with
     | some value =>
@@ -76,6 +94,8 @@ def parse (args : List String) : Except String Options := do
     throw "--static-memory requires --static"
   if options.logHelper.isSome && options.accessLog.isNone then
     throw "--log-helper requires --access-log"
+  if options.pingTimeoutMs.isSome && options.pingIntervalMs.isNone then
+    throw "--http2-ping-timeout-ms requires --http2-ping-ms"
   return options
 
 def port (argument : Option String) (fallback : UInt16) : Except String UInt16 := do
@@ -100,7 +120,10 @@ def Options.httpConfig (options : Options) : IO ReactorServerConfig := do
   return {
     workers := options.workers
     server := { maxClients := options.maxClients }
-    http2 := { enablePush := options.enablePush }
+    http2 := {
+      enablePush := options.enablePush
+      pingIntervalMs := options.pingIntervalMs.getD 0
+      pingTimeoutMs := options.pingTimeoutMs.getD 10000 }
     metricsPath := if options.metrics then some "/metrics".toUTF8 else none
     accessLog }
 

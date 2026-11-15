@@ -99,6 +99,13 @@ cells. Plaintext consumption explicitly returns its reserved credit. Native
 views remain on the loop; retained views prevent mutation. Per-session queued
 ciphertext is bounded and pauses native reads when its byte lane is full.
 
+Native worker-control failures, including `EINTR`, stop the worker and surface
+as an IO error after historical completed writes and close acknowledgements
+are delivered. File-input interruptions remain separately resumable. Escaped
+worker and endpoint callbacks reject use after their bracket closes; returning
+an already-consumed plaintext loan remains idempotent. On POSIX, private TLS
+threads block SIGINT/SIGTERM so application owners handle process shutdown.
+
 Handshake and TLS shutdown have absolute deadlines. Orderly closes send
 `close_notify`, await peer notification within the bound, then close the native
 connection. Fatal alerts drain before peer-error cleanup. SIGINT stops admission

@@ -57,7 +57,8 @@ class HeaderBlock:
 
 class H2Client:
     def __init__(self, port=None, *, sock=None, settings_values=(), auto_window=True,
-                 authority=b"localhost", scheme=b"http", timeout=5, handshake=True, auto_ack=True):
+                 authority=b"localhost", scheme=b"http", timeout=5, handshake=True, auto_ack=True,
+                 auto_ping_ack=True):
         self.sock = sock if sock is not None else socket.create_connection(("127.0.0.1", port), timeout=timeout)
         self.sock.settimeout(timeout)
         self.buffer = bytearray()
@@ -66,6 +67,9 @@ class H2Client:
         self.authority, self.scheme = authority, scheme
         self.auto_window = auto_window
         self.auto_ack = auto_ack
+        self.auto_ping_ack = auto_ping_ack
+        self.pings_received = 0
+        self.pings_acknowledged = 0
         self.max_frame_size = dict(settings_values).get(5, 16384)
         self.frames = []
         self.blocks = []
@@ -211,10 +215,14 @@ class H2Client:
                 raise AssertionError("invalid server GOAWAY")
             self.goaways.append((int.from_bytes(current.payload[:4], "big") & 0x7FFFFFFF,
                                  int.from_bytes(current.payload[4:8], "big"), current.payload[8:]))
-        elif current.kind == 6 and not current.flags & 1:
+        elif current.kind == 6:
             if current.stream or len(current.payload) != 8:
                 raise AssertionError("invalid server PING")
-            self.send(frame(6, 1, payload=current.payload))
+            if not current.flags & 1:
+                self.pings_received += 1
+                if self.auto_ping_ack:
+                    self.send(frame(6, 1, payload=current.payload))
+                    self.pings_acknowledged += 1
         return current
 
     def until(self, predicate, limit=10000):

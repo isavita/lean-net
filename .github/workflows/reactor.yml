@@ -69,6 +69,7 @@ jobs:
           lake env lean --run test/HTTP1FileTest.lean
           lake env lean --run test/HTTP1ShutdownTest.lean
           lake env lean --run test/ResponseOutputTest.lean
+          lake env lean --run test/HTTP2KeepaliveTest.lean
           lake env lean --run test/ObservabilityMetricsTest.lean
       - name: Pure HTTP/2 protocol machines
         run: |

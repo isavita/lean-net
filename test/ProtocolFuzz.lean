@@ -233,6 +233,7 @@ private def h2Actions (initial : H2Capture) (actions : List HTTP2.Machine.Action
       capture := { capture with output }
     | .writeObserved .. | .requestStarted .. | .responseAborted .. =>
       throw (IO.userError "output tracking unexpectedly enabled in default HTTP2 fixture")
+    | .writePing .. => throw (IO.userError "keepalive unexpectedly enabled in default HTTP2 fixture")
     | .writeParts _ => throw (IO.userError "HTTP2 file output without a file reply")
     | .drainClose => capture := { capture with closed := capture.closed + 1 }
   check (pending.isEmpty && capture.closed <= 1 && capture.ids.size <= 8) "HTTP2 action/request fuel bound"

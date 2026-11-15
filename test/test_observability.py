@@ -46,7 +46,7 @@ def request(path=b"/binary", method=b"GET", *, headers=(), body=b"", version=b"H
 
 
 class Running:
-    def __init__(self, case, *, kind="fixture", workers=1, mode="normal", helper=None, env=None):
+    def __init__(self, case, *, kind="fixture", workers=1, mode="normal", helper=None, env=None, extra_args=()):
         self.case, self.kind = case, kind
         self.directory = Path(tempfile.mkdtemp(prefix="lean-net-observe-wire-"))
         self.port = unused_port()
@@ -70,6 +70,7 @@ class Running:
                 command += [str(case.certificates.chains[0]), str(case.certificates.keys[0])]
             command += [str(self.port), "--static", str(static), "--metrics", "--access-log", str(self.log),
                         "--log-helper", str(helper), "--workers", str(workers), "--max-clients", "64"]
+            command += list(extra_args)
         options = {"start_new_session": True} if sys.platform != "win32" else {
             "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
         child_env = os.environ.copy()

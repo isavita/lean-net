@@ -109,6 +109,10 @@ lean_exe «lean-net-deferred-transport-fixture» where
   root := `test.DeferredTransportFixture
   needs := #[`@/«lean-net-access-log-helper»]
 
+lean_exe «lean-net-keepalive-transport-fixture» where
+  root := `test.KeepaliveTransportFixture
+  needs := #[`@/«lean-net-access-log-helper»]
+
 @[default_target]
 target «lean-net-access-log-helper» pkg : System.FilePath := do
   let source ← inputTextFile (pkg.dir / "c" / "access_log_helper.c")

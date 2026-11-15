@@ -73,6 +73,42 @@ Each report records the exact source, binary, seed, limits and runtime settings.
 Short CI runs and the long profile remain separate evidence; neither proves
 exhaustive parser correctness.
 
+## HTTP/2 active keepalive
+
+The public plain and TLS CLIs accept `--http2-ping-ms` and
+`--http2-ping-timeout-ms`; the interval is default-off and the enabled timeout
+defaults to 10000 milliseconds. The [production guide](../docs/production-hardening.md#active-http2-keepalive)
+describes the library configuration and failure policy.
+
+`HTTP2KeepaliveTest.lean` exercises the pure machine with a 100-millisecond
+interval and 30-millisecond ACK timeout. It checks protocol-readiness gating,
+one queued/in-flight nonce, physical-write deadline arming, early/fragmented
+ACKs, stale/duplicate ACK and write-notification rejection, activity-independent
+scheduling, timeout GOAWAY/request outcomes, default-off behavior, GOAWAY/EOF
+cancellation, bounded timer arithmetic and intact header/file frame ordering.
+The native driver supplies a timer-wheel slot; the pure machine performs no IO.
+
+The independent `test_http2_keepalive.py` suite uses the public plain and TLS
+servers with an 80-millisecond interval and 500-millisecond timeout. It checks
+progress during application traffic, unanswered/wrong ACK isolation, incomplete
+upload timeout accounting, HTTP/1 separation and clean process shutdown.
+`KeepaliveTransportFixture.lean` delays only PING completion notifications by
+800 milliseconds while bytes reach the peer immediately; its 100-millisecond
+interval and 150-millisecond timeout exercise ACK-before-completion and late
+old completion ordering. All peer operations have bounded time/frame budgets.
+
+After the build coordinator provides the required public binaries, sibling log
+helpers and `lean-net-keepalive-transport-fixture`, run:
+
+```sh
+lake env lean --run test/HTTP2KeepaliveTest.lean
+python3 test/test_http2_keepalive.py -v
+```
+
+The wire harness accepts the observability binary/helper environment overrides
+and `LEAN_NET_KEEPALIVE_TRANSPORT_BIN` for immutable snapshots. These focused
+tests do not establish full-duration soak acceptance.
+
 ## Actual 24-hour soak
 
 The installed `h2load nghttp2/1.71.0 --help` was inspected before selecting the
@@ -127,8 +163,8 @@ against a moving implementation. Check the final CLI flags against the frozen
 public binaries before using the example configuration.
 
 The controller snapshots both server executables, both sibling native logger
-helpers, h2load and a committed source
-archive, records hashes/tool versions/commands, generates an isolated test PKI,
+helpers, h2load and a committed runtime/source/controller archive, records
+hashes/tool versions/commands, generates an isolated test PKI,
 records helper hashes/source hashes, passes an explicit immutable `--log-helper`
 path to each CLI, verifies the actual family image paths, and preserves server
 logs, loader summaries, raw boundary metrics, and all
@@ -159,6 +195,26 @@ measurement and the loader tail; TLS probes use
 CA verification, SNI and mandatory h2 ALPN. Persistent HTTP/1 metrics sessions
 avoid creating transient FD noise. These keepalive probes require the frozen
 server's idle deadline to exceed five seconds.
+
+The strict configuration also explicitly enables active server PINGs on both
+CLIs: `--http2-ping-ms 10000 --http2-ping-timeout-ms 10000` in the committed
+example. The controller rejects missing/duplicate flags, intervals outside
+1–10000 milliseconds or ACK timeouts outside 10000–3600000 milliseconds.
+Those bounds allow the independent peers, serviced every five seconds, to
+acknowledge probes during application load.
+
+Each persistent independent H2 peer counts server PINGs received and ACKs
+successfully sent, recorded as `keepalive.received` and
+`keepalive.acknowledged` in every per-server resource sample. Both counters
+must already be positive and equal at the post-warmup baseline, remain equal
+and never decrease. Each assessed interval of at least 30 seconds requires
+both to increase; shorter intervals, including the two-second publication
+guard, require equality and monotonicity without demanding a new probe.
+These are probe-side counters, not new Prometheus metrics. They prove actual
+active PING/ACK progress on the independent plain and verified-TLS sessions;
+ordinary response probes or merely passing CLI flags cannot substitute.
+`test_production_harness.py` includes missing-option, invalid-timing, missing-ACK,
+stalled-progress and short-guard accounting cases without starting a server.
 
 The four metrics selectors in the example are the stable Phase 6 contract.
 The producer excludes `/metrics` from application counters. Body probes are

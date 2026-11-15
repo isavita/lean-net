@@ -6,11 +6,12 @@ import subprocess
 import sys
 import unittest
 
-from soak24 import ClockGuard, assess_sample, counter, loader_command, loader_completion_bounds, log_health, parse_load, sample_process_family, validate, DAY, LOG_HEALTH_METRICS, LOG_MAX_PENDING_RECORDS
+from soak24 import ClockGuard, assess_sample, check_keepalive_progress, counter, loader_command, loader_completion_bounds, log_health, parse_load, sample_process_family, validate, DAY, LOG_HEALTH_METRICS, LOG_MAX_PENDING_RECORDS
 
 
 def config():
-    return {'servers': [dict(name=name, scheme=scheme, binary='unused', args=['{port}'], path='/', body_hex='00ff',
+    return {'servers': [dict(name=name, scheme=scheme, binary='unused',
+                            args=['{port}', '--http2-ping-ms', '10000', '--http2-ping-timeout-ms', '10000'], path='/', body_hex='00ff',
                             metrics={key: {'name': key, 'labels': {'protocol': 'h2'}} for key in ('completed', 'errors', 'timeouts', 'resets')})
                         for name, scheme in [('plain', 'http'), ('tls', 'https')]]}
 
@@ -18,6 +19,7 @@ def config():
 def sample(time, completed, probes=0):
     return {'monotonic': time, 'servers': [dict(name=name, counters={'completed': completed, 'errors': 0, 'timeouts': 0, 'resets': 0},
                  log_health={'accepted': completed, 'written': completed - 1, 'dropped': 0, 'io_errors': 0, 'pending': 1},
+                 keepalive={'received': int(time), 'acknowledged': int(time)},
                  probes_completed=probes, rss_bytes=10000, fds_or_handles=20,
                  family=[{'pid': index + 10, 'parent_pid': 1, 'start_identity': 'fixed', 'rss_bytes': 10000, 'fds_or_handles': 20}]) for index, name in enumerate(['plain', 'tls'])]}
 
@@ -72,8 +74,21 @@ class SoakAccounting(unittest.TestCase):
             value = config(); value['servers'][1]['args'] += [argument, '25']
             with self.subTest(argument=argument), self.assertRaisesRegex(ValueError, 'certificate reload'):
                 validate(value, None)
+        missing = config(); missing['servers'][0]['args'] = ['{port}']
+        with self.assertRaisesRegex(ValueError, 'explicit --http2-ping-ms'):
+            validate(missing, None)
+        for flag, invalid in [('--http2-ping-ms', '10001'), ('--http2-ping-timeout-ms', '5000')]:
+            value = config(); args = value['servers'][0]['args']; args[args.index(flag) + 1] = invalid
+            with self.subTest(flag=flag), self.assertRaisesRegex(ValueError, 'keepalive'):
+                validate(value, None)
 
     def test_probe_subtraction_floor_and_counter_conservation(self):
+        ready = {'received': 3, 'acknowledged': 3}
+        check_keepalive_progress(None, ready)
+        check_keepalive_progress(ready, ready, False)  # Short publication guard.
+        for stalled in [ready, {'received': 2, 'acknowledged': 2}, {'received': 4, 'acknowledged': 3}]:
+            with self.subTest(stalled=stalled), self.assertRaises(RuntimeError):
+                check_keepalive_progress(ready, stalled)
         before = sample(10, 1000)
         after = sample(15, 26001, 1)
         self.assertEqual(assess_sample(before, after, before)['successful_requests'], 50000)

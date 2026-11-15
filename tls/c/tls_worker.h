@@ -10,6 +10,7 @@
  * delivery lease. Its stop/join/free barrier precedes reactor destruction. */
 #define TLSW_CELL_SIZE 4096u
 #define TLSW_CIPHER_OPERATION (UINT64_C(1) << 63)
+#define TLSW_FILE_RETRY 256u
 enum tlsw_event_kind {
   TLSW_READY = 1, TLSW_READ = 2, TLSW_WRITTEN = 3, TLSW_EOF = 4,
   TLSW_CLOSED = 6, TLSW_ERROR = 7
@@ -28,6 +29,8 @@ lean_object *lean_tlsw_bundle_reload_stats(uint64_t handle);
 lean_object *lean_tlsw_worker_new(uint64_t bundle, b_lean_obj_arg reactor,
     uint32_t max_sessions, uint32_t queue_capacity, uint64_t handshake_ms,
     uint64_t shutdown_ms);
+/* Join failure retains the graph. After successful join, control/close errors
+ * still consume ownership; the Lean bracket must never retry this free. */
 lean_object *lean_tlsw_worker_free(uint64_t handle);
 lean_object *lean_tlsw_attach(uint64_t handle, b_lean_obj_arg wire);
 lean_object *lean_tlsw_feed(uint64_t handle, uint64_t session,
@@ -47,6 +50,9 @@ lean_object *lean_tlsw_native_closed(uint64_t handle, uint64_t session);
 lean_object *lean_tlsw_release_plain(uint64_t handle, uint64_t session);
 lean_object *lean_tlsw_read_enabled(uint64_t handle, uint64_t session,
     uint8_t enabled);
+/* Control failures are sticky, including EINTR. The worker stops; pump first
+ * returns historical WRITTEN/CLOSED, then the negative control errno. These
+ * failures are fatal to the owning bracket, never file-resume requests. */
 lean_object *lean_tlsw_pump(uint64_t handle);
 lean_object *lean_tlsw_event(uint64_t handle, uint32_t index);
 lean_object *lean_tlsw_event_buffer(uint64_t handle, uint32_t index);

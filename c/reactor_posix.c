@@ -733,33 +733,57 @@ static int rn_read_ready(rn_reactor *r, uint32_t index) {
     return 0;
 }
 static int rn_send_file_once(int socket_fd, int file_fd, uint64_t offset,
-                            uint32_t count, uint32_t *sent) {
-    *sent = 0;
+                            uint32_t count, uint32_t *sent, uint32_t *flags) {
+    *sent = 0; *flags = 0;
 #if defined(__linux__)
     /* sendfile lacks MSG_NOSIGNAL. Preserve the caller's signal mask and any
      * previously pending SIGPIPE; consume only this call's newly raised one. */
+    *flags = RN_SETUP_ERROR;
     sigset_t blocked, previous, pending;
-    sigemptyset(&blocked); sigaddset(&blocked, SIGPIPE);
+    if (sigemptyset(&blocked) < 0 || sigaddset(&blocked, SIGPIPE) < 0) return -errno;
     int mask_error = pthread_sigmask(SIG_BLOCK, &blocked, &previous);
     if (mask_error) return -mask_error;
     if (sigpending(&pending) < 0) {
-        int error = errno; (void)pthread_sigmask(SIG_SETMASK, &previous, NULL); return -error;
+        int error = errno;
+        mask_error = pthread_sigmask(SIG_SETMASK, &previous, NULL);
+        return mask_error ? -mask_error : -error;
     }
     int had_pending = sigismember(&pending, SIGPIPE);
+    if (had_pending < 0) {
+        int error = errno;
+        mask_error = pthread_sigmask(SIG_SETMASK, &previous, NULL);
+        return mask_error ? -mask_error : -error;
+    }
     off_t position = (off_t)offset;
     ssize_t result = sendfile(socket_fd, file_fd, &position, count);
     int error = result < 0 ? errno : 0;
     if (error == EPIPE && !had_pending) {
-        struct timespec immediate = {0, 0};
-        /* Signal bookkeeping may be interrupted independently of file I/O. */
-        while (sigtimedwait(&blocked, NULL, &immediate) < 0 && errno == EINTR) {}
+        /* One nonblocking wait, never a retry. It is safe if SIGPIPE was
+         * ignored, or a concurrent host sigaction(SIG_IGN) discarded it:
+         * EAGAIN proves there is currently no signal to consume. A blocking
+         * sigwait after a pending query would race with that host action.
+         *
+         * An unexpected bookkeeping failure must leave SIGPIPE blocked:
+         * restoring an unblocked mask with an unconsumed new SIGPIPE could
+         * terminate the host process. RN_SETUP_ERROR makes the owning worker
+         * retire even when this failure's actual errno is EINTR. */
+        const struct timespec immediate = {0, 0};
+        int caught = sigtimedwait(&blocked, NULL, &immediate);
+        if (caught < 0) {
+            int wait_error = errno;
+            if (wait_error != EAGAIN) return -wait_error;
+        } else if (caught != SIGPIPE) {
+            return -EIO;
+        }
     }
     mask_error = pthread_sigmask(SIG_SETMASK, &previous, NULL);
     if (result > 0) {
-        if ((uint64_t)result > count) return -EIO;
-        *sent = (uint32_t)result;
+        if ((uint64_t)result > count) error = EIO;
+        else *sent = (uint32_t)result;
     }
-    return error ? -error : mask_error ? -mask_error : 0;
+    if (mask_error) return -mask_error;
+    *flags = 0;
+    return error ? -error : 0;
 #else
     off_t amount = (off_t)count;
     int result = sendfile(file_fd, socket_fd, (off_t)offset, &amount, NULL, 0);
@@ -797,15 +821,15 @@ static int rn_write_ready(rn_reactor *r, uint32_t index) {
             int error = rn_files_get(&r->files, head->file, &entry);
             uint32_t count = head->length - head->sent;
             if (count > file_budget) count = file_budget;
-            uint32_t sent = 0;
+            uint32_t sent = 0, flags = 0;
             if (!error) error = rn_send_file_once(c->fd, (int)entry->handle,
-                head->file_offset + head->sent, count, &sent);
+                head->file_offset + head->sent, count, &sent, &flags);
             if (sent > count) { sent = 0; error = -EIO; }
             head->sent += sent; file_budget -= sent;
-            if (error && error != -EAGAIN && error != -EWOULDBLOCK) {
-                int emitted = rn_emit(r, RN_ERROR, token, head->operation, 0, 0, 0, error, 0);
+            if (error && (flags || (error != -EAGAIN && error != -EWOULDBLOCK))) {
+                int emitted = rn_emit(r, RN_ERROR, token, head->operation, 0, 0, 0, error, flags);
                 if (emitted) return emitted;
-                if (error != -EINTR) return rn_close_connection_impl(r, token);
+                if (flags || error != -EINTR) return rn_close_connection_impl(r, token);
                 return 0;
             }
             if (!error && !sent) {

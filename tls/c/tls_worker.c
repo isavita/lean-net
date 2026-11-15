@@ -33,6 +33,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -124,7 +125,7 @@ typedef struct tw_engine {
   uint32_t count, queue_capacity;
   uint64_t handshake_ms, shutdown_ms;
   tw_session *sessions;
-  atomic_int stop, wake_error;
+  atomic_int stop, control_error;
   atomic_uint notifications, running;
   atomic_uint_fast64_t ssl_calls, owner_violations;
   atomic_uint live_ssl, live_bios;
@@ -273,24 +274,36 @@ static int tw_alpn(SSL *ssl, const unsigned char **out, unsigned char *outlen,
 }
 #include "tls_reload.h"
 
+static void tw_engine_control_fail(tw_engine *engine, int error) {
+  int expected = 0;
+  if (error >= 0) error = -EIO;
+  (void)atomic_compare_exchange_strong_explicit(&engine->control_error, &expected, error,
+      memory_order_release, memory_order_relaxed);
+  atomic_store_explicit(&engine->stop, 1, memory_order_release);
+}
+static void tw_notify_reactor(tw_engine *engine) {
+  int result = rn_waker_wake(engine->reactor_waker);
+  if (result) tw_engine_control_fail(engine, result);
+}
 static void tw_notify_thread(tw_engine *engine) {
   atomic_fetch_add_explicit(&engine->notifications, 1, memory_order_release);
+  if (atomic_load_explicit(&engine->control_error, memory_order_acquire)) return;
 #ifdef _WIN32
-  if (!SetEvent(engine->wake)) { int expected = 0; (void)atomic_compare_exchange_strong(&engine->wake_error, &expected, -EIO); }
+  if (!SetEvent(engine->wake)) {
+    DWORD error = GetLastError();
+    tw_engine_control_fail(engine, -ln_windows_errno(error)); tw_notify_reactor(engine);
+  }
 #else
   unsigned char byte = 1; ssize_t result = write(engine->wake_write, &byte, 1);
-  if (result < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-    int expected = 0; (void)atomic_compare_exchange_strong(&engine->wake_error, &expected, -errno);
+  int error = result < 0 ? errno : 0;
+  if ((result < 0 && error != EAGAIN && error != EWOULDBLOCK) || result == 0) {
+    tw_engine_control_fail(engine, result < 0 ? -error : -EIO); tw_notify_reactor(engine);
   }
 #endif
 }
 static void tw_notify_session(tw_engine *engine, tw_session *session) {
   atomic_fetch_add_explicit(&session->notifications, 1, memory_order_release);
   tw_notify_thread(engine);
-}
-static void tw_notify_reactor(tw_engine *engine) {
-  int result = rn_waker_wake(engine->reactor_waker);
-  if (result && result != -ECANCELED) { int expected = 0; (void)atomic_compare_exchange_strong(&engine->wake_error, &expected, result); }
 }
 static void tw_finish(tw_engine *engine, tw_session *session, int error, const char *reason) {
   tw_note_ssl(engine);
@@ -557,27 +570,67 @@ static void tw_drive(tw_engine *engine, tw_session *session) {
   }
   session->more = 1;
 }
+static int tw_engine_control_wait(tw_engine *engine, uint32_t notification) {
+#ifdef _WIN32
+  if (!ResetEvent(engine->wake)) {
+    DWORD error = GetLastError(); return -ln_windows_errno(error);
+  }
+  if (notification != atomic_load_explicit(&engine->notifications, memory_order_acquire) ||
+      atomic_load_explicit(&engine->stop, memory_order_acquire)) return 0;
+  DWORD result = WaitForSingleObject(engine->wake, 20);
+  DWORD error = result == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+  return result == WAIT_OBJECT_0 || result == WAIT_TIMEOUT ? 0 :
+      result == WAIT_FAILED ? -ln_windows_errno(error) : -EIO;
+#else
+  unsigned char bytes[128];
+  unsigned attempts = 0;
+  for (; attempts < 16; ++attempts) {
+    ssize_t count = read(engine->wake_read, bytes, sizeof(bytes));
+    if (count > 0) continue; /* Drain successful notifications, never retry EINTR. */
+    if (!count) return -EPIPE;
+    int error = errno;
+    if (error != EAGAIN && error != EWOULDBLOCK) return -error;
+    break;
+  }
+  if (attempts == 16) return 0; /* Keep session/stop processing fair under a wake flood. */
+  if (notification != atomic_load_explicit(&engine->notifications, memory_order_acquire) ||
+      atomic_load_explicit(&engine->stop, memory_order_acquire)) return 0;
+  struct pollfd fd = {engine->wake_read, POLLIN, 0};
+  int result = poll(&fd, 1, 20);
+  if (result < 0) return -errno;
+  if (!result) return 0;
+  if (fd.revents & POLLNVAL) return -EBADF;
+  if (fd.revents & POLLERR) return -EIO;
+  if (fd.revents & POLLHUP) return -EPIPE;
+  return fd.revents & POLLIN ? 0 : -EIO;
+#endif
+}
 static void tw_run(tw_engine *engine) {
   tw_current_engine = engine;
   atomic_store(&engine->running, 1);
+#ifndef _WIN32
+  /* Process shutdown belongs to the group/reactor owners. This private thread
+   * receives explicit queue/stop notifications, not SIGINT/SIGTERM. */
+  sigset_t blocked;
+  int signal_error = sigemptyset(&blocked) || sigaddset(&blocked, SIGINT) || sigaddset(&blocked, SIGTERM) ? errno : 0;
+  if (!signal_error) signal_error = pthread_sigmask(SIG_BLOCK, &blocked, NULL);
+  if (signal_error) tw_engine_control_fail(engine, -signal_error);
+#endif
   while (!atomic_load_explicit(&engine->stop, memory_order_acquire)) {
     uint32_t notification = atomic_load_explicit(&engine->notifications, memory_order_acquire);
     int more = 0;
     for (uint32_t i = 0; i < engine->count; ++i) { tw_drive(engine, &engine->sessions[i]); if (engine->sessions[i].more && atomic_load(&engine->sessions[i].state) == TW_ACTIVE) more = 1; }
     if (more) continue;
-#ifdef _WIN32
-    (void)ResetEvent(engine->wake);
-    if (notification == atomic_load_explicit(&engine->notifications, memory_order_acquire) && !atomic_load(&engine->stop)) (void)WaitForSingleObject(engine->wake, 20);
-#else
-    unsigned char bytes[128]; while (read(engine->wake_read, bytes, sizeof(bytes)) > 0) {}
-    if (notification == atomic_load_explicit(&engine->notifications, memory_order_acquire) && !atomic_load(&engine->stop)) { struct pollfd fd = {engine->wake_read, POLLIN, 0}; (void)poll(&fd, 1, 20); }
-#endif
+    int error = tw_engine_control_wait(engine, notification);
+    if (error) { tw_engine_control_fail(engine, error); break; }
   }
   for (uint32_t i = 0; i < engine->count; ++i) {
     tw_session *session = &engine->sessions[i];
-    if (session->ssl || session->network) tw_finish(engine, session, 0, "");
+    unsigned state = atomic_load_explicit(&session->state, memory_order_acquire);
+    if (state == TW_OPEN || state == TW_ACTIVE) tw_finish(engine, session, 0, "");
   }
-  OPENSSL_thread_stop(); atomic_store(&engine->running, 0); tw_current_engine = NULL;
+  OPENSSL_thread_stop(); atomic_store_explicit(&engine->running, 0, memory_order_release);
+  tw_notify_reactor(engine); tw_current_engine = NULL;
 }
 #ifdef _WIN32
 static DWORD WINAPI tw_entry(LPVOID argument) { tw_run(argument); return 0; }
@@ -596,8 +649,10 @@ static int tw_engine_delete(tw_engine *engine) {
     free(session->plain_out.cells); free(session->fences.cells);
   }
 #ifdef _WIN32
-  if (engine->thread && !CloseHandle(engine->thread)) error = -EIO;
-  if (engine->wake && !CloseHandle(engine->wake) && !error) error = -EIO;
+  if (engine->thread && !CloseHandle(engine->thread)) error = -ln_windows_errno(GetLastError());
+  if (engine->wake && !CloseHandle(engine->wake)) {
+    int closed = -ln_windows_errno(GetLastError()); if (!error) error = closed;
+  }
 #else
   if (engine->wake_read >= 0 && close(engine->wake_read) < 0) error = -errno;
   if (engine->wake_write >= 0 && close(engine->wake_write) < 0 && !error) error = -errno;
@@ -623,12 +678,21 @@ static int tw_bridge_delete(tw_bridge *bridge) {
   if (!bridge) return 0;
   tw_engine *engine = bridge->engine; int error = 0;
   if (engine) {
-    atomic_store_explicit(&engine->stop, 1, memory_order_release); tw_notify_thread(engine);
+    atomic_store_explicit(&engine->stop, 1, memory_order_release);
 #ifdef _WIN32
-    if (engine->thread && WaitForSingleObject(engine->thread, INFINITE) != WAIT_OBJECT_0) return -EIO;
+    if (engine->thread) {
+      tw_notify_thread(engine);
+      DWORD result = WaitForSingleObject(engine->thread, INFINITE);
+      DWORD native = result == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+      if (result != WAIT_OBJECT_0) return result == WAIT_FAILED ? -ln_windows_errno(native) : -EIO;
+    }
 #else
-    if (engine->thread_started && pthread_join(engine->thread, NULL) != 0) return -EIO;
+    if (engine->thread_started) {
+      tw_notify_thread(engine);
+      int result = pthread_join(engine->thread, NULL); if (result) return -result;
+    }
 #endif
+    error = atomic_load_explicit(&engine->control_error, memory_order_acquire);
     if (atomic_load(&engine->live_ssl) || atomic_load(&engine->live_bios)) error = -EIO;
   }
   tw_release_events(bridge);
@@ -656,7 +720,7 @@ lean_object *lean_tlsw_worker_new(uint64_t bundle_handle, b_lean_obj_arg reactor
   tw_bridge *bridge = calloc(1, sizeof(*bridge)); tw_engine *engine = calloc(1, sizeof(*engine));
   if (!bridge || !engine) { free(bridge); free(engine); return tw_handle(-ENOMEM, "allocating TLS worker"); }
   bridge->engine = engine; bridge->reactor = native;
-  atomic_init(&engine->stop, 0); atomic_init(&engine->wake_error, 0); atomic_init(&engine->notifications, 0); atomic_init(&engine->running, 0);
+  atomic_init(&engine->stop, 0); atomic_init(&engine->control_error, 0); atomic_init(&engine->notifications, 0); atomic_init(&engine->running, 0);
   atomic_init(&engine->ssl_calls, 0); atomic_init(&engine->owner_violations, 0);
   atomic_init(&engine->live_ssl, 0); atomic_init(&engine->live_bios, 0);
 #ifndef _WIN32
@@ -720,6 +784,7 @@ static tw_bridge_session *tw_find(tw_bridge *bridge, uint64_t token, tw_session 
 lean_object *lean_tlsw_attach(uint64_t handle, b_lean_obj_arg wire) {
   if (!handle) return tw_result(-EINVAL);
   tw_bridge *bridge = (tw_bridge *)(uintptr_t)handle; rn_reactor *reactor = NULL; uint64_t connection, capability;
+  if (atomic_load_explicit(&bridge->engine->control_error, memory_order_acquire)) return tw_result(-EAGAIN);
   int error = rn_bridge_wire(wire, &reactor, &connection, &capability);
   if (error || reactor != bridge->reactor) return tw_result(error ? error : -EINVAL);
   for (uint32_t i = 0; i < bridge->engine->count; ++i)
@@ -745,7 +810,8 @@ static int tw_input(tw_bridge *bridge, uint64_t token, b_lean_obj_arg buffer,
     uint32_t offset, uint32_t length, uint64_t operation, int plain) {
   tw_session *session = NULL; tw_bridge_session *owner = tw_find(bridge, token, &session);
   if (!owner) return -EINVAL;
-  if (owner->aborted || atomic_load(&session->state) == TW_DONE) return plain ? 1 : 0;
+  if (owner->aborted || atomic_load(&session->state) == TW_DONE ||
+      atomic_load_explicit(&bridge->engine->control_error, memory_order_acquire)) return plain ? 1 : 0;
   if (plain && (!atomic_load_explicit(&session->ready, memory_order_acquire) || atomic_load(&session->shutdown))) return -EINVAL;
   uint64_t lease; int error = rn_bridge_buffer(buffer, bridge->reactor, &lease); if (error) return error;
   lean_object *bytes = NULL; error = rn_buffer_view(bridge->reactor, lease, &bytes); if (error) return error;
@@ -769,7 +835,8 @@ lean_object *lean_tlsw_write_file(uint64_t handle, uint64_t token, uint64_t owne
   tw_bridge *bridge = (tw_bridge *)(uintptr_t)handle; tw_session *session = NULL;
   tw_bridge_session *owner = tw_find(bridge, token, &session); if (!owner) return tw_result(-EINVAL);
   if (!owner_id || owner_id != rn_file_owner(bridge->reactor)) return tw_result(-EINVAL);
-  if (owner->aborted || atomic_load(&session->state) == TW_DONE) return tw_result(1);
+  if (owner->aborted || atomic_load(&session->state) == TW_DONE ||
+      atomic_load_explicit(&bridge->engine->control_error, memory_order_acquire)) return tw_result(1);
   if (!atomic_load_explicit(&session->ready, memory_order_acquire) || atomic_load(&session->shutdown)) return tw_result(-EINVAL);
   tw_cell *cell = tw_producer(&session->plain_in); if (!cell) return tw_result(1);
   rn_file_source *source = NULL;
@@ -856,7 +923,23 @@ static int tw_emit_written(tw_bridge *bridge, uint32_t index) {
 lean_object *lean_tlsw_pump(uint64_t handle) {
   if (!handle) return tw_result(-EINVAL);
   tw_bridge *bridge = (tw_bridge *)(uintptr_t)handle; tw_release_events(bridge); tw_engine *engine = bridge->engine;
-  int wake_error = atomic_exchange(&engine->wake_error, 0); if (wake_error) return tw_result(wake_error);
+  if (atomic_load_explicit(&engine->control_error, memory_order_acquire)) {
+    for (uint32_t i = 0; i < engine->count; ++i) {
+      tw_bridge_session *owner = &bridge->sessions[i];
+      if (!owner->used || owner->aborted) continue;
+      owner->aborted = 1; atomic_store(&engine->sessions[i].cancel, 1);
+      int live = rn_connection_live(bridge->reactor, owner->connection);
+      if (live > 0) {
+        int error = rn_transport_abort(bridge->reactor, owner->connection, owner->capability);
+        if (error) {
+          tw_engine_control_fail(engine, error);
+          /* A consumed close can report EINTR/error while still queuing its
+           * authoritative CLOSED. Preserve its historical prefix. */
+          if (rn_connection_live(bridge->reactor, owner->connection) > 0) return tw_result(error);
+        }
+      }
+    }
+  }
   for (uint32_t i = 0; i < engine->count; ++i) {
     tw_bridge_session *owner = &bridge->sessions[i]; tw_session *session = &engine->sessions[i]; if (!owner->used) continue;
     uint32_t state = atomic_load_explicit(&session->state, memory_order_acquire);
@@ -889,7 +972,7 @@ lean_object *lean_tlsw_pump(uint64_t handle) {
     }
     int file_error = atomic_load_explicit(&session->file_error, memory_order_acquire);
     if (file_error && !owner->file_error_sent &&
-        tw_emit(bridge, i, TLSW_ERROR, session->file_error_operation, 0, file_error, 0, 0))
+        tw_emit(bridge, i, TLSW_ERROR, session->file_error_operation, 0, file_error, TLSW_FILE_RETRY, 0))
       owner->file_error_sent = 1;
     /* The permanent plaintext lease cannot be consumed by raw native reads.
      * Lean delivery borrows it until the explicit generation-checked ACK. */
@@ -909,10 +992,11 @@ lean_object *lean_tlsw_pump(uint64_t handle) {
       }
       if (error && !tw_would_block(error)) {
         uint32_t flags = error == -EACCES || error == -EINVAL || error == -ENOMEM || error == -EIO || error == -EOVERFLOW ? RN_SETUP_ERROR : 0;
-        if (tw_emit(bridge, i, TLSW_ERROR, 0, 0, error, flags, 0)) owner->error_sent = 1;
+        if (tw_emit(bridge, i, TLSW_ERROR, 0, 0, error, flags, 0) && error != -EINTR) owner->error_sent = 1;
         /* The owning dispatcher calls abort after observing ERROR. Keep that
          * first abort actionable so it still closes the physical capability. */
-        atomic_store(&session->cancel, 1); tw_notify_session(engine, session); continue;
+        if (error != -EINTR) { atomic_store(&session->cancel, 1); tw_notify_session(engine, session); }
+        continue;
       }
     }
     while (owner->ready_sent && owner->reading && (cell = tw_consumer(&session->plain_out)) != NULL && bridge->event_count < bridge->event_capacity) {
@@ -947,6 +1031,13 @@ lean_object *lean_tlsw_pump(uint64_t handle) {
         owner->drain_sent = 1;
       }
     }
+  }
+  int control = atomic_load_explicit(&engine->control_error, memory_order_acquire);
+  if (control && !bridge->event_count) {
+    int awaiting = 0;
+    for (uint32_t i = 0; i < engine->count; ++i)
+      if (bridge->sessions[i].used && !bridge->sessions[i].closed_sent) { awaiting = 1; break; }
+    if (!awaiting) return tw_result(control);
   }
   return tw_result(bridge->event_count);
 }
@@ -983,7 +1074,7 @@ lean_object *lean_tlsw_on_written(uint64_t handle, uint64_t operation, uint64_t 
 lean_object *lean_tlsw_has_work(uint64_t handle) {
   if (!handle) return tw_result(-EINVAL);
   tw_bridge *bridge = (tw_bridge *)(uintptr_t)handle;
-  if (atomic_load(&bridge->engine->wake_error)) return tw_result(1);
+  if (atomic_load_explicit(&bridge->engine->control_error, memory_order_acquire)) return tw_result(1);
   for (uint32_t i = 0; i < bridge->engine->count; ++i) {
     tw_bridge_session *owner = &bridge->sessions[i]; tw_session *session = &bridge->engine->sessions[i]; if (!owner->used) continue;
     if (owner->aborted) {

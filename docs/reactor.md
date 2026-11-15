@@ -70,8 +70,8 @@ tick. Timers are one-shot completion events and do not allocate one kernel timer
 per connection. HTTP/1 and HTTP/2 use this reactor through their pure action
 machines; TLS uses dedicated native workers and the same HTTP controller. The
 HTTP/2 driver handles bounded input and output, stream scheduling and GOAWAY
-draining; see [http2-machine.md](http2-machine.md). Phases 1–4 passed acceptance;
-phases 5 and 6 remain open.
+draining; see [http2-machine.md](http2-machine.md). Phases 1–5 passed acceptance;
+phase 6 and its full-duration soak remain open.
 
 Read batches preserve owner backpressure: POSIX yields after sixteen reads or
 64 KiB from a peer; IOCP returns a positive read before reposting that peer's
@@ -83,3 +83,33 @@ OS endpoint remains valid through its last reference; waking after reactor
 closure returns cancellation. POSIX retains both pipe ends to prevent late
 SIGPIPE, while Windows retains the original IOCP port owner. TLS threads stop
 and join before their loop's socket and buffer brackets leave scope.
+
+## Linux listener queues
+
+Native listeners request a backlog of 4096. Linux caps the completed accept
+queue at `net.core.somaxconn`; `net.ipv4.tcp_max_syn_backlog` controls incomplete
+handshakes. Inspect both before a busy deployment:
+
+```sh
+sysctl net.core.somaxconn net.ipv4.tcp_max_syn_backlog
+```
+
+Raise values below 4096 to at least 4096; retain larger existing values. For
+example, an administrator can apply the following to the settings that need
+raising, then persist those selected values in `/etc/sysctl.d/90-lean-net.conf`:
+
+```sh
+sudo sysctl -w net.core.somaxconn=4096
+sudo sysctl -w net.ipv4.tcp_max_syn_backlog=4096
+```
+
+Queue capacity consumes kernel memory and does not increase the application's
+client budget. The [kernel queue guidance](https://docs.kernel.org/networking/ip-sysctl.html#tcp-variables)
+and [listen manual](https://man7.org/linux/man-pages/man2/listen.2.html) explain
+the limits and SYN-cookie interaction.
+
+Linux `TCP_DEFER_ACCEPT` can defer listener wakeups until payload arrives.
+Evaluate it against connection/handshake deadlines before opting in; lean-net
+leaves it disabled. Its timeout has kernel retransmission semantics rather than
+the library's millisecond deadline semantics. See the
+[TCP socket-option manual](https://man7.org/linux/man-pages/man7/tcp.7.html).

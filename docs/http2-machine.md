@@ -20,6 +20,21 @@ using `respond`; `drain` schedules pending output. `clock`, `date`, `finish`,
 and `goAway` supply time, the Date value, peer EOF, and shutdown respectively.
 The reactor manages these calls for server applications.
 
+Optional active keepalive uses `Connection.Config.pingIntervalMs` (zero disables
+it) and `pingTimeoutMs` (10,000 by default). After the peer preface and initial
+SETTINGS, the native hashed timer wheel schedules periodic opaque PING probes.
+There is at most one probe awaiting a physical write or matching ACK. The ACK
+deadline starts at write completion; unrelated traffic and stale ACKs cannot
+extend it. Shutdown, peer GOAWAY and EOF disable further probes. A missed ACK
+ends the connection with GOAWAY and times out remaining live requests.
+
+Both public servers expose `--http2-ping-ms MS` and
+`--http2-ping-timeout-ms MS`; for example, 10,000 ms for each. Choose an interval
+shorter than the connection's idle timeout when keeping idle sessions alive.
+PING frames are transport traffic and do not create application requests or
+access records. Transport adapters execute `writePing`, acknowledge its nonce
+through `pingWritten`, and schedule `keepaliveDeadline` through `pingTimer`.
+
 The connection validates frames and HPACK, keeps independent stream and
 connection flow-control windows, and scopes protocol errors to a stream or the
 connection. Stream errors emit RST_STREAM; fatal connection errors emit GOAWAY.
@@ -94,5 +109,6 @@ tests use the independent pinned HPACK dependency in
 behavior on the native reactor and verified TLS, and `test/test_http2_cli.py`
 checks the public executables' push flag over both transports. Build the native
 fixtures and executables before running these tests. Phase 4 passed its protocol,
-performance and cross-platform gates; phase 5 static files and phase 6 production
-hardening remain open. See the [acceptance ledger](production-roadmap.md) for the full gates.
+performance and cross-platform gates; phase 5 static files also passed.
+Phase 6 production hardening and its full-duration soak remain open. See the
+[acceptance ledger](production-roadmap.md) for the full gates.

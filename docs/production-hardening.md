@@ -6,10 +6,11 @@ the actual 24-hour soak, is tracked in the [acceptance ledger](production-roadma
 
 ```sh
 .lake/build/bin/lean-net-http1 8080 --workers 8 --max-clients 128 \
-  --metrics --access-log ./access.jsonl
+  --metrics --access-log ./access.jsonl \
+  --http2-ping-ms 10000 --http2-ping-timeout-ms 10000
 tls/.lake/build/bin/lean-net-tls chain.pem key.pem 8443 \
   --workers 8 --max-clients 128 --metrics --access-log ./tls-access.jsonl \
-  --reload-certs-ms 1000
+  --reload-certs-ms 1000 --http2-ping-ms 10000 --http2-ping-timeout-ms 10000
 ```
 
 Both commands also accept `--static DIRECTORY`, `--static-memory MIB` and
@@ -40,6 +41,37 @@ counts completed response-body payload, excluding framing. HEAD, 204 and 304
 therefore record zero payload bytes. An aborted physical write contributes no
 partial-byte estimate. See the [observability contracts](../test/observability.md)
 for the complete schema, resource bounds and native error behavior.
+
+## Active HTTP/2 keepalive
+
+Active server PINGs are opt-in. Both public CLIs accept `--http2-ping-ms N`
+and `--http2-ping-timeout-ms N`, with decimal values from 1 to 3600000
+milliseconds. The timeout flag requires the interval flag. The interval is
+disabled by default; an enabled interval uses a 10000-millisecond ACK timeout
+unless specified. Library users set `ReactorServerConfig.http2.pingIntervalMs`
+and `pingTimeoutMs`; interval zero disables probes.
+
+After the client preface and first SETTINGS, the pure HTTP/2 machine schedules
+one periodic probe independently of application traffic. At most one probe is
+queued or awaiting its matching eight-byte nonce ACK. The driver uses one
+per-connection slot in the native timer wheel. It queues the PING in output
+order, preserving complete header/CONTINUATION blocks and file DATA framing.
+
+The absolute ACK timeout starts when the PING's physical write completes,
+including its encrypted socket-write fence under TLS. A probe awaiting output
+credit has no ACK timeout yet; the ordinary write deadline still bounds it.
+A matching early ACK can clear a probe before its write notification arrives.
+Wrong, stale or duplicate ACKs, duplicate write notifications, peer non-ACK
+PINGs and ordinary requests cannot extend the active ACK deadline. A matching
+ACK schedules the next interval from the time that ACK is processed.
+
+An expired ACK deadline sends PROTOCOL_ERROR GOAWAY and drains/closes that
+connection; other connections remain serviceable. Active observed requests
+on that connection receive timeout outcomes. EOF and either side's GOAWAY
+stop new probes. HTTP/1 receives no PING frames. PINGs create no application
+request counters or access records, while transport byte counters include
+their framing. The [pure and real-wire tests](../test/production-hardening.md#http2-active-keepalive)
+exercise these distinctions; enabling the options alone is not acceptance.
 
 ## Structured access logs
 

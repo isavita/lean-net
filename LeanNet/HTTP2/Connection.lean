@@ -92,6 +92,9 @@ structure Config where
   maxResetHistory : Nat := 256
   maxPushes : Nat := 128
   enablePush : Bool := false
+  /-- Zero disables active server PINGs. Periodic scheduling belongs to Machine. -/
+  pingIntervalMs : Nat := 0
+  pingTimeoutMs : Nat := 10000
   trackOutput : Bool := false
   deriving Repr
 
@@ -109,7 +112,9 @@ def Config.validate (config : Config) : Except String Unit := do
       config.maxOutputBatchBytes < 16393 || config.maxRequestBatch == 0 ||
       config.maxFramesPerStep == 0 || config.maxDataPerDrain == 0 ||
       config.maxDataPerDrain + 9 > config.maxOutputBatchBytes || config.maxResetHistory == 0 ||
-      config.maxPushes > 1000000 then throw "invalid HTTP/2 connection budgets"
+      config.maxPushes > 1000000 || config.pingIntervalMs > 9223372036854775807 ||
+      config.pingTimeoutMs > 9223372036854775807 ||
+      (config.pingIntervalMs != 0 && config.pingTimeoutMs == 0) then throw "invalid HTTP/2 connection budgets"
 
 end Connection
 
@@ -166,6 +171,8 @@ structure Step where
   error : Option ProtocolError := none
   peerResets : Array UInt32 := #[]
   started : Array RequestStarted := #[]
+  /-- Successfully validated ACK payloads; collected only when PING is enabled. -/
+  pingAcks : Array UInt64 := #[]
 
 end Connection
 
@@ -180,6 +187,8 @@ private def u32 (value : UInt32) : ByteArray := Id.run do
 private def readU32 (payload : ByteArray) (offset : Nat := 0) : Nat :=
   (payload[offset]!).toNat * 16777216 + (payload[offset + 1]!).toNat * 65536 +
     (payload[offset + 2]!).toNat * 256 + (payload[offset + 3]!).toNat
+private def readPingNonce (payload : ByteArray) : UInt64 :=
+  UInt64.ofNat (readU32 payload * 4294967296 + readU32 payload 4)
 private def wire (frame : Frame) : Except ProtocolError ByteArray := frame.encode 16777215
 private def rst (id : UInt32) (code : ErrorCode) : Except ProtocolError ByteArray :=
   wire ⟨3, 0, id, u32 code.toUInt32⟩
@@ -212,6 +221,15 @@ def Connection.outputMetadata (connection : Connection) (id : UInt32) : Option (
   let entry ← findStream connection id
   let head ← entry.head
   return ({ method := head.method, version := "HTTP/2", target := head.target, headers := head.headers }, entry.startedAt)
+
+/-- Bounded live request identities for a connection-scoped timeout outcome. -/
+def Connection.activeRequestIds (connection : Connection) : Array UInt32 :=
+  (connection.streams.filter (fun entry => entry.stream.id.toNat % 2 == 1 && entry.head.isSome)).map (·.stream.id)
+
+/-- Active server probes begin only after the complete client connection preface. -/
+def Connection.canKeepalive (connection : Connection) : Bool :=
+  connection.prefaceRead == 24 && connection.peerSettings && connection.failure.isNone &&
+    !connection.inputEnded && !connection.peerGoAway && connection.localGoAway.isNone
 
 private def putStream (connection : Connection) (entry : Exchange) : Connection :=
   { connection with streams := connection.streams.map (fun previous => if previous.stream.id == entry.stream.id then entry else previous) }
@@ -934,8 +952,9 @@ def Connection.isClosed (connection : Connection) : Bool :=
 
 private def failedStep (connection : Connection) (error : ProtocolError) (consumed : Nat)
     (output : Array ByteArray := #[]) (requests : Array RequestEvent := #[])
-    (peerResets : Array UInt32 := #[]) (started : Array RequestStarted := #[]) : Connection.Step :=
-  { connection := { connection with failure := some error }, consumed, output := output.push (connection.goAway error), requests, error := some error, peerResets, started }
+    (peerResets : Array UInt32 := #[]) (started : Array RequestStarted := #[])
+    (pingAcks : Array UInt64 := #[]) : Connection.Step :=
+  { connection := { connection with failure := some error }, consumed, output := output.push (connection.goAway error), requests, error := some error, peerResets, started, pingAcks }
 
 /-- Parse at most the configured frame/request budget from a borrowed range.
     State and earlier output survive errors; stream failures emit RST_STREAM. -/
@@ -952,6 +971,7 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
   let mut requests := #[]
   let mut peerResets := #[]
   let mut started := #[]
+  let mut pingAcks := #[]
   for _ in [:min length 24] do
     if connection.prefaceRead == 24 then break
     if input[offset + consumed]! != preface[connection.prefaceRead]! then
@@ -968,14 +988,14 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
     | .error error used =>
       consumed := consumed + used
       connection := { connection with parser := FrameParser.new connection.config.maxFrameSize }
-      if error.scope == .connection then return failedStep connection error consumed output requests peerResets started
+      if error.scope == .connection then return failedStep connection error consumed output requests peerResets started pingAcks
       if connection.assembly.isSome || !connection.peerSettings then
-        return failedStep connection (connError .protocolError "invalid frame during mandatory SETTINGS or CONTINUATION sequence") consumed output requests peerResets started
+        return failedStep connection (connError .protocolError "invalid frame during mandatory SETTINGS or CONTINUATION sequence") consumed output requests peerResets started pingAcks
       match error.scope with
-      | .connection => return failedStep connection error consumed output requests peerResets started
+      | .connection => return failedStep connection error consumed output requests peerResets started pingAcks
       | .stream id =>
         match resetStream connection id error.code with
-        | .error fatal => return failedStep connection fatal consumed output requests peerResets started
+        | .error fatal => return failedStep connection fatal consumed output requests peerResets started pingAcks
         | .ok (next, bytes, _) => connection := next; output := output.push bytes; outputSize := outputSize + bytes.size
     | .complete frame used =>
       consumed := consumed + used
@@ -985,13 +1005,15 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
       match handleFrame connection frame with
       | .error error =>
         match error.scope with
-        | .connection => return failedStep connection error consumed output requests peerResets started
+        | .connection => return failedStep connection error consumed output requests peerResets started pingAcks
         | .stream id =>
           match resetStream connection id error.code with
-          | .error fatal => return failedStep connection fatal consumed output requests peerResets started
+          | .error fatal => return failedStep connection fatal consumed output requests peerResets started pingAcks
           | .ok (next, bytes, _) => connection := next; output := output.push bytes; outputSize := outputSize + bytes.size
       | .ok (next, bytes, events) =>
         connection := next
+        if connection.config.pingIntervalMs != 0 && frame.kind == 6 && flag frame.flags 1 then
+          pingAcks := pingAcks.push (readPingNonce frame.payload)
         if connection.config.trackOutput then
           if frame.kind == 3 then peerResets := peerResets.push frame.streamId
           if (frame.kind == 1 || frame.kind == 9) && previousMetadata.isNone then
@@ -1001,8 +1023,8 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
         outputSize := outputSize + bytes.size
         requests := requests ++ events
     if outputSize > connection.config.maxOutputBatchBytes then
-      return failedStep connection (connError .enhanceYourCalm "connection output batch exceeded") consumed output requests peerResets started
-  return { connection, consumed, output, requests := requests.filter (fun event => connection.canRespond event.streamId), peerResets, started }
+      return failedStep connection (connError .enhanceYourCalm "connection output batch exceeded") consumed output requests peerResets started pingAcks
+  return { connection, consumed, output, requests := requests.filter (fun event => connection.canRespond event.streamId), peerResets, started, pingAcks }
 
 /-- Mark peer EOF. Partial framing is fatal; incomplete requests are canceled, while accepted requests and queued responses can finish draining. -/
 def Connection.finish (connection : Connection) : Connection.Step := Id.run do

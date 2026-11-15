@@ -32,7 +32,7 @@ static int test_join(pthread_t thread, void **result) {
 }
 static int test_cipher_write(rn_reactor *reactor, uint64_t connection, uint64_t capability,
     uint64_t buffer, uint32_t offset, uint32_t length, uint64_t operation) {
-  if (fail_cipher) { fail_cipher = 0; return -ENOMEM; }
+  if (fail_cipher) { int kind = fail_cipher; fail_cipher = 0; return kind == 2 ? -EINTR : -ENOMEM; }
   return rn_transport_write(reactor, connection, capability, buffer, offset, length, operation);
 }
 #define pthread_join test_join
@@ -130,7 +130,7 @@ static void historical_written_batch(void) {
     tw_bridge bridge = {0}; bridge.engine = &engine; bridge.reactor = reactor;
     bridge.sessions = &owner; bridge.events = events; bridge.event_claimed = claimed; bridge.event_capacity = 1;
     engine.count = 1; engine.sessions = &session;
-    atomic_init(&engine.notifications, 0); atomic_init(&engine.wake_error, 0);
+    atomic_init(&engine.notifications, 0); atomic_init(&engine.control_error, 0);
     atomic_init(&engine.ssl_calls, 0); atomic_init(&engine.owner_violations, 0);
     atomic_init(&engine.live_ssl, 0); atomic_init(&engine.live_bios, 0);
     int wake[2]; check(pipe(wake) == 0 && rn_nonblocking(wake[0]) == 0 && rn_nonblocking(wake[1]) == 0,
@@ -241,7 +241,7 @@ static void drive_notification_wrap(const char *certificate, const char *key) {
   rn_config config = {1, 8, 1, 2, 0, 0, 1}; rn_reactor *reactor = NULL;
   check(rn_new(&config, &reactor) == 0, "create forced-wrap reactor");
   tw_engine engine = {0}; tw_session session = {0};
-  atomic_init(&engine.stop, 0); atomic_init(&engine.wake_error, 0);
+  atomic_init(&engine.stop, 0); atomic_init(&engine.control_error, 0);
   atomic_init(&engine.notifications, 0); atomic_init(&engine.running, 0);
   atomic_init(&engine.ssl_calls, 0); atomic_init(&engine.owner_violations, 0);
   atomic_init(&engine.live_ssl, 0); atomic_init(&engine.live_bios, 0);
@@ -433,11 +433,12 @@ static void exercise(const char *certificate, const char *key, uint32_t capacity
   check(result(lean_tlsw_write_file(worker, session, rn_file_owner(reactor),
       file_token, sizeof(payload) - 1, 2, 900)) == -EINVAL, "TLS file rejects an oversized region");
   atomic_store(&fail_file_view, EINTR);
+  fail_cipher = 2;
   check(result(lean_tlsw_write_file(worker, session, rn_file_owner(reactor),
       file_token, 0, sizeof(payload), 900)) == 0, "queue multi-cell TLS file region");
   check(rn_file_release(reactor, file_token) == 0 && rn_file_source_release(file_source) == 0,
       "queued TLS source pin outlives both catalog and import owners");
-  size_t file_received = 0; int file_written = 0, interrupted_file = 0; end = rn_now_ms() + 10000;
+  size_t file_received = 0; int file_written = 0, interrupted_file = 0, interrupted_cipher = 0; end = rn_now_ms() + 10000;
   while ((file_received < sizeof(payload) || !file_written) && rn_now_ms() < end) {
     int native = rn_step(reactor, 0); check(native >= 0, "native TLS file transport step");
     for (int n = 0; n < native; ++n) {
@@ -450,7 +451,13 @@ static void exercise(const char *certificate, const char *key, uint32_t capacity
     for (int64_t n = 0; n < events; ++n) {
       rn_event *event = &bridge->events[n];
       if (event->kind == TLSW_ERROR && event->result == -EINTR) {
-        check(!interrupted_file && event->operation == 900 && atomic_load(&bridge->engine->sessions[0].state) == TW_ACTIVE,
+        if (!(event->flags & TLSW_FILE_RETRY)) {
+          check(!interrupted_cipher && event->operation == 0 && !atomic_load(&bridge->engine->sessions[0].cancel) &&
+              atomic_load(&bridge->engine->sessions[0].state) == TW_ACTIVE,
+              "interrupted ciphertext submission stays active and never requests file resume");
+          interrupted_cipher = 1; continue;
+        }
+        check(!interrupted_file && event->flags == TLSW_FILE_RETRY && event->operation == 900 && atomic_load(&bridge->engine->sessions[0].state) == TW_ACTIVE,
             "file interruption preserves active TLS operation");
         interrupted_file = 1;
         check(result(lean_tlsw_resume_file(worker, session)) == 0, "owner explicitly resumes interrupted file input");
@@ -468,7 +475,7 @@ static void exercise(const char *certificate, const char *key, uint32_t capacity
     } else { int e = SSL_get_error(client, rc); check(e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE, "TLS file read progress"); }
     struct timespec pause = {0, 100000}; (void)nanosleep(&pause, NULL);
   }
-  check(interrupted_file && file_written && file_received == sizeof(payload), "TLS file source/fence/interruption lifecycle completes");
+  check(interrupted_file && interrupted_cipher && file_written && file_received == sizeof(payload), "TLS file source/fence/interruption lifecycle completes");
 #if defined(__linux__)
   check(atomic_load(&splice_successful) > 0, "Linux TLS file path executes successful real file-to-pipe splice");
 #endif
@@ -491,7 +498,7 @@ static void exercise(const char *certificate, const char *key, uint32_t capacity
   for (uint32_t n = 0; n < input_count; ++n) check(rn_buffer_release(reactor, inputs[n].lease) == 0, "release canceled retained input");
   SSL_free(client); SSL_CTX_free(client_context); check(close(peers[1]) == 0, "close client descriptor");
   /* An injected failed join must retain the worker, lanes and callback owner. */
-  fail_join = 1; check(result(lean_tlsw_worker_free(worker)) == -EIO, "join failure preserves live storage");
+  fail_join = 1; check(result(lean_tlsw_worker_free(worker)) == -EDEADLK, "join failure preserves live storage");
   check(bridge->engine != NULL && bridge->reactor_record == record, "failed join retains ownership graph");
   check(result(lean_tlsw_worker_free(worker)) == 0, "join retry frees all SSL/BIO objects");
   check(fcntl(abort_reader, F_GETFD) < 0 && errno == EBADF, "aborted file pin releases its private source handle after join");

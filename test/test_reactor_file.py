@@ -29,6 +29,8 @@ class ReactorFileNative(unittest.TestCase):
             result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("zero-allocation tests passed", result.stdout)
+            if sys.platform.startswith("linux"):
+                self.assertIn("SIGPIPE masks, pending signals, dispositions and one-call fault tests passed", result.stdout)
 
 
 if __name__ == "__main__":

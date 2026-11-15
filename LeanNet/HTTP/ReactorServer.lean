@@ -70,6 +70,7 @@ private structure Output where
   barrier : Bool := false
   started : UInt64
   observation : Option OutputObservation := none
+  pingNonce : Option UInt64 := none
 
 private structure FlightObservation where
   requestId : Nat
@@ -85,6 +86,7 @@ private structure Flight where
   length : Nat
   observation : Option FlightObservation := none
   accounted : Bool := false
+  pingNonce : Option UInt64 := none
 
 private structure OutputSlot where
   buffer : Reactor.Buffer
@@ -124,6 +126,7 @@ private structure Client where
   idleDeadline : Option UInt64 := none
   requestDeadline : Option UInt64 := none
   writeDeadline : Option UInt64 := none
+  pingDeadline : Option UInt64 := none
   requests : Std.HashMap Nat RequestObservation := {}
   resetCounted : Bool := false
   retired : Bool := false
@@ -296,7 +299,7 @@ private def Driver.retire (driver : Driver) (id : Reactor.SocketId)
     retired := true, retirementOutcome := some outcome, closing := true, reading := false,
     protocol := .raw, pipe := none, inputFront := [], inputBack := [], inputBytes := 0,
     outputs := [], outputBytes := 0, queuedFileBytes := 0,
-    idleDeadline := none, requestDeadline := none, writeDeadline := none }
+    idleDeadline := none, requestDeadline := none, writeDeadline := none, pingDeadline := none }
   cleanupActions #[
     releaseInput client,
     (do if let some pipe := client.pipe then try pipe.onClose catch _ => pure ())]
@@ -383,7 +386,7 @@ private def limitedReply (config : ReactorServerConfig) (reply : Reply) : Reply 
 
 private def Driver.appendParts (driver : Driver) (id : Reactor.SocketId)
     (parts : Array OutputPart) (outputId : Option Nat := none) (barrier : Bool := false)
-    (observation : Option OutputObservation := none) : IO Unit := do
+    (observation : Option OutputObservation := none) (pingNonce : Option UInt64 := none) : IO Unit := do
   let some client ← driver.client? id | return
   if client.closing then return
   if parts.size > 4096 then driver.closeNow id; return
@@ -393,7 +396,7 @@ private def Driver.appendParts (driver : Driver) (id : Reactor.SocketId)
   if bytes > driver.config.maxOutputBytes - client.outputBytes then driver.closeNow id; return
   if files > driver.config.maxQueuedFileBytes - client.queuedFileBytes then driver.closeNow id; return
   if parts.isEmpty then return
-  let output : Output := { parts := parts.toList, id := outputId, barrier, started := ← driver.now, observation }
+  let output : Output := { parts := parts.toList, id := outputId, barrier, started := ← driver.now, observation, pingNonce }
   let requests := match observation with
     | none => client.requests
     | some value => client.requests.modify value.requestId fun request =>
@@ -562,6 +565,7 @@ private def Driver.flushOne (driver : Driver) (id : Reactor.SocketId) : IO Bool 
     last := last
     started := output.started
     length := length
+    pingNonce := if last then output.pingNonce else none
     observation := output.observation.map fun value =>
       { requestId := value.requestId, payloadBytes := value.overlap length } }
   driver.state.modify fun state =>
@@ -624,6 +628,25 @@ private def Driver.appendH2Output (driver : Driver) (id : Reactor.SocketId) (out
   for start in [:parts.size:4096] do
     driver.appendParts id (parts.extract start (min parts.size (start + 4096)))
 
+/-- One slot in the native hashed wheel serves each connection's next probe or
+    ACK deadline. Queued probes are instead bounded by the existing write timer. -/
+private def Driver.syncPingTimer (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
+  if driver.config.http2.pingIntervalMs == 0 then return
+  let some client ← driver.client? id | return
+  if client.retired || client.closing then return
+  unless ← id.isLive driver.reactor do
+    driver.nativeGone id
+    return
+  let .http2 machine := client.protocol | return
+  let wanted ← match machine.keepaliveDeadline with
+    | none => pure none
+    | some value => some <$> deadline 0 value
+  if wanted == client.pingDeadline then return
+  match wanted with
+  | none => client.socket.cancelTimer 3
+  | some value => client.socket.armTimer 3 value
+  driver.put id { client with pingDeadline := wanted }
+
 private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
     (step : HTTP2.Machine.Step) : IO Unit := do
   let some client ← driver.client? id | return
@@ -658,6 +681,12 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
       continue
     match action with
     | .write _ | .writeParts _ => pure ()
+    | .writePing nonce pingBytes =>
+      driver.appendH2Output id output
+      output := #[]
+      bytes := 0
+      fileBytes := 0
+      driver.appendParts id #[.bytes (ByteSlice.full pingBytes)] (pingNonce := some nonce)
     | .writeObserved observed =>
       driver.appendH2Output id output
       output := #[]
@@ -690,6 +719,7 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
   -- Preserve the generic queue's per-ticket part bound for custom large
   -- configurations without changing wire order or HTTP/1 output barriers.
   driver.appendH2Output id output
+  driver.syncPingTimer id
   if close then driver.beginDrain id
 
 private def Driver.failH2 (driver : Driver) (id : Reactor.SocketId)
@@ -969,6 +999,10 @@ private def Driver.written (driver : Driver) (id : Reactor.SocketId)
     driver.nativeGone id
     return
   if (← driver.client? id).any (·.retired) then return
+  if let some nonce := flight.pingNonce then
+    if let some client ← driver.client? id then
+      if let .http2 machine := client.protocol then
+        driver.applyH2Step id (machine.pingWritten nonce (← driver.now).toNat)
   if flight.last && flight.barrier then
     if let some outputId := flight.outputId then
       if let some client ← driver.client? id then
@@ -982,6 +1016,12 @@ private def Driver.timer (driver : Driver) (id : Reactor.SocketId) (kind : UInt3
   if client.retired then return
   unless ← id.isLive driver.reactor do
     driver.nativeGone id
+    return
+  if kind == 3 then
+    if client.closing then return
+    driver.put id { client with pingDeadline := none }
+    if let .http2 machine := client.protocol then
+      driver.applyH2Step id (machine.pingTimer state.now.toNat)
     return
   if kind == 2 then
     if client.writeDeadline.any (· <= state.now) then driver.closeNow id .timeout

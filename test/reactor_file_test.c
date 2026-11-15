@@ -9,6 +9,7 @@
 #include "../c/reactor.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,7 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #if defined(__linux__)
 #include <sys/sendfile.h>
@@ -38,6 +40,32 @@ static int test_mlock(const void *address, size_t length) {
 }
 static int test_munmap(void *address, size_t length) { ++unmap_calls; return munmap(address, length); }
 #if defined(__linux__)
+static unsigned signal_mask_calls, signal_pending_calls, signal_wait_calls;
+static unsigned fail_mask_call, fail_pending_call;
+static int injected_mask_error, injected_pending_error, injected_wait_error;
+static int ignore_before_wait;
+static int test_pthread_sigmask(int how, const sigset_t *set, sigset_t *old) {
+    ++signal_mask_calls;
+    if (fail_mask_call == signal_mask_calls) return injected_mask_error;
+    return pthread_sigmask(how, set, old);
+}
+static int test_sigpending(sigset_t *set) {
+    ++signal_pending_calls;
+    if (fail_pending_call == signal_pending_calls) { errno = injected_pending_error; return -1; }
+    return sigpending(set);
+}
+static int test_sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *timeout) {
+    ++signal_wait_calls;
+    if (!timeout || timeout->tv_sec || timeout->tv_nsec) { errno = EINVAL; return -1; }
+    if (injected_wait_error) { errno = injected_wait_error; return -1; }
+    if (ignore_before_wait) {
+        struct sigaction action; sigset_t pending;
+        if (sigpending(&pending) < 0 || sigismember(&pending, SIGPIPE) != 1) { errno = EIO; return -1; }
+        memset(&action, 0, sizeof(action)); sigemptyset(&action.sa_mask); action.sa_handler = SIG_IGN;
+        if (sigaction(SIGPIPE, &action, NULL) < 0) return -1;
+    }
+    return sigtimedwait(set, info, timeout);
+}
 static ssize_t test_sendfile(int output, int input, off_t *offset, size_t count) {
     if (!count) ++zero_file_calls;
     if (!file_calls++) first_file_offset = (uint64_t)*offset;
@@ -67,6 +95,11 @@ static int test_sendfile(int input, int output, off_t offset, off_t *length,
     return 0;
 }
 #endif
+#if defined(__linux__)
+#define pthread_sigmask(...) test_pthread_sigmask(__VA_ARGS__)
+#define sigpending(...) test_sigpending(__VA_ARGS__)
+#define sigtimedwait(...) test_sigtimedwait(__VA_ARGS__)
+#endif
 #define sendfile(...) test_sendfile(__VA_ARGS__)
 #define mlock(...) test_mlock(__VA_ARGS__)
 #define munmap(...) test_munmap(__VA_ARGS__)
@@ -76,6 +109,11 @@ static int test_sendfile(int input, int output, off_t offset, off_t *length,
 #define realloc(ptr, size) (allocation_attempts += hot_path, realloc(ptr, size))
 #define lean_alloc_sarray(elem, size, cap) (allocation_attempts += hot_path, lean_alloc_sarray(elem, size, cap))
 #include "../c/reactor_posix.c"
+#if defined(__linux__)
+#undef pthread_sigmask
+#undef sigpending
+#undef sigtimedwait
+#endif
 #undef sendfile
 #undef mlock
 #undef munmap
@@ -308,7 +346,8 @@ static void interrupted(rn_file_source *source, int error, unsigned progress) {
 #endif
     check(r->writes[c->head_write].sent == progress && rn_file_release(r, file) == -EBUSY,
           "partial progress committed while source stays pinned");
-    if (error == EINTR) check(r->event_count == 1 && r->events[0].kind == RN_ERROR && r->events[0].result == -EINTR,
+    if (error == EINTR) check(r->event_count == 1 && r->events[0].kind == RN_ERROR && r->events[0].result == -EINTR &&
+                              r->events[0].flags == 0,
                               "interruption surfaced exactly once");
     else check(r->event_count == 0, "EAGAIN is ordinary backpressure");
     r->event_count = 0; unsigned before = file_calls;
@@ -358,28 +397,173 @@ static void retained_source_teardown(void) {
           "last pin closes source handle"); hot_path = 0;
 }
 #if defined(__linux__)
+static volatile sig_atomic_t pipe_handler_calls;
+static void pipe_handler(int signal_number) { (void)signal_number; ++pipe_handler_calls; }
+static void reset_signal_faults(void) {
+    signal_mask_calls = signal_pending_calls = signal_wait_calls = 0;
+    fail_mask_call = fail_pending_call = 0;
+    injected_mask_error = injected_pending_error = injected_wait_error = 0;
+    ignore_before_wait = 0;
+}
+static int same_mask(const sigset_t *left, const sigset_t *right) {
+    for (int signal_number = 1; signal_number < NSIG; ++signal_number)
+        if (sigismember(left, signal_number) != sigismember(right, signal_number)) return 0;
+    return 1;
+}
 static void sigpipe_case(rn_file_source *source, unsigned mode) {
     pid_t pid = fork(); check(pid >= 0, "fork default SIGPIPE fixture");
     if (!pid) {
-        signal(SIGPIPE, SIG_DFL); sigset_t only, before, pending;
+        alarm(5);
+        struct sigaction action, after_action;
+        memset(&action, 0, sizeof(action)); sigemptyset(&action.sa_mask);
+        action.sa_handler = mode == 3 ? SIG_IGN : mode == 4 ? pipe_handler : SIG_DFL;
+        check(sigaction(SIGPIPE, &action, NULL) == 0 && sigaction(SIGPIPE, NULL, &action) == 0,
+              "set caller SIGPIPE disposition");
+        sigset_t only, before, pending, expected, unrelated;
         sigemptyset(&only); sigaddset(&only, SIGPIPE);
-        check(pthread_sigmask(mode ? SIG_BLOCK : SIG_UNBLOCK, &only, &before) == 0, "set initial SIGPIPE mask");
+        sigemptyset(&unrelated); sigaddset(&unrelated, SIGUSR1);
+        check(pthread_sigmask(SIG_BLOCK, &unrelated, NULL) == 0 && raise(SIGUSR1) == 0,
+              "establish unrelated caller-pending signal");
+        check(pthread_sigmask(mode == 1 || mode == 2 ? SIG_BLOCK : SIG_UNBLOCK, &only, &before) == 0 &&
+              pthread_sigmask(SIG_SETMASK, NULL, &expected) == 0, "set initial SIGPIPE mask");
         if (mode == 2) check(raise(SIGPIPE) == 0, "establish earlier pending SIGPIPE");
         int pair[2]; check(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0 && close(pair[1]) == 0,
                            "closed SIGPIPE peer");
-        uint32_t sent; file_limit = 0; injected_file_error = 0;
-        check(rn_send_file_once(pair[0], (int)rn_file_source_handle(source), 0, 10, &sent) == -EPIPE && sent == 0,
+        uint32_t sent, flags; file_limit = 0; injected_file_error = 0; reset_signal_faults();
+        check(rn_send_file_once(pair[0], (int)rn_file_source_handle(source), 0, 10, &sent, &flags) == -EPIPE &&
+              sent == 0 && flags == 0,
               "SIGPIPE becomes ordinary EPIPE");
         check(sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == (mode == 2),
               "preserve only caller's previously pending SIGPIPE");
-        sigset_t after; check(pthread_sigmask(SIG_SETMASK, NULL, &after) == 0 &&
-                              sigismember(&after, SIGPIPE) == (mode != 0), "restore original signal mask");
+        check(sigismember(&pending, SIGUSR1) == 1, "unrelated caller-pending signal remains pending");
+        sigset_t after; check(pthread_sigmask(SIG_SETMASK, NULL, &after) == 0 && same_mask(&after, &expected),
+                              "restore exact original signal mask");
+        check(signal_mask_calls == 2 && signal_pending_calls == 1 &&
+              signal_wait_calls == (mode == 2 ? 0u : 1u), "signal bookkeeping calls never retry");
+        check(sigaction(SIGPIPE, NULL, &after_action) == 0 && after_action.sa_handler == action.sa_handler &&
+              after_action.sa_flags == action.sa_flags && same_mask(&after_action.sa_mask, &action.sa_mask) &&
+              !pipe_handler_calls, "caller SIGPIPE disposition is unchanged and handler never runs");
         if (mode == 2) { int caught; check(sigwait(&only, &caught) == 0 && caught == SIGPIPE, "consume preserved caller signal"); }
         check(pthread_sigmask(SIG_UNBLOCK, &only, NULL) == 0 && close(pair[0]) == 0, "later unblock survives");
         _exit(0);
     }
     int status; check(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0,
                       "default-disposition child survives sendfile SIGPIPE");
+}
+/* Faults are run in isolated default-disposition children: accidentally
+ * unblocking a newly pending SIGPIPE fails the test by killing the child.
+ * Explicit test cleanup is outside the native helper, not a native retry. */
+static void sigpipe_fault_case(rn_file_source *source, unsigned mode) {
+    pid_t pid = fork(); check(pid >= 0, "fork signal-bookkeeping fault fixture");
+    if (!pid) {
+        alarm(5);
+        check(signal(SIGPIPE, SIG_DFL) != SIG_ERR, "default fault disposition");
+        sigset_t only, pending, before, after;
+        sigemptyset(&only); sigaddset(&only, SIGPIPE);
+        check(pthread_sigmask(SIG_UNBLOCK, &only, NULL) == 0 &&
+              pthread_sigmask(SIG_SETMASK, NULL, &before) == 0, "unblocked fault baseline");
+        int pair[2]; check(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0, "fault socket pair");
+        if (mode >= 3) check(close(pair[1]) == 0, "closed fault peer");
+        reset_signal_faults(); file_calls = 0; file_limit = 0; injected_file_error = 0;
+        int expected_error = EIO;
+        if (mode == 0) { fail_mask_call = 1; injected_mask_error = EINTR; expected_error = EINTR; }
+        else if (mode == 1) { fail_pending_call = 1; injected_pending_error = EINTR; expected_error = EINTR; }
+        else if (mode == 2) { fail_mask_call = 2; injected_mask_error = EACCES; expected_error = EACCES; }
+        else if (mode == 3) { injected_wait_error = EINTR; expected_error = EINTR; }
+        else if (mode == 4) { injected_wait_error = EIO; expected_error = EIO; }
+        else if (mode == 5) { fail_mask_call = 2; injected_mask_error = EACCES; expected_error = EACCES; }
+        else if (mode == 6) {
+            fail_pending_call = 1; injected_pending_error = EINTR;
+            fail_mask_call = 2; injected_mask_error = EACCES; expected_error = EACCES;
+        }
+        uint32_t sent = 999, flags = 0;
+        check(rn_send_file_once(pair[0], (int)rn_file_source_handle(source), 0, 10, &sent, &flags) == -expected_error &&
+              flags == RN_SETUP_ERROR,
+              "native signal error is returned without retry or masking");
+        unsigned expected_file_calls = mode == 0 || mode == 1 || mode == 6 ? 0u : 1u;
+        check(file_calls == expected_file_calls && signal_mask_calls == (mode == 0 || mode == 3 || mode == 4 ? 1u : 2u),
+              "bookkeeping failure preserves exact syscall attempt counts");
+        check(sent == (mode == 2 ? 10u : 0u), "completed bytes survive a restoration error");
+        check(sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == (mode == 3 || mode == 4),
+              "uncertain-consumption failure retains new SIGPIPE safely");
+        check(pthread_sigmask(SIG_SETMASK, NULL, &after) == 0 &&
+              sigismember(&after, SIGPIPE) == (mode >= 2), "only failed cleanup retains blocked SIGPIPE");
+        check(signal_pending_calls == (mode == 0 ? 0u : 1u) &&
+              signal_wait_calls == (mode == 3 || mode == 4 || mode == 5 ? 1u : 0u), "pending and wait faults never retry");
+        if (mode == 3 || mode == 4) {
+            int caught = 0; check(sigwait(&only, &caught) == 0 && caught == SIGPIPE, "test consumes retained fatal signal");
+        }
+        check(pthread_sigmask(SIG_SETMASK, &before, NULL) == 0 && close(pair[0]) == 0,
+              "test repairs failed cleanup and closes sender");
+        if (mode < 3) check(close(pair[1]) == 0, "close live fault peer");
+        _exit(0);
+    }
+    int status; check(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                      "default-disposition child survives signal-bookkeeping faults");
+}
+static void sigpipe_guard_event(rn_file_source *source, unsigned mode) {
+    pid_t pid = fork(); check(pid >= 0, "fork fatal signal-guard event fixture");
+    if (!pid) {
+        alarm(5);
+        check(signal(SIGPIPE, SIG_DFL) != SIG_ERR, "default fatal-event disposition");
+        sigset_t only, before, pending;
+        sigemptyset(&only); sigaddset(&only, SIGPIPE);
+        check(pthread_sigmask(SIG_UNBLOCK, &only, NULL) == 0 &&
+              pthread_sigmask(SIG_SETMASK, NULL, &before) == 0, "fatal-event signal baseline");
+        rn_reactor *r = reactor_new(1, 1); uint64_t file;
+        check(rn_file_import(r, source, &file) == 0, "import fatal-event source");
+        int peer; uint64_t connection = adopt(r, &peer);
+        check(rn_queue_file(r, connection, rn_file_owner(r), file, 0, 10, 80) == 0 && close(peer) == 0,
+              "queue file before peer closure");
+        reset_signal_faults(); file_calls = 0; injected_file_error = 0; file_limit = 0;
+        if (mode == 0) injected_wait_error = EINTR;
+        else { fail_pending_call = 1; injected_pending_error = EINTR; }
+        unsigned expected_calls = mode == 0 ? 1u : 0u;
+        check(rn_write_ready(r, rn_index(connection)) == 0 && file_calls == expected_calls && r->event_count == 1,
+              "fatal guard interruption attempts file only once");
+        check(r->events[0].kind == RN_ERROR && r->events[0].operation == 80 &&
+              r->events[0].result == -EINTR && r->events[0].flags == RN_SETUP_ERROR &&
+              !rn_connection_live(r, connection), "guard EINTR is fatal setup error, never resumable peer IO");
+        check(sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == (mode == 0),
+              "fatal event keeps unconsumed SIGPIPE blocked until owner ends");
+        if (mode == 0) {
+            int caught = 0; check(sigwait(&only, &caught) == 0 && caught == SIGPIPE, "test consumes fatal pending signal");
+        }
+        check(pthread_sigmask(SIG_SETMASK, &before, NULL) == 0, "test repairs isolated fatal guard");
+        reset_signal_faults();
+        check(rn_file_release(r, file) == 0 && rn_step(r, 0) == 1 && r->events[0].kind == RN_CLOSED &&
+              rn_step(r, 0) == 0 && file_calls == expected_calls, "fatal guard closes once and never resumes file IO");
+        check(rn_free(r) == 0, "free fatal-event reactor"); _exit(0);
+    }
+    int status; check(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                      "fatal guard event child survives and terminates");
+}
+static void sigpipe_disposition_race(rn_file_source *source) {
+    pid_t pid = fork(); check(pid >= 0, "fork host-disposition race fixture");
+    if (!pid) {
+        alarm(5);
+        check(signal(SIGPIPE, SIG_DFL) != SIG_ERR, "default disposition before host race");
+        sigset_t only, before, after, pending;
+        sigemptyset(&only); sigaddset(&only, SIGPIPE);
+        check(pthread_sigmask(SIG_UNBLOCK, &only, NULL) == 0 &&
+              pthread_sigmask(SIG_SETMASK, NULL, &before) == 0, "host-race signal baseline");
+        int pair[2]; check(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0 && close(pair[1]) == 0,
+                           "closed host-race peer");
+        reset_signal_faults(); file_calls = 0; file_limit = 0; injected_file_error = 0; ignore_before_wait = 1;
+        uint32_t sent, flags;
+        check(rn_send_file_once(pair[0], (int)rn_file_source_handle(source), 0, 10, &sent, &flags) == -EPIPE &&
+              sent == 0 && flags == 0, "host-cleared pending signal is ordinary EPIPE, never a blocking wait");
+        check(signal_mask_calls == 2 && signal_pending_calls == 1 && signal_wait_calls == 1 && file_calls == 1,
+              "host disposition race performs one bounded wait and no retry");
+        struct sigaction action;
+        check(sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 0 &&
+              pthread_sigmask(SIG_SETMASK, NULL, &after) == 0 && same_mask(&before, &after) &&
+              sigaction(SIGPIPE, NULL, &action) == 0 && action.sa_handler == SIG_IGN,
+              "host disposition is respected and original mask restored after EAGAIN");
+        check(close(pair[0]) == 0, "close host-race sender"); _exit(0);
+    }
+    int status; check(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                      "host disposition race completes without deadlock or SIGPIPE death");
 }
 #endif
 int main(void) {
@@ -393,7 +577,11 @@ int main(void) {
 #endif
     unexpected_eof(source); retained_source_teardown();
 #if defined(__linux__)
-    for (unsigned mode = 0; mode < 3; ++mode) sigpipe_case(source, mode);
+    for (unsigned mode = 0; mode < 5; ++mode) sigpipe_case(source, mode);
+    for (unsigned mode = 0; mode < 7; ++mode) sigpipe_fault_case(source, mode);
+    for (unsigned mode = 0; mode < 2; ++mode) sigpipe_guard_event(source, mode);
+    sigpipe_disposition_race(source);
+    puts("Linux sendfile SIGPIPE masks, pending signals, dispositions and one-call fault tests passed");
 #endif
     check(rn_file_source_release(source) == 0 && rn_file_source_release(empty) == 0, "release catalog sources");
     check(allocation_attempts == 0, "no backend or Lean-buffer hot allocations");

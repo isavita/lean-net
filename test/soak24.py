@@ -402,6 +402,32 @@ def log_health(text):
     return health
 
 
+def keepalive_options(server):
+    values = []
+    arguments = server['args']
+    for flag in ('--http2-ping-ms', '--http2-ping-timeout-ms'):
+        if arguments.count(flag) != 1:
+            raise ValueError('strict soak requires one explicit ' + flag)
+        index = arguments.index(flag) + 1
+        if index == len(arguments) or not re.fullmatch(r'[0-9]+', arguments[index]):
+            raise ValueError('keepalive options require decimal millisecond values')
+        values.append(int(arguments[index]))
+    if not 1 <= values[0] <= 10000 or not 10000 <= values[1] <= 3600000:
+        raise ValueError('soak keepalive interval must be <=10s and ACK timeout >=10s for five-second probes')
+    return {'interval_ms': values[0], 'timeout_ms': values[1]}
+
+
+def check_keepalive_progress(before, current, require_progress=True):
+    if any(type(current[key]) is not int or current[key] < 1 for key in ('received', 'acknowledged')):
+        raise RuntimeError('independent probe has not exercised server PING keepalive')
+    if current['received'] != current['acknowledged']:
+        raise RuntimeError('independent probe did not acknowledge every server PING')
+    if before is not None:
+        for key in ('received', 'acknowledged'):
+            if current[key] < before[key] or (require_progress and current[key] == before[key]):
+                raise RuntimeError('server PING keepalive stopped progressing')
+
+
 def check_log_health(health):
     if health['dropped'] or health['io_errors']:
         raise RuntimeError('access log dropped records or reported an I/O error')
@@ -505,6 +531,7 @@ def validate(config, smoke):
             raise ValueError('loader rate and connection count must be exact integers')
         if not isinstance(server['args'], list) or not all(isinstance(value, str) for value in server['args']):
             raise ValueError('server args must be an array of literal argument strings')
+        keepalive_options(server)
         if any(value == '--reload-certs-ms' or value.startswith('--reload-certs-ms=') for value in server['args']):
             raise ValueError('periodic certificate reload must be disabled during the strict soak')
         if not 1 <= connections <= 1000 or not 1 <= rps <= 100000:
@@ -521,9 +548,15 @@ def validate(config, smoke):
 
 def assess_sample(previous, current, baseline, require_rate=True):
     completed = 0
+    elapsed = current['monotonic'] - previous['monotonic']
+    if elapsed <= 0:
+        raise RuntimeError('nonpositive sample duration')
     if [row['name'] for row in previous['servers']] != [row['name'] for row in current['servers']]:
         raise RuntimeError('resource sample server identity/order changed')
     for before, row, first in zip(previous['servers'], current['servers'], baseline['servers']):
+        check_keepalive_progress(None, first['keepalive'])
+        # The two-second final publication guard can fall between probes.
+        check_keepalive_progress(before['keepalive'], row['keepalive'], elapsed >= 30)
         for value in (first['log_health'], before['log_health'], row['log_health']):
             check_log_health(value)
         for key in ('accepted', 'written', 'dropped', 'io_errors'):
@@ -550,9 +583,6 @@ def assess_sample(previous, current, baseline, require_rate=True):
             raise RuntimeError('RSS growth reached/exceeded strict 1% limit')
         if row['fds_or_handles'] > first['fds_or_handles']:
             raise RuntimeError('FD/handle count increased during steady persistent load')
-    elapsed = current['monotonic'] - previous['monotonic']
-    if elapsed <= 0:
-        raise RuntimeError('nonpositive sample duration')
     if require_rate and completed / elapsed < FLOOR_RPS:
         raise RuntimeError('achieved successful request rate fell below 10,000 RPS in sample interval')
     return {'successful_requests': completed, 'seconds': elapsed, 'achieved_rps': completed / elapsed}
@@ -583,6 +613,7 @@ def run(args):
               'rss_growth_must_be_less_than_percent': 1, 'fd_growth_allowed': 0,
               'resource_scope': 'whole server process family; root and every descendant, including log-writer helper; RSS sums intentionally retain shared-map double charges',
               'certificate_reload_during_measurement': False,
+              'active_http2_keepalive': {server['name']: keepalive_options(server) for server in config['servers']},
               'counter_publication_max_lag_seconds': 1,
               'access_log_health_metrics': LOG_HEALTH_METRICS,
               'access_log_health_policy': 'Dropped and I/O-error counters must be zero, including baseline. Accepted/written counters cannot decrease. Transient pending records are allowed within native queue bounds; no equality or zero-pending assertion is made while traffic is active or after metrics shutdown. Helper draining/join is covered by bounded shutdown and separate native tests.',
@@ -596,7 +627,9 @@ def run(args):
     (args.output / 'h2load-help.txt').write_text(help_text)
     shutil.copy2(args.config, args.output / 'configuration.json')
     checked(['git', 'archive', '--format=tar', '--output=' + str((args.output / 'source.tar').resolve()), source_sha,
-             'LeanNet', 'c', 'tls/LeanNetTLS', 'tls/c', 'lakefile.lean', 'tls/lakefile.lean', 'lean-toolchain', 'HTTPMain.lean', 'Main.lean', 'test/soak24.py', 'test/http2_test_support.py',
+             'LeanNet.lean', 'LeanNet', 'c', 'tls/LeanNetTLS.lean', 'tls/LeanNetTLS', 'tls/c',
+             'lakefile.lean', 'tls/lakefile.lean', 'lean-toolchain', 'HTTPMain.lean', 'Main.lean', 'tls/Main.lean',
+             'test/soak24.example.json', 'test/soak24.py', 'test/http2_test_support.py',
              'test/requirements-http2.txt', 'tls/test/tls_test_support.py'], cwd=ROOT)
     certificates = create_certificates(args.output / 'pki')
     for path in (args.output / 'pki').glob('*.key'):
@@ -623,7 +656,10 @@ def run(args):
             expected_images = {os.path.normcase(os.path.realpath(server['binary'])), os.path.normcase(os.path.realpath(server['log_helper']))}
             if any(os.path.normcase(os.path.realpath(member['executable'])) not in expected_images for member in resources['family']):
                 raise RuntimeError('service family is running an executable outside the immutable server/helper snapshots')
-            rows.append({'name': server['name'], 'counters': counters, 'log_health': log_health(text),
+            peer = probe_clients[server['name']]
+            keepalive = {'received': peer.pings_received, 'acknowledged': peer.pings_acknowledged}
+            check_keepalive_progress(None, keepalive)
+            rows.append({'name': server['name'], 'counters': counters, 'log_health': log_health(text), 'keepalive': keepalive,
                          'probes_completed': completed_probes[server['name']], **resources})
             if label in ('measurement_start', 'measurement_end'):
                 (args.output / (server['name'] + '-' + label + '.prom')).write_text(text)

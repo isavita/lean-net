@@ -10,6 +10,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -82,7 +83,7 @@ def main():
     seed = args.case_seed if args.case_seed is not None else args.seed
     if args.case_seed is not None:
         cases = 1
-    if not 0 <= seed < 2**64 or not 1 <= cases <= 1000000 or not 256 <= maximum <= 16384 or timeout <= 0 or args.max_log_mib <= 0 or args.max_address_mib < 512:
+    if not 0 <= seed < 2**64 or not 1 <= cases <= 1000000 or not 256 <= maximum <= 16384 or not math.isfinite(timeout) or timeout <= 0 or args.max_log_mib <= 0 or args.max_address_mib < 512:
         parser.error("seed, case, input, timeout or resource bounds are invalid")
     if args.output.exists():
         parser.error("output already exists; choose a fresh artifact directory")
