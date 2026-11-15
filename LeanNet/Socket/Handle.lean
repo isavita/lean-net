@@ -83,6 +83,8 @@ def Socket.close (socket : Socket state) (isOpen : state ≠ .closed) : IO (Sock
 /-- Closes the listener when the callback exits, including when it throws.
     Callbacks must not retain the handle beyond the scope of this bracket. -/
 def withListener (host : String) (port : UInt16) (use : Listener → IO α) : IO α := do
+  if host.toUTF8.toList.contains 0 then
+    throw (IO.userError "listen host contains NUL")
   let result ← checkResult "listen" (← FFI.rawTcpListen host port)
   let listener : Listener ← newSocket (Int64.ofInt result)
   try use listener finally closeSocket listener (by decide)

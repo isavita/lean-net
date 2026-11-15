@@ -209,6 +209,7 @@ lean_object *shim_tcp_listen(b_lean_obj_arg host_lean, uint16_t port) {
 
 /* shim_tcp_accept(listen_fd) -> fd >= 0 | -errno */
 lean_object *shim_tcp_accept(int64_t listen_fd) {
+    if (listen_fd < 0 || listen_fd > INT_MAX) return mk_i64_ok(-EBADF);
     struct sockaddr_storage addr;
     socklen_t addrlen = sizeof(addr);
 
@@ -270,6 +271,7 @@ lean_object *shim_tcp_accept_staged(int64_t listen_fd) {
  *   count = 0 : EOF (ByteArray is empty)
  *   count < 0 : -errno (ByteArray is empty) */
 lean_object *shim_tcp_recv(int64_t fd, size_t max_len) {
+    if (fd < 0 || fd > INT_MAX) return mk_count_ba_ok(-EBADF, empty_ba());
     if (max_len == 0) {
         /* A zero-sized read cannot establish EOF. */
         return mk_count_ba_ok(-EINVAL, empty_ba());
@@ -303,6 +305,7 @@ lean_object *shim_tcp_recv(int64_t fd, size_t max_len) {
 /* shim_tcp_send(fd, buf, len) -> count >= 0 | -errno
  * Partial sends are reported honestly (count < len); the caller must loop. */
 lean_object *shim_tcp_send(int64_t fd, b_lean_obj_arg buf, size_t len) {
+    if (fd < 0 || fd > INT_MAX) return mk_i64_ok(-EBADF);
     lean_object *ba = (lean_object *)buf;
     size_t ba_size = lean_sarray_size(ba);
     size_t to_write = (len < ba_size) ? len : ba_size;
@@ -324,6 +327,7 @@ lean_object *shim_tcp_send(int64_t fd, b_lean_obj_arg buf, size_t len) {
  * Never retry on failure: on Linux close() releases the fd even on error,
  * and retrying risks closing a reused descriptor. */
 lean_object *shim_close(int64_t fd) {
+    if (fd < 0 || fd > INT_MAX) return mk_i64_ok(-EBADF);
     if (close((int)fd) < 0) {
         return mk_i64_ok(-(int64_t)errno);
     }
@@ -534,6 +538,7 @@ static int wait_interruptible(int fd, short events) {
 }
 
 lean_object *shim_interruptible_accept(int64_t listen_fd) {
+    if (listen_fd < 0 || listen_fd > INT_MAX) return mk_i64_ok(-EBADF);
     int fd = (int)listen_fd;
     int flags = fcntl(fd, F_GETFL);
     if (flags < 0) return mk_i64_ok(-errno);
@@ -569,6 +574,7 @@ lean_object *shim_interruptible_accept(int64_t listen_fd) {
 }
 
 lean_object *shim_interruptible_recv(int64_t fd, size_t max_len) {
+    if (fd < 0 || fd > INT_MAX) return mk_count_ba_ok(-EBADF, empty_ba());
     if (max_len == 0) return mk_count_ba_ok(-EINVAL, empty_ba());
     int flags = fcntl((int)fd, F_GETFL);
     if (flags < 0) return mk_count_ba_ok(-errno, empty_ba());
@@ -594,6 +600,7 @@ lean_object *shim_interruptible_recv(int64_t fd, size_t max_len) {
 }
 
 lean_object *shim_interruptible_send(int64_t fd, b_lean_obj_arg buf, size_t len) {
+    if (fd < 0 || fd > INT_MAX) return mk_i64_ok(-EBADF);
     size_t size = lean_sarray_size((lean_object *)buf);
     size_t count = len < size ? len : size;
     if (count == 0) return mk_i64_ok(0);
