@@ -67,7 +67,9 @@ def main (args : List String) : IO UInt32 := do
         path := System.FilePath.mk path, helperBinary := System.FilePath.mk helper,
         queueCapacity := if mode == "overflow" then 1 else 4096,
         maxFileBytes := 16 * 1024 * 1024, fileCount := 2, pollIntervalMs := 1 },
-      server := { maxClients := 64, maxResponseBytes := 4 * 1024 * 1024 },
+      -- A 32-peer test wave can hash entirely to one Linux SO_REUSEPORT worker;
+      -- leave room for that wave while prior socket closes are being retired.
+      server := { maxClients := max 64 (workers * 64), maxResponseBytes := 4 * 1024 * 1024 },
       outputBuffers := 256 }
     HTTP.ReactorServer.serveWorkerFactory (fun worker _ reactor use => do
       reactor.setupFiles 1
