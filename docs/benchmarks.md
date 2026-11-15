@@ -1,23 +1,21 @@
 # Benchmarks
 
-## HTTP/1.1 loopback
+## HTTP/1.1 versus Go `net/http`
 
-Apple M2 (8 logical CPUs), macOS 27.2.1, Lean 4.35.0, Go 1.22.2; lean-net source commit `62a0b15`. The harness checked that both servers returned the same 337-byte `GET /binary` response: a five-byte body, explicit `Content-Length`, `Content-Type`, Date, and four security headers. The [Go reference](https://pkg.go.dev/net/http) used the standard `net/http` server.
+The [comparison harness](../test/benchmarks/compare_http1.py) runs the same verified C client against both servers. It checks a 337-byte HTTP/1.1 response with the same status, five-byte body, and header values (normalizing the Date timestamp), then sends 200,000 requests per round over 100 persistent connections, one outstanding request per connection. Each server gets 10,000 warmup requests before each of three alternating rounds. All 1.2 million measured responses passed status, length, and body checks.
 
-One verified C client sent 200,000 requests per round over 100 persistent connections, with one request in flight per connection and no pipelining. Each server received 10,000 warmup requests before each measured round. Lean used 8 workers, `maxClients=128`, and 512 output buffers; Go used `GOMAXPROCS=8`. The paired order alternated across three rounds. Every measured response passed status, length, and body-byte checks; all 100 connections made progress in the first second.
+| Linux hosted runner, 4 CPUs | Requests/s by round | Median | Median p99 latency |
+| --- | ---: | ---: | ---: |
+| lean-net, 4 workers | 36,605 / 35,709 / 36,712 | 36,605 | 5.43 ms |
+| Go `net/http`, `GOMAXPROCS=4` | 80,747 / 82,007 / 79,007 | 80,747 | 3.96 ms |
 
-| Server | Requests/s by round | Median requests/s | Median p99 latency | Approx. server CPU cores |
-| --- | ---: | ---: | ---: | ---: |
-| lean-net | 40,215 / 58,434 / 54,924 | 54,924 | 11.81 ms | 3.44 |
-| Go `net/http` | 83,876 / 92,577 / 99,652 | 92,577 | 4.56 ms | 2.48 |
+The run used Lean 4.35.0, Go 1.27.4, Linux x86-64, and source commit `a5bd7ac`. [Raw results](../test/benchmarks/http1-comparison-linux-a5bd7ac.json) record the binary and source hashes, tool versions, CPU-time estimates, response signature, and every round. These loopback results cover neither TLS nor proxying and do not establish a 100,000 requests/s per-core capacity. A separate [macOS sample](../test/benchmarks/http1-comparison-macos-m2-62a0b15.json) predates the write-timer optimization and had substantial host contention.
 
-CPU cores are estimated from process CPU-time deltas divided by each round's wall time. The host had competing macOS and application load. An earlier paired pass with the same response and configuration measured 81–89k requests/s for lean-net and 144–166k for Go, showing material run-to-run variation on this host. These numbers characterize this loopback endpoint under contention, not TLS, proxying, fleet capacity, or a 100k requests/s/core result. The common client sustained at least the Go result, above the lean-net result.
-
-Reproduce from the repository root:
+Reproduce on Linux with Go and a C compiler installed:
 
 ```sh
 lake build lean-net-http1-reactor-fixture
-python3 test/benchmarks/compare_http1.py --rounds 3 --output /tmp/http1-comparison.json
+python3 test/benchmarks/compare_http1.py --workers 4 --rounds 3 --output /tmp/http1-comparison.json
 ```
 
-[Raw results](../test/benchmarks/http1-comparison-macos-m2-62a0b15.json) include the executable/source hashes, tool versions, configuration, all rounds, and verification counts. [Benchmark commands](../test/benchmarks/README.md) cover HTTP/2, TCP echo, and gate allocations separately.
+The [benchmark index](../test/benchmarks/README.md) lists the HTTP/2, TCP echo, and gate allocation commands.
