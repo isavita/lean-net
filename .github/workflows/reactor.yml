@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      compare_http1:
+        description: Compare HTTP/1.1 with Go net/http on Linux and upload raw results
+        type: boolean
+        default: false
 
 jobs:
   native:
@@ -170,3 +175,22 @@ jobs:
       - name: IOCP operations and cancellation lifetime
         if: runner.os == 'Windows'
         run: lake env python test/test_windows_native.py -v
+      - name: Set up Go for optional HTTP/1.1 comparison
+        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.compare_http1
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Compare HTTP/1.1 with Go net/http
+        if: runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.compare_http1
+        run: |
+          go version
+          python3 test/benchmarks/compare_http1.py --workers 4 --rounds 3 --output "$RUNNER_TEMP/http1-comparison-linux.json"
+      - name: Preserve HTTP/1.1 comparison
+        if: success() && runner.os == 'Linux' && github.event_name == 'workflow_dispatch' && inputs.compare_http1
+        uses: actions/upload-artifact@v4
+        with:
+          name: http1-comparison-linux
+          path: ${{ runner.temp }}/http1-comparison-linux.json
+          if-no-files-found: error
+          retention-days: 30
