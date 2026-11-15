@@ -10,10 +10,14 @@ Import `LeanNet` for the [core API](LeanNet.html), or `LeanNetTLS` for the
 
 ## Start a server
 
+The [runnable examples](https://github.com/isavita/lean-net/blob/main/examples/README.md)
+progress from basic HTTP to a routed API, TLS static files, and a rate-limited gateway.
+
 - [LeanNet.HTTP.ReactorServer.serveFactory](LeanNet/HTTP/ReactorServer.html#LeanNet.HTTP.ReactorServer.serveFactory)
   creates application handlers once per reactor worker.
 - [LeanNet.HTTP1.Handlers](LeanNet/HTTP1/Handlers.html#LeanNet.HTTP1.Handlers)
-  supplies request, head-stage, and WebSocket callbacks shared by HTTP/1 and HTTP/2.
+  supplies request and head-stage callbacks shared by HTTP/1 and HTTP/2.
+  HTTP/1 WebSocket upgrades use `onHeaders`; HTTP/2 uses `onWebSocket`.
 - [LeanNet.HTTP.ReactorServerConfig](LeanNet/HTTP/ReactorServer.html#LeanNet.HTTP.ReactorServerConfig)
   configures workers, connection and buffer limits, protocol settings, admission,
   upstream forwarding, metrics, and graceful shutdown.

@@ -27,7 +27,7 @@ on unknown-host 421
 tls/.lake/build/bin/lean-net-tls ./chain.pem ./key.pem --gate ./gate.policy 8443
 ```
 
-The file is validated at startup. SIGHUP reloads it on POSIX; invalid replacement text keeps the current policy. Rate declarations require a restart. A `gate% "..."` literal in Lean checks policy syntax and host/backend compatibility at build time. `Gate.Spec.parse` accepts runtime text, and `Gate.Spec.hostsOnly #["api.example.com"]` creates a host allowlist.
+The file is validated at startup. SIGHUP reloads it on POSIX; invalid replacement text keeps the current policy. Rate declarations require a restart. Import `LeanNet.Gate.Literal` to use a `gate% "..."` literal, which checks policy syntax and host/backend compatibility at build time. `Gate.Spec.parse` accepts runtime text, and `Gate.Spec.hostsOnly #["api.example.com"]` creates a host allowlist.
 
 | Policy item | Form |
 | --- | --- |
@@ -39,7 +39,7 @@ The file is validated at startup. SIGHUP reloads it on POSIX; invalid replacemen
 | Rate declaration | `ratelimit NAME RATE burst N by route|global|client-ip|principal|header NAME`; `RATE` is `N/s`, `N/m`, `N/h` or `N/DURATION` |
 | Backend | `backend NAME { http|https HOST:PORT ... ; serves HOST_PATTERN ; verify CERT_NAME }` |
 
-The `serves` patterns must cover every host that can select the backend. `verify` selects the HTTPS certificate identity; without it, the target host is used. `host` and TLS SNI must agree when `tls sni strict` is set. Named `app` and `check` entries require a library program that registers their callbacks. The plain server rejects HTTPS backends; the TLS package supplies verified upstream TLS.
+The `serves` patterns must cover every host that can select the backend. `verify` selects the HTTPS certificate identity; without it, the target host is used. `tls sni strict` requires Host and SNI to agree on TLS connections; it does not require TLS or reject cleartext requests. Named `app` and `check` entries require a library program that registers their callbacks. The plain server rejects HTTPS backends; the TLS package supplies verified upstream TLS.
 
 ## Library setup
 
@@ -50,11 +50,17 @@ import LeanNet
 
 open LeanNet
 
-def serve (spec : Gate.Spec) : IO Unit :=
+def main : IO Unit := do
+  let path := System.FilePath.mk "gate.policy"
+  let spec ← match Gate.Spec.parse (← IO.FS.readFile path) with
+    | .ok spec => pure spec
+    | .error error => throw (IO.userError (toString error))
   Gate.withLive { spec } 4 fun live =>
     HTTP.ReactorServer.serveFactory
       (fun _ => pure HTTP1.Handlers.default)
-      { workers := 4, admission := some live.factory, gateway := some {} }
+      { workers := 4, admission := some live.factory, gateway := some {}
+        onReload := live.reloadFile path, extraMetrics := live.metrics
+        metricsPath := some "/metrics".toUTF8 }
       "127.0.0.1" 8080
 ```
 

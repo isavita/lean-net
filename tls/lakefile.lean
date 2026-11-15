@@ -1,6 +1,32 @@
 import Lake
 open Lake DSL
 
+private def tlsLibraryPath (name : String) : IO System.FilePath := do
+  let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", "openssl"] }
+  if location.exitCode != 0 || location.stdout.trimAscii.toString.isEmpty then
+    throw <| IO.userError "cannot locate OpenSSL library"
+  let fileName := if System.Platform.isWindows then s!"lib{name}.dll.a"
+    else if System.Platform.isOSX then s!"lib{name}.dylib" else s!"lib{name}.so"
+  let path := System.FilePath.mk location.stdout.trimAscii.toString / fileName
+  unless ← path.pathExists do throw <| IO.userError s!"missing OpenSSL library: {path}"
+  return path
+
+private def nativeDynlib (directory : System.FilePath) (source : Job System.FilePath)
+    (name : String) : SpawnM (Job Dynlib) :=
+  source.mapM fun source => do
+    if System.Platform.isWindows || System.Platform.isOSX then
+      return { path := source, name }
+    -- Keep host CRT libraries out of the search path. SONAME aliases also let
+    -- `lake env` load the selected OpenSSL when pkg-config uses a custom prefix.
+    IO.FS.createDirAll directory
+    let some fileName := source.fileName | error "native library has no file name"
+    let some parent := source.parent | error "native library has no parent directory"
+    for entry in ← parent.readDir do
+      if entry.fileName == fileName || entry.fileName.startsWith (fileName ++ ".") then
+        if (← entry.path.metadata).type == .file then
+          proc { cmd := "ln", args := #["-sfn", entry.path.toString, (directory / entry.fileName).toString] }
+    return { path := directory / fileName, name }
+
 package «lean-net-tls» where
   version := v!"0.1.1"
   description := "TLS, mTLS, SNI and verified HTTPS upstreams for lean-net"
@@ -8,6 +34,11 @@ package «lean-net-tls» where
   homepage := "https://isavita.github.io/lean-net/LeanNetTLS.html"
   license := "Apache-2.0"
   licenseFiles := #["../LICENSE", "../NOTICE"]
+  moreLinkObjs := if System.Platform.isWindows then
+      #[`@/«lean-net-openssl-ssl», `@/«lean-net-openssl-crypto»]
+    else #[]
+  moreLinkLibs := if System.Platform.isWindows then #[]
+    else #[`@/«lean-net-openssl-ssl-shared», `@/«lean-net-openssl-crypto-shared»]
   moreLinkArgs := run_io do
     let version ← IO.Process.output { cmd := "pkg-config", args := #["--atleast-version=1.1.1", "openssl"] }
     if version.exitCode != 0 then throw <| IO.userError "OpenSSL 1.1.1 or newer is required"
@@ -45,13 +76,12 @@ package «lean-net-tls» where
       unless ← library.pathExists do
         throw <| IO.userError "Select macOS zlib's lib/pkgconfig directory in PKG_CONFIG_PATH"
       return flags.map (fun flag => if flag == "-lz" then library.toString else flag) ++ #["-pthread"]
-    -- Use explicit multiarch paths and static Brotli, whose unversioned math
-    -- references can resolve against Lean's matching bundled libm. Retain
-    -- OpenSSL's established pkg-config lookup and select only codecs here.
+    -- Select the pkg-config codecs explicitly without adding their system
+    -- directory to the linker's global search path.
     let mut libraries := #["-pthread"]
     for (packageName, libraryName) in #[
-        ("zlib", "libz.so"), ("libbrotlienc", "libbrotlienc.a"),
-        ("libbrotlicommon", "libbrotlicommon.a")] do
+        ("zlib", "libz.so"), ("libbrotlienc", "libbrotlienc.so"),
+        ("libbrotlicommon", "libbrotlicommon.so")] do
       let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", packageName] }
       if location.exitCode != 0 then throw <| IO.userError s!"cannot locate {packageName} library"
       let path := System.FilePath.mk location.stdout.trimAscii.toString / libraryName
@@ -62,6 +92,20 @@ package «lean-net-tls» where
       flag != "-lbrotlienc" && flag != "-lbrotlicommon") ++ #["-lm", "-lrt"]
 
 require «lean-net» from "../"
+
+target «lean-net-openssl-ssl» _pkg : System.FilePath := do
+  inputBinFile (← tlsLibraryPath "ssl")
+
+target «lean-net-openssl-crypto» _pkg : System.FilePath := do
+  inputBinFile (← tlsLibraryPath "crypto")
+
+target «lean-net-openssl-ssl-shared» pkg : Dynlib := do
+  let file ← inputBinFile (← tlsLibraryPath "ssl")
+  nativeDynlib pkg.sharedLibDir file "ssl"
+
+target «lean-net-openssl-crypto-shared» pkg : Dynlib := do
+  let file ← inputBinFile (← tlsLibraryPath "crypto")
+  nativeDynlib pkg.sharedLibDir file "crypto"
 
 @[default_target]
 lean_lib LeanNetTLS

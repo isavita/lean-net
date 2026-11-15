@@ -35,6 +35,26 @@ static int test_cipher_write(rn_reactor *reactor, uint64_t connection, uint64_t 
   if (fail_cipher) { int kind = fail_cipher; fail_cipher = 0; return kind == 2 ? -EINTR : -ENOMEM; }
   return rn_transport_write(reactor, connection, capability, buffer, offset, length, operation);
 }
+/* Pause the TLS producer at an exact release publication, without changing
+ * production code or relying on the host scheduler to hit the race window. */
+static void (*atomic_store_hook)(const volatile void *);
+static void test_store_uint(volatile atomic_uint *object, unsigned value, memory_order order) {
+  atomic_store_explicit(object, value, order);
+  if (atomic_store_hook) atomic_store_hook(object);
+}
+static void test_store_int(volatile atomic_int *object, int value, memory_order order) {
+  atomic_store_explicit(object, value, order);
+}
+static void test_store_uint_fast64(volatile atomic_uint_fast64_t *object, uint_fast64_t value, memory_order order) {
+  atomic_store_explicit(object, value, order);
+}
+#undef atomic_store_explicit
+#define atomic_store_explicit(object, value, order) \
+  _Generic((object), \
+    atomic_uint *: test_store_uint, volatile atomic_uint *: test_store_uint, \
+    atomic_int *: test_store_int, volatile atomic_int *: test_store_int, \
+    atomic_uint_fast64_t *: test_store_uint_fast64, \
+    volatile atomic_uint_fast64_t *: test_store_uint_fast64)((object), (value), (order))
 #define pthread_join test_join
 #define rn_transport_write test_cipher_write
 #define SSL_get_error test_ssl_get_error
@@ -225,6 +245,67 @@ static tw_session *wrap_session;
 static unsigned char wrap_cipher[TLSW_CELL_SIZE];
 static size_t wrap_cipher_length;
 static int wrap_injected;
+static tw_bridge *credit_bridge;
+static lean_object *credit_buffer;
+static BIO *credit_client_input;
+static int credit_injected;
+static void deliver_credit_ciphertext(void) {
+  tw_session *session = &credit_bridge->engine->sessions[0];
+  tw_cell *cell;
+  while ((cell = tw_consumer(&session->cipher_out)) != NULL) {
+    check(BIO_write(credit_client_input, cell->bytes, cell->length) == (int)cell->length,
+        "write-credit ciphertext reaches client BIO before physical acknowledgement");
+    credit_bridge->sessions[0].cipher_ack = cell->fence;
+    tw_consume(&session->cipher_out); tw_notify_session(credit_bridge->engine, session);
+  }
+}
+/* The reactor observes WRITTEN and immediately queues the next response part,
+ * while the TLS producer is still inside the fence's release publication. */
+static void resubmit_at_write_fence(const volatile void *object) {
+  tw_session *session = &credit_bridge->engine->sessions[0];
+  if (object != &session->fences.head) return;
+  atomic_store_hook = NULL;
+  deliver_credit_ciphertext();
+  check(tw_emit_written(credit_bridge, 0) == 0 && credit_bridge->event_count == 1 &&
+      credit_bridge->events[0].kind == TLSW_WRITTEN && credit_bridge->events[0].operation == 111 &&
+      credit_bridge->events[0].length == 4, "write-credit header fence is physically acknowledged");
+  check(result(lean_tlsw_write((uintptr_t)credit_bridge, tw_token(0, 1), credit_buffer, 0, 7, 222)) == 0,
+      "WRITTEN returns queue1 plaintext credit before reactor resubmission");
+  credit_injected = 1;
+}
+static void write_completion_returns_credit(tw_engine *engine, tw_session *session,
+    rn_reactor *reactor, SSL *client, BIO *client_input) {
+  tw_bridge_session owner = {.used = 1, .generation = 1};
+  rn_event events[2] = {{0}}; unsigned char claimed[2] = {0};
+  tw_bridge bridge = {.engine = engine, .reactor = reactor, .sessions = &owner,
+    .events = events, .event_claimed = claimed, .event_capacity = 2};
+  uint64_t lease = 0; lean_object *record = reactor_record(reactor), *buffer = NULL;
+  check(rn_acquire_buffer(reactor, 7, &lease) == 0 &&
+      rn_buffer_copy(reactor, lease, (const uint8_t *)"head", 4) == 0 &&
+      rn_bridge_make_buffer(record, lease, &buffer) == 0, "write-credit input lease");
+  check(result(lean_tlsw_write((uintptr_t)&bridge, tw_token(0, 1), buffer, 0, 4, 111)) == 0 &&
+      rn_buffer_copy(reactor, lease, (const uint8_t *)"payload", 7) == 0,
+      "write-credit queue1 header followed by a distinct body");
+  credit_bridge = &bridge; credit_buffer = buffer; credit_client_input = client_input; credit_injected = 0;
+  atomic_store_hook = resubmit_at_write_fence;
+  for (unsigned attempt = 0; attempt < 100 && bridge.event_count < 2; ++attempt) {
+    tw_drive(engine, session); deliver_credit_ciphertext();
+    check(tw_emit_written(&bridge, 0) == 0, "write-credit completion delivery");
+  }
+  check(credit_injected && bridge.event_count == 2 && events[1].kind == TLSW_WRITTEN &&
+      events[1].operation == 222 && events[1].length == 7 && !tw_consumer(&session->plain_in),
+      "write-credit immediate slot reuse preserves both completion records");
+  unsigned char bytes[11]; size_t received = 0;
+  while (received < sizeof(bytes)) {
+    size_t count = 0;
+    check(SSL_read_ex(client, bytes + received, sizeof(bytes) - received, &count) == 1 && count > 0,
+        "write-credit header and body decrypt without another wake");
+    received += count;
+  }
+  check(memcmp(bytes, "headpayload", sizeof(bytes)) == 0, "write-credit exact header/body bytes");
+  atomic_store_hook = NULL; credit_bridge = NULL; credit_buffer = NULL; credit_client_input = NULL;
+  lean_dec(buffer); check(rn_buffer_release(reactor, lease) == 0, "write-credit lease released"); lean_dec(record);
+}
 /* Deterministically interleave the reactor producer after SSL_read has already
  * reported WANT_READ, but before the drive decides whether it made progress. */
 static void publish_wrapped_input(SSL *ssl, int error) {
@@ -298,6 +379,7 @@ static void drive_notification_wrap(const char *certificate, const char *key) {
   }
   check(client_ready && server_ready, "forced-wrap handshake completes");
   tw_drive(&engine, &session); tw_drive(&engine, &session);
+  write_completion_returns_credit(&engine, &session, reactor, client, input);
   const unsigned char expected[] = "queue1-notification-wrap"; size_t count = 0;
   check(SSL_write_ex(client, expected, sizeof(expected), &count) == 1 && count == sizeof(expected), "forced-wrap real encrypted record");
   int encrypted = BIO_read(output, wrap_cipher, sizeof(wrap_cipher));

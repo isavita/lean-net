@@ -616,7 +616,10 @@ static void tw_drive(tw_engine *engine, tw_session *session) {
       if (!fence || !source) return;
       fence->operation = source->operation; fence->length = source->length; fence->fence = session->produced;
       fence->source = source->source; source->source = NULL;
-      tw_publish(&session->fences); tw_consume(&session->plain_in);
+      /* WRITTEN permits the reactor to submit the next plaintext part.
+       * Return that credit before publishing its completion, and never
+       * access source after the reactor can reuse the cell. */
+      tw_consume(&session->plain_in); tw_publish(&session->fences);
       session->write_complete = 0; session->plain_offset = 0; tw_notify_reactor(engine);
       session->file_chunk_length = session->file_chunk_offset = 0;
     }

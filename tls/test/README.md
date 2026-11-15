@@ -3,7 +3,9 @@
 Build the TLS package and run its native reactor and public-server suites from the repository root:
 
 ```sh
-lake -d tls build lean-net-tls lean-net-tls-reactor-fixture
+python3 -m pip install -r test/requirements-http2.txt
+lake build lean-net-http1
+lake -d tls build lean-net-tls lean-net-tls-reactor-fixture lean-net-tls-admission-fixture
 python3 tls/test/test_tls_reactor.py -v
 python3 tls/test/test_tls_gateway_e2e.py -v
 python3 tls/test/test_tls_production.py -v

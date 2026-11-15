@@ -1,6 +1,40 @@
 import Lake
 open Lake DSL
 
+private def codecLibraryPath (packageName windowsName macName linuxName : String) : IO System.FilePath := do
+  let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", packageName] }
+  if location.exitCode != 0 || location.stdout.trimAscii.toString.isEmpty then
+    throw <| IO.userError s!"cannot locate {packageName} library"
+  let name := if System.Platform.isWindows then windowsName
+    else if System.Platform.isOSX then macName else linuxName
+  let path := System.FilePath.mk location.stdout.trimAscii.toString / name
+  unless ← path.pathExists do throw <| IO.userError s!"missing native library: {path}"
+  return path
+
+private def compilerLibraryPath (name : String) : IO System.FilePath := do
+  let compiler := if System.Platform.isWindows then "gcc" else "cc"
+  let location ← IO.Process.output { cmd := compiler, args := #[s!"-print-file-name={name}"] }
+  let path := System.FilePath.mk location.stdout.trimAscii.toString
+  if location.exitCode != 0 || !(← path.pathExists) then
+    throw <| IO.userError s!"cannot locate native system library: {name}"
+  return path
+
+private def nativeDynlib (directory : System.FilePath) (source : Job System.FilePath)
+    (name : String) : SpawnM (Job Dynlib) :=
+  source.mapM fun source => do
+    if System.Platform.isWindows || System.Platform.isOSX then
+      return { path := source, name }
+    -- An unrestricted system -L directory can override Lean's bundled libc.
+    -- Only expose this DSO and its SONAME aliases in Lake's native library dir.
+    IO.FS.createDirAll directory
+    let some fileName := source.fileName | error "native library has no file name"
+    let some parent := source.parent | error "native library has no parent directory"
+    for entry in ← parent.readDir do
+      if entry.fileName == fileName || entry.fileName.startsWith (fileName ++ ".") then
+        if (← entry.path.metadata).type == .file then
+          proc { cmd := "ln", args := #["-sfn", entry.path.toString, (directory / entry.fileName).toString] }
+    return { path := directory / fileName, name }
+
 package «lean-net» where
   version := v!"0.1.1"
   description := "TCP, HTTP/1.1, HTTP/2, WebSocket and reverse proxy libraries for Lean 4"
@@ -8,6 +42,14 @@ package «lean-net» where
   homepage := "https://isavita.github.io/lean-net/"
   license := "Apache-2.0"
   licenseFiles := #["LICENSE", "NOTICE"]
+  -- Native link objects and libraries propagate to consumers. Package link
+  -- arguments only apply to this package's own executables and shared libraries.
+  moreLinkObjs := if System.Platform.isWindows then
+      #[`@/«lean-net-zlib», `@/«lean-net-brotli-encoder», `@/«lean-net-brotli-common», `@/«lean-net-winsock»]
+    else #[]
+  moreLinkLibs := if System.Platform.isWindows then #[]
+    else
+      #[`@/«lean-net-zlib-shared», `@/«lean-net-brotli-encoder-shared», `@/«lean-net-brotli-common-shared»]
   moreLinkArgs := run_io do
     let output ← IO.Process.output { cmd := "pkg-config", args := #["--libs", "zlib", "libbrotlienc", "libbrotlicommon"] }
     if output.exitCode != 0 then throw <| IO.userError "zlib and Brotli development libraries are required"
@@ -32,13 +74,12 @@ package «lean-net» where
       unless ← candidate.pathExists do
         throw <| IO.userError "Select an installed zlib with PKG_CONFIG_PATH; on macOS use Homebrew zlib's lib/pkgconfig directory"
       return flags.map (fun flag => if flag == "-lz" then candidate.toString else flag) ++ #["-pthread"]
-    -- pkg-config omits system -L flags; Lean's bundled linker does not know
-    -- the distribution's multiarch directories. Static Brotli also avoids
-    -- importing the host shared library's newer versioned libm requirements.
+    -- Select the pkg-config libraries explicitly without adding a system
+    -- directory to the linker's global search path.
     let mut libraries := #["-pthread"]
     for (packageName, libraryName) in #[
-        ("zlib", "libz.so"), ("libbrotlienc", "libbrotlienc.a"),
-        ("libbrotlicommon", "libbrotlicommon.a")] do
+        ("zlib", "libz.so"), ("libbrotlienc", "libbrotlienc.so"),
+        ("libbrotlicommon", "libbrotlicommon.so")] do
       let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", packageName] }
       if location.exitCode != 0 then throw <| IO.userError s!"cannot locate {packageName} library"
       let path := System.FilePath.mk location.stdout.trimAscii.toString / libraryName
@@ -46,6 +87,47 @@ package «lean-net» where
       libraries := libraries.push path.toString
     return libraries ++ flags.filter (fun flag =>
       flag != "-lz" && flag != "-lbrotlienc" && flag != "-lbrotlicommon") ++ #["-lm", "-lrt"]
+
+target «lean-net-zlib» _pkg : System.FilePath := do
+  inputBinFile (← codecLibraryPath "zlib" "libz.dll.a" "libz.dylib" "libz.so")
+
+target «lean-net-brotli-encoder» _pkg : System.FilePath := do
+  inputBinFile (← codecLibraryPath "libbrotlienc" "libbrotlienc.dll.a" "libbrotlienc.dylib" "libbrotlienc.so")
+
+target «lean-net-brotli-common» _pkg : System.FilePath := do
+  inputBinFile (← codecLibraryPath "libbrotlicommon" "libbrotlicommon.dll.a" "libbrotlicommon.dylib" "libbrotlicommon.so")
+
+target «lean-net-zlib-shared» pkg : Dynlib := do
+  let file ← inputBinFile (← codecLibraryPath "zlib" "libz.dll.a" "libz.dylib" "libz.so")
+  let library ← nativeDynlib pkg.sharedLibDir file "z"
+  if System.Platform.isWindows || System.Platform.isOSX then return library
+  let lean ← getLeanInstall
+  if !lean.linkStaticFlags.contains "-lc++" then return library
+  -- The system compiler supplies the host CRT, but Lean's prebuilt runtime
+  -- requires its matching libc++. Expose only those archives, never the
+  -- toolchain's lib directory, which also contains older CRT startup objects.
+  let archives ← #["libc++.a", "libc++abi.a"].mapM fun name => do
+    let path := lean.systemLibDir / System.FilePath.mk name
+    unless ← path.pathExists do
+      error s!"Lean toolchain is missing its matching C++ runtime archive: {path}"
+    inputBinFile path
+  let archives := Job.collectArray archives "Lean C++ runtime archives"
+  (library.zipWith (fun library archives => (library, archives)) archives).mapM fun (library, archives) => do
+    for source in archives do
+      let some name := source.fileName | error "C++ runtime archive has no file name"
+      proc { cmd := "ln", args := #["-sfn", source.toString, (pkg.sharedLibDir / name).toString] }
+    return library
+
+target «lean-net-brotli-encoder-shared» pkg : Dynlib := do
+  let file ← inputBinFile (← codecLibraryPath "libbrotlienc" "libbrotlienc.dll.a" "libbrotlienc.dylib" "libbrotlienc.so")
+  nativeDynlib pkg.sharedLibDir file "brotlienc"
+
+target «lean-net-brotli-common-shared» pkg : Dynlib := do
+  let file ← inputBinFile (← codecLibraryPath "libbrotlicommon" "libbrotlicommon.dll.a" "libbrotlicommon.dylib" "libbrotlicommon.so")
+  nativeDynlib pkg.sharedLibDir file "brotlicommon"
+
+target «lean-net-winsock» _pkg : System.FilePath := do
+  inputBinFile (← compilerLibraryPath "libws2_32.a")
 
 @[default_target]
 lean_lib LeanNet

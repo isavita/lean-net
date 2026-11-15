@@ -8,11 +8,13 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      LEAN_CC: cc
 
     steps:
       - uses: actions/checkout@v7
       - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev libbrotli-dev pkg-config curl
+        run: sudo apt-get update && sudo apt-get install -y libgmp-dev libuv1-dev libssl-dev zlib1g-dev libbrotli-dev pkg-config curl
       - uses: leanprover/lean-action@v1
       - name: Build and test TCP, HTTP/1.1 and h2c
         run: |

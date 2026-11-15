@@ -34,7 +34,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev zlib1g-dev libbrotli-dev pkg-config openssl curl
+          sudo apt-get install -y libgmp-dev libuv1-dev libssl-dev zlib1g-dev libbrotli-dev pkg-config openssl curl
+          echo "LEAN_CC=cc" >> "$GITHUB_ENV"
           echo "LEAN_NET_TEST_OPENSSL=openssl" >> "$GITHUB_ENV"
           echo "LEAN_NET_TEST_CURL=curl" >> "$GITHUB_ENV"
       - name: Install macOS TLS tools
@@ -87,6 +88,12 @@ jobs:
           lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture lean-net-tls-static-fixture lean-net-tls-reload-fixture lean-net-tls-worker-lifetime-test lean-net-tls-admission-fixture lean-net-tls-gateway-test
       - name: Public CLI queue configuration
         run: lake env lean --run test/HTTPCLIOptionsTest.lean
+      - name: Build runnable library examples
+        run: lake -d examples build
+      - name: Run documented server examples
+        run: lake env ${{ matrix.python }} test/test_examples.py -v
+      - name: Compile and exercise every documented Lean program
+        run: lake env ${{ matrix.python }} test/check_docs.py
       - name: WebSocket HTTP/1 and HTTP/2 wire acceptance
         run: lake env ${{ matrix.python }} test/test_websocket.py -v
       - name: Context ownership and policy sanitizers

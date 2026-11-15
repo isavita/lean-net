@@ -19,12 +19,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      LEAN_CC: cc
       LEAN_NUM_THREADS: '2'
       DISABLE_EQUATIONS: '1'
     steps:
       - uses: actions/checkout@v7
       - name: Install native documentation build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev libbrotli-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libgmp-dev libuv1-dev libssl-dev zlib1g-dev libbrotli-dev pkg-config
       - uses: leanprover/lean-action@v1
         with:
           auto-config: false
@@ -32,7 +33,7 @@ jobs:
           test: false
           lint: false
       - name: Build API reference
-        run: lake -d docs build LeanNetDocs:docs
+        run: python3 docs/build.py
       - name: Verify both public package references
         run: |
           test -s docs/.lake/build/doc/LeanNetDocs.html
