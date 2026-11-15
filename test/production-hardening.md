@@ -44,6 +44,16 @@ before execution. Caught failures print generated/mutated input hex. Logs and
 JSON preserve the last case and a one-case replay command. Replaying a seed
 also requires the recorded driver/source version and maximum input size.
 
+The serial child explicitly uses `LEAN_NUM_THREADS=1` and
+`LEAN_STACK_SIZE_KB=65536`, both recorded in its report. Lean v4.35 otherwise
+uses a hardware-concurrency task pool and reserves a 1GiB stack per runtime
+thread. Its generated executable initializes that pool before creating the
+main thread; the bounded main stack prevents startup alone from exhausting the
+unchanged 2GiB Linux address-space cap. These settings bound harness overhead
+without changing cases or protocol limits. See the pinned runtime
+[task-pool source](https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/object.cpp)
+and [thread/stack source](https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/thread.cpp).
+
 The short profile passed 500 interpreted cases locally during implementation;
 compiled final-source execution remains the next coordinator gate. This is not
 exhaustive proof; the long profile and final-source CI remain separate gates.
@@ -128,6 +138,14 @@ Certificate reload and log rotation remain disabled during the strict soak;
 separate 1,000-retirement and 100-wire-rotation tests establish reload lifetime
 behavior without adding legitimate short-lived PEM descriptors to this census.
 The example explicitly enables metrics and fixes eight workers/128 clients.
+
+Every metrics scrape also reads the five fixed access-log health fields:
+accepted, written, dropped, I/O errors and pending records. Drops and I/O errors
+must be zero, including at the baseline; cumulative counters cannot decrease.
+Transient pending records are allowed within the native queue bounds and are
+recorded in every resource sample. The harness does not assert
+`written == accepted` during traffic, nor claim a zero-pending observation
+after metrics shutdown. Separate native tests verify helper draining and join.
 
 Every measured whole-family RSS sample must stay **strictly below 1% growth** from the
 post-warmup baseline; numeric descriptors/handles may not exceed baseline.

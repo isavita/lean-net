@@ -33,6 +33,16 @@ from tls_test_support import create_certificates, NAMES, openssl_binary
 DAY = 86400
 FLOOR_RPS = 10000
 OFFERED_RPS = 10200
+LOG_HEALTH_METRICS = {
+    'accepted': 'lean_net_access_log_accepted_total',
+    'written': 'lean_net_access_log_written_total',
+    'dropped': 'lean_net_access_log_dropped_total',
+    'io_errors': 'lean_net_access_log_io_errors_total',
+    'pending': 'lean_net_access_log_pending_records',
+}
+# Global native limits: at most256 worker lanes, each at most65536 records.
+# Actual CLI queues are smaller. Pending is transient, not a zero-valued gate.
+LOG_MAX_PENDING_RECORDS = 256 * 65536
 METRIC_LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+([^\s]+)(?:\s+[^\s]+)?$')
 LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"(?:,|$)')
 
@@ -344,7 +354,22 @@ def metrics(server, ca, clients):
     if response.status != 200 or len(body) > 65536 or not response.isclosed() or response.will_close:
         raise RuntimeError('invalid, oversized or nonpersistent metrics response')
     text = body.decode('utf-8')
+    log_health(text)
     return {name: counter(text, selector) for name, selector in server['metrics'].items()}, text
+
+
+def log_health(text):
+    """Fixed native schema; independent of the four configured request selectors."""
+    health = {key: counter(text, {'name': name}) for key, name in LOG_HEALTH_METRICS.items()}
+    check_log_health(health)
+    return health
+
+
+def check_log_health(health):
+    if health['dropped'] or health['io_errors']:
+        raise RuntimeError('access log dropped records or reported an I/O error')
+    if health['pending'] > LOG_MAX_PENDING_RECORDS:
+        raise RuntimeError('access log pending records exceed native global queue bounds')
 
 
 def probe(server, ca, clients):
@@ -458,6 +483,11 @@ def assess_sample(previous, current, baseline, require_rate=True):
     if [row['name'] for row in previous['servers']] != [row['name'] for row in current['servers']]:
         raise RuntimeError('resource sample server identity/order changed')
     for before, row, first in zip(previous['servers'], current['servers'], baseline['servers']):
+        for value in (first['log_health'], before['log_health'], row['log_health']):
+            check_log_health(value)
+        for key in ('accepted', 'written', 'dropped', 'io_errors'):
+            if row['log_health'][key] < before['log_health'][key]:
+                raise RuntimeError('access log counter reset/decrease during measurement')
         if not row.get('family') or not first.get('family'):
             raise RuntimeError('missing whole-service process-family census')
         signature = lambda value: [(p['pid'], p['parent_pid'], p['start_identity']) for p in value['family']]
@@ -513,6 +543,8 @@ def run(args):
               'resource_scope': 'whole server process family; root and every descendant, including log-writer helper; RSS sums intentionally retain shared-map double charges',
               'certificate_reload_during_measurement': False,
               'counter_publication_max_lag_seconds': 1,
+              'access_log_health_metrics': LOG_HEALTH_METRICS,
+              'access_log_health_policy': 'Dropped and I/O-error counters must be zero, including baseline. Accepted/written counters cannot decrease. Transient pending records are allowed within native queue bounds; no equality or zero-pending assertion is made while traffic is active or after metrics shutdown. Helper draining/join is covered by bounded shutdown and separate native tests.',
               'measurement_boundary_note': 'Published counter snapshots are at most1s old. Raw counter differences are exact; their alignment with monotonic measurement boundaries has up to1s publication uncertainty. The final conservative rate subtracts two full offered-rate seconds plus all possible in-flight requests.',
               'passed': False, 'smoke_completed': False, 'servers': [], 'loaders': [],
               'h2load_binary_sha256': digest(h2load),
@@ -550,7 +582,7 @@ def run(args):
             expected_images = {os.path.normcase(os.path.realpath(server['binary'])), os.path.normcase(os.path.realpath(server['log_helper']))}
             if any(os.path.normcase(os.path.realpath(member['executable'])) not in expected_images for member in resources['family']):
                 raise RuntimeError('service family is running an executable outside the immutable server/helper snapshots')
-            rows.append({'name': server['name'], 'counters': counters,
+            rows.append({'name': server['name'], 'counters': counters, 'log_health': log_health(text),
                          'probes_completed': completed_probes[server['name']], **resources})
             if label in ('measurement_start', 'measurement_end'):
                 (args.output / (server['name'] + '-' + label + '.prom')).write_text(text)

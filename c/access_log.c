@@ -645,7 +645,7 @@ int ob_stop(ob_hub *hub, uint64_t timeout_ms) {
   if (!hub || !timeout_ms || timeout_ms > 60000)
     return -EINVAL;
   if (!hub->stopping) {
-    uint64_t now;
+    uint64_t now = 0;
     int error = ob_clock(&now);
     if (error)
       return error;
@@ -667,7 +667,7 @@ int ob_join_step(ob_hub *hub) {
            : hub->error                       ? hub->error
            : atomic_load(&hub->shared->error) ? atomic_load(&hub->shared->error)
                                               : 1;
-  uint64_t now;
+  uint64_t now = 0;
   int clock_error = ob_clock(&now);
   if (clock_error)
     return clock_error;

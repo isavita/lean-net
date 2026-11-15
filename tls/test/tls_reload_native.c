@@ -213,9 +213,11 @@ static void control_faults(const char *certificate, const char *key) {
 #ifdef _WIN32
   unsigned native_error = ERROR_INVALID_HANDLE;
   int expected_error = -EBADF;
+  int interrupted_error = -ECANCELED; /* ERROR_OPERATION_ABORTED is cancellation. */
 #else
   unsigned native_error = EINVAL;
   int expected_error = -EINVAL;
+  int interrupted_error = -EINTR;
 #endif
   for (unsigned kind = 0; kind < 3; ++kind) {
 #ifdef _WIN32
@@ -223,7 +225,7 @@ static void control_faults(const char *certificate, const char *key) {
 #else
     unsigned injected = kind == 2 ? EINTR : native_error;
 #endif
-    int expected = kind == 2 ? -EINTR : expected_error;
+    int expected = kind == 2 ? interrupted_error : expected_error;
     uint64_t value = provider(certificate, key); tw_provider *owner = (tw_provider *)(uintptr_t)value;
     atomic_store(&wait_entered, 0); atomic_store(&wait_release, 0); wait_target = owner;
     if (kind) atomic_store(&wait_error, injected);
@@ -251,7 +253,7 @@ static void control_faults(const char *certificate, const char *key) {
 #else
   atomic_store(&signal_error, EINTR);
 #endif
-  check(result(lean_tlsw_bundle_free(value)) == -EINTR, "joined cleanup reports wake failure without retrying");
+  check(result(lean_tlsw_bundle_free(value)) == interrupted_error, "joined cleanup reports wake failure without retrying");
   check(atomic_load(&owner->references) == 1 && !atomic_load(&owner->loader_threads), "cleanup error consumes outer ownership after join");
   tw_provider_release(owner);
 #ifndef _WIN32

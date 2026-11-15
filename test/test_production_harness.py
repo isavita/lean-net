@@ -6,7 +6,7 @@ import subprocess
 import sys
 import unittest
 
-from soak24 import ClockGuard, assess_sample, counter, parse_load, sample_process_family, validate, DAY
+from soak24 import ClockGuard, assess_sample, counter, log_health, parse_load, sample_process_family, validate, DAY, LOG_HEALTH_METRICS, LOG_MAX_PENDING_RECORDS
 
 
 def config():
@@ -17,6 +17,7 @@ def config():
 
 def sample(time, completed, probes=0):
     return {'monotonic': time, 'servers': [dict(name=name, counters={'completed': completed, 'errors': 0, 'timeouts': 0, 'resets': 0},
+                 log_health={'accepted': completed, 'written': completed - 1, 'dropped': 0, 'io_errors': 0, 'pending': 1},
                  probes_completed=probes, rss_bytes=10000, fds_or_handles=20,
                  family=[{'pid': index + 10, 'parent_pid': 1, 'start_identity': 'fixed', 'rss_bytes': 10000, 'fds_or_handles': 20}]) for index, name in enumerate(['plain', 'tls'])]}
 
@@ -50,6 +51,11 @@ class SoakAccounting(unittest.TestCase):
                 counter(invalid, {'name': 'completed'})
         with self.assertRaises(ValueError):
             counter(text, {'name': 'absent'})
+        health_text = '\n'.join(f'{name} {2 if key == "accepted" else 1 if key in ("written", "pending") else 0}'
+                                for key, name in LOG_HEALTH_METRICS.items())
+        self.assertEqual(log_health(health_text)['pending'], 1)
+        with self.assertRaises(ValueError):
+            log_health(health_text.replace(LOG_HEALTH_METRICS['written'], 'missing_metric'))
 
     def test_duration_and_offered_rate_cannot_be_relaxed(self):
         self.assertEqual(validate(config(), None)[0], DAY)
@@ -94,6 +100,19 @@ class SoakAccounting(unittest.TestCase):
                 assess_sample(before, bad, before)
         after['servers'][1]['rss_bytes'] = 10099
         self.assertGreater(assess_sample(before, after, before)['achieved_rps'], 10000)
+        for key in ('dropped', 'io_errors'):
+            for position in ('baseline', 'measured'):
+                first, last = deepcopy(before), deepcopy(after)
+                (first if position == 'baseline' else last)['servers'][0]['log_health'][key] = 1
+                with self.subTest(key=key, position=position), self.assertRaisesRegex(RuntimeError, 'access log dropped'):
+                    assess_sample(first, last, first)
+        for key in ('accepted', 'written'):
+            bad = deepcopy(after); bad['servers'][0]['log_health'][key] = before['servers'][0]['log_health'][key] - 1
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'log counter reset'):
+                assess_sample(before, bad, before)
+        bad = deepcopy(after); bad['servers'][0]['log_health']['pending'] = LOG_MAX_PENDING_RECORDS + 1
+        with self.assertRaisesRegex(RuntimeError, 'queue bounds'):
+            assess_sample(before, bad, before)
 
     def test_process_family_identity_and_helper_descriptor_leak(self):
         before = sample(10, 1000)

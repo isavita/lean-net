@@ -60,12 +60,19 @@ def main():
     if not args.interpret and not args.binary.is_file():
         parser.error("compiled fuzz binary is missing; ask the build coordinator to build lean-net-protocol-fuzz, or explicitly choose --interpret")
     args.output.mkdir(parents=True)
+    child_env = os.environ.copy()
+    child_env['LEAN_NUM_THREADS'] = '1'
+    child_env['LEAN_STACK_SIZE_KB'] = '65536'
     command = (["lake", "env", "lean", "--run", str(SOURCE)] if args.interpret else [str(args.binary.resolve())]) + [str(seed), str(cases), str(maximum)]
     report = {"started_utc": datetime.now(timezone.utc).isoformat(), "platform": platform.platform(),
               "python": sys.version, "command": command, "seed": seed, "cases": cases,
               "max_input_bytes": maximum, "timeout_seconds": timeout, "profile": args.profile,
               "max_log_bytes": args.max_log_mib * 1024**2,
               "linux_address_space_bytes": args.max_address_mib * 1024**2 if sys.platform == "linux" else None,
+              "lean_runtime_environment": {name: child_env[name] for name in ('LEAN_NUM_THREADS', 'LEAN_STACK_SIZE_KB')},
+              "lean_runtime_resource_note": "The pure fuzzer runs serially. One task worker and a 64 MiB main-thread stack avoid Lean's hardware-concurrency pool and 1 GiB per-thread default exhausting the unchanged 2 GiB Linux address-space cap before case execution.",
+              "lean_runtime_sources": ['https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/object.cpp',
+                                       'https://raw.githubusercontent.com/leanprover/lean4/v4.35.0/src/runtime/thread.cpp'],
               "driver_sha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(),
               "compiled_binary_sha256": None if args.interpret else hashlib.sha256(args.binary.read_bytes()).hexdigest(),
               "execution_mode": "explicit_interpreter" if args.interpret else "compiled", "passed": False}
@@ -83,6 +90,7 @@ def main():
     try:
         with log_path.open("w") as log:
             process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
+                                       env=child_env,
                                        start_new_session=os.name != "nt", preexec_fn=limits if sys.platform == "linux" else None,
                                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
             try:

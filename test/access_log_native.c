@@ -28,6 +28,27 @@ static void observed_interrupt(int signal_number) {
 }
 #endif
 #ifdef _WIN32
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+static HANDLE WINAPI traced_mapping(HANDLE, LPSECURITY_ATTRIBUTES, DWORD, DWORD, DWORD, LPCWSTR);
+static LPVOID WINAPI traced_map(HANDLE, DWORD, DWORD, DWORD, SIZE_T);
+static BOOL WINAPI traced_attributes(LPPROC_THREAD_ATTRIBUTE_LIST, DWORD, DWORD, PSIZE_T);
+static BOOL WINAPI traced_update(LPPROC_THREAD_ATTRIBUTE_LIST, DWORD, DWORD_PTR, PVOID, SIZE_T, PVOID, PSIZE_T);
+static VOID WINAPI traced_delete_attributes(LPPROC_THREAD_ATTRIBUTE_LIST);
+static BOOL WINAPI traced_process(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+static BOOL WINAPI traced_unmap(LPCVOID);
+static BOOL WINAPI traced_close(HANDLE);
+#define CreateFileMappingW traced_mapping
+#define MapViewOfFile traced_map
+#define InitializeProcThreadAttributeList traced_attributes
+#define UpdateProcThreadAttribute traced_update
+#define DeleteProcThreadAttributeList traced_delete_attributes
+#define CreateProcessW traced_process
+#define UnmapViewOfFile traced_unmap
+#define CloseHandle traced_close
 static void *observed_malloc(size_t n) {
   if (observing_hot)
     ++hot_allocations;
@@ -48,6 +69,16 @@ static void *observed_calloc(size_t n, size_t size) {
 #endif
 #undef malloc
 #undef calloc
+#ifdef _WIN32
+#undef CreateFileMappingW
+#undef MapViewOfFile
+#undef InitializeProcThreadAttributeList
+#undef UpdateProcThreadAttribute
+#undef DeleteProcThreadAttributeList
+#undef CreateProcessW
+#undef UnmapViewOfFile
+#undef CloseHandle
+#endif
 #define REQUIRE(value)                                                                             \
   do {                                                                                             \
     if (!(value)) {                                                                                \
@@ -55,6 +86,140 @@ static void *observed_calloc(size_t n, size_t size) {
       abort();                                                                                     \
     }                                                                                              \
   } while (0)
+#ifdef _WIN32
+/* Diagnostics only: preserve both the incoming and actual API LastError.
+ * Count every failed lifetime before retaining the original pre-first gate. */
+static int trace_capture, trace_stages;
+static HANDLE trace_owned[16];
+static unsigned trace_open, trace_created, trace_closed, trace_views, trace_view_created, trace_view_closed;
+static unsigned trace_iteration;
+static DWORD trace_count(void) {
+  DWORD count = 0;
+  REQUIRE(GetProcessHandleCount(GetCurrentProcess(), &count));
+  return count;
+}
+static DWORD trace_before(void) {
+  DWORD error = GetLastError();
+  DWORD count = trace_capture ? trace_count() : 0;
+  SetLastError(error);
+  return count;
+}
+static void trace_after(const char *name, DWORD before, DWORD error) {
+  if (trace_capture && trace_stages)
+    fprintf(stderr, "logger SDK iteration=%u stage=%s handles=%lu->%lu error=%lu owned=%u views=%u\n",
+            trace_iteration, name, (unsigned long)before, (unsigned long)trace_count(),
+            (unsigned long)error, trace_open, trace_views);
+  SetLastError(error);
+}
+static void trace_add(HANDLE handle) {
+  if (!trace_capture || !handle || handle == INVALID_HANDLE_VALUE) return;
+  REQUIRE(trace_open < sizeof(trace_owned) / sizeof(*trace_owned));
+  trace_owned[trace_open++] = handle;
+  ++trace_created;
+}
+static HANDLE WINAPI traced_mapping(HANDLE file, LPSECURITY_ATTRIBUTES security, DWORD protection,
+                                     DWORD high, DWORD low, LPCWSTR name) {
+  DWORD before = trace_before();
+  HANDLE result = CreateFileMappingW(file, security, protection, high, low, name);
+  DWORD error = GetLastError(); trace_add(result);
+  trace_after("CreateFileMappingW", before, error); return result;
+}
+static LPVOID WINAPI traced_map(HANDLE mapping, DWORD access, DWORD high, DWORD low, SIZE_T size) {
+  DWORD before = trace_before();
+  LPVOID result = MapViewOfFile(mapping, access, high, low, size); DWORD error = GetLastError();
+  if (trace_capture && result) { ++trace_views; ++trace_view_created; }
+  trace_after("MapViewOfFile", before, error); return result;
+}
+static BOOL WINAPI traced_attributes(LPPROC_THREAD_ATTRIBUTE_LIST list, DWORD count, DWORD flags, PSIZE_T bytes) {
+  DWORD before = trace_before();
+  BOOL result = InitializeProcThreadAttributeList(list, count, flags, bytes); DWORD error = GetLastError();
+  trace_after("InitializeProcThreadAttributeList", before, error); return result;
+}
+static BOOL WINAPI traced_update(LPPROC_THREAD_ATTRIBUTE_LIST list, DWORD flags, DWORD_PTR attribute,
+                                 PVOID value, SIZE_T bytes, PVOID previous, PSIZE_T returned) {
+  DWORD before = trace_before();
+  BOOL result = UpdateProcThreadAttribute(list, flags, attribute, value, bytes, previous, returned);
+  DWORD error = GetLastError(); trace_after("UpdateProcThreadAttribute", before, error); return result;
+}
+static VOID WINAPI traced_delete_attributes(LPPROC_THREAD_ATTRIBUTE_LIST list) {
+  DWORD before = trace_before(); DeleteProcThreadAttributeList(list); DWORD error = GetLastError();
+  trace_after("DeleteProcThreadAttributeList", before, error);
+}
+static BOOL WINAPI traced_process(LPCWSTR application, LPWSTR command, LPSECURITY_ATTRIBUTES process,
+                                  LPSECURITY_ATTRIBUTES thread, BOOL inherit, DWORD flags,
+                                  LPVOID environment, LPCWSTR directory, LPSTARTUPINFOW startup,
+                                  LPPROCESS_INFORMATION information) {
+  DWORD before = trace_before();
+  BOOL result = CreateProcessW(application, command, process, thread, inherit, flags,
+                               environment, directory, startup, information);
+  DWORD error = GetLastError();
+  if (result) { trace_add(information->hProcess); trace_add(information->hThread); }
+  trace_after("CreateProcessW", before, error); return result;
+}
+static BOOL WINAPI traced_unmap(LPCVOID view) {
+  DWORD before = trace_before(); BOOL result = UnmapViewOfFile(view); DWORD error = GetLastError();
+  if (trace_capture && result) { REQUIRE(trace_views); --trace_views; ++trace_view_closed; }
+  trace_after("UnmapViewOfFile", before, error); return result;
+}
+static BOOL WINAPI traced_close(HANDLE handle) {
+  DWORD before = trace_before(); BOOL result = CloseHandle(handle); DWORD error = GetLastError();
+  if (trace_capture && result)
+    for (unsigned i = 0; i < trace_open; ++i)
+      if (trace_owned[i] == handle) { trace_owned[i] = trace_owned[--trace_open]; ++trace_closed; break; }
+  trace_after("CloseHandle", before, error); return result;
+}
+typedef struct { unsigned char used[16384]; unsigned count; } trace_snapshot;
+static void trace_snapshot_take(trace_snapshot *snapshot) {
+  DWORD error = GetLastError();
+  memset(snapshot, 0, sizeof(*snapshot));
+  for (unsigned i = 1; i < sizeof(snapshot->used); ++i) {
+    DWORD flags;
+    if (GetHandleInformation((HANDLE)(uintptr_t)(i * 4), &flags)) { snapshot->used[i] = 1; ++snapshot->count; }
+  }
+  SetLastError(error);
+}
+static void trace_snapshot_diff(const trace_snapshot *before, const trace_snapshot *after) {
+  DWORD error = GetLastError();
+  typedef LONG (NTAPI *query_fn)(HANDLE, unsigned, PVOID, ULONG, PULONG);
+  FARPROC raw = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryObject"); query_fn query = NULL;
+  memcpy(&query, &raw, sizeof(query));
+  for (unsigned i = 1; i < sizeof(after->used); ++i) {
+    if (!after->used[i] || before->used[i]) continue;
+    char type[256] = "unavailable";
+    union { uint64_t align; unsigned char bytes[4096]; } buffer;
+    ULONG size = 0;
+    if (query && query((HANDLE)(uintptr_t)(i * 4), 2, buffer.bytes, sizeof(buffer.bytes), &size) >= 0) {
+      struct { USHORT length, maximum; PWSTR text; } *name = (void *)buffer.bytes;
+      int n = WideCharToMultiByte(CP_UTF8, 0, name->text, name->length / 2, type, sizeof(type) - 1, NULL, NULL);
+      if (n > 0) type[n] = 0;
+    }
+    /* Type only; never query File/pipe object names, which can block. */
+    fprintf(stderr, "logger new handle=%p type=%s\n", (void *)(uintptr_t)(i * 4), type);
+  }
+  SetLastError(error);
+}
+static void trace_missing_sdk(void) {
+  SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
+  HANDLE mapping = traced_mapping(INVALID_HANDLE_VALUE, &security, PAGE_READWRITE, 0, 4096, NULL);
+  REQUIRE(mapping);
+  SIZE_T bytes = 0;
+  REQUIRE(!traced_attributes(NULL, 1, 0, &bytes) && GetLastError() == ERROR_INSUFFICIENT_BUFFER);
+  STARTUPINFOEXW startup; memset(&startup, 0, sizeof(startup)); startup.StartupInfo.cb = sizeof(startup);
+  startup.lpAttributeList = malloc(bytes); REQUIRE(startup.lpAttributeList);
+  REQUIRE(traced_attributes(startup.lpAttributeList, 1, 0, &bytes));
+  REQUIRE(traced_update(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                        &mapping, sizeof(mapping), NULL, NULL));
+  PROCESS_INFORMATION process; memset(&process, 0, sizeof(process));
+  wchar_t command[] = L"\"/missing/lean-net-access-log-helper\" --lean-net-access-log-helper 0 4096";
+  REQUIRE(!traced_process(L"/missing/lean-net-access-log-helper", command, NULL, NULL, TRUE,
+                          EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, NULL, NULL,
+                          &startup.StartupInfo, &process));
+  REQUIRE(GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND);
+  traced_delete_attributes(startup.lpAttributeList); free(startup.lpAttributeList);
+  REQUIRE(traced_close(mapping));
+  REQUIRE(trace_open == 0 && trace_created == trace_closed && trace_views == 0);
+}
+#endif
 static uint64_t ob_now(void) {
   uint64_t now = 0;
   REQUIRE(ob_clock(&now) == 0);
@@ -193,8 +358,36 @@ int main(int argc, char **argv) {
 #endif
   REQUIRE(finish(hub, 100) == 1 && ob_free(hub) == 0);
   unsigned failed_before = handles();
+#ifdef _WIN32
+  trace_snapshot failed_snapshot_before, failed_snapshot_after;
+  trace_snapshot_take(&failed_snapshot_before);
+  trace_capture = trace_stages = 1;
+  trace_missing_sdk();
+  unsigned control_after = handles();
+  fprintf(stderr, "logger direct SDK baseline=%u after=%u owned_created=%u owned_closed=%u owned_open=%u\n",
+          failed_before, control_after, trace_created, trace_closed, trace_open);
+  unsigned failed_min = UINT_MAX, failed_max = 0;
+  for (unsigned i = 0; i < 1000; ++i) {
+    trace_iteration = i + 1; trace_stages = i < 2 || i == 999;
+    REQUIRE(ob_new(1, 1, path, "/missing/lean-net-access-log-helper", 4096, 3, 1, &hub) == 0);
+    REQUIRE(ready(hub) == -ENOENT && finish(hub, 100) == -ENOENT && ob_free(hub) == 0);
+    unsigned current = handles();
+    if (current < failed_min) failed_min = current;
+    if (current > failed_max) failed_max = current;
+    REQUIRE(trace_open == 0 && trace_created == trace_closed && trace_views == 0 && trace_view_created == trace_view_closed);
+    if (i < 4 || i == 999)
+      fprintf(stderr, "logger failed startup iteration=%u handles=%u owned=%u/%u/%u views=%u/%u/%u\n",
+              i + 1, current, trace_created, trace_closed, trace_open, trace_view_created, trace_view_closed, trace_views);
+  }
+  trace_capture = 0;
+  trace_snapshot_take(&failed_snapshot_after);
+  fprintf(stderr, "logger failed1000 before=%u direct_control=%u min=%u max=%u after=%u census=%u/%u\n",
+          failed_before, control_after, failed_min, failed_max, handles(), failed_snapshot_before.count, failed_snapshot_after.count);
+  trace_snapshot_diff(&failed_snapshot_before, &failed_snapshot_after);
+#else
   REQUIRE(ob_new(1, 1, path, "/missing/lean-net-access-log-helper", 4096, 3, 1, &hub) == 0);
   REQUIRE(ready(hub) == -ENOENT && finish(hub, 100) == -ENOENT && ob_free(hub) == 0);
+#endif
   REQUIRE(handles() <= failed_before);
   int opened = ob_new(2, 8, path, helper, 4096, 3, 1, &hub);
   int handshaken = opened ? 0 : ready(hub);
