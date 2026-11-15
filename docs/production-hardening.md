@@ -222,3 +222,20 @@ disabled because early data could be replayed.
 allowed set: `sched_setaffinity` on Linux, `SetThreadAffinityMask` on
 Windows, affinity tags on macOS (unsupported on Apple silicon). Automatic
 worker counts on Linux honour the cpuset, for example in containers.
+
+## Head-stage admission hook
+
+`ReactorServerConfig.admission` (default `none`) installs an
+`HTTP.Admission.Hook`. It decides every request head on its worker before
+body intake, `100 Continue`, h2c upgrade, WebSocket/tunnel selection,
+metrics/health endpoints or any application callback. HTTP/2 streams pause at
+their validated head (`HTTP2.Connection.Config.headGate`). Later frames,
+including that stream's DATA, are read only after the decision. A verdict
+either accepts the head, with an optional tighter body bound (413 while
+streaming) and an optional replacement handler, or rejects it with a typed
+`Rejection`. HTTP/1 rejections close the connection. HTTP/2 rejections send a
+bodyless final response on that stream only and stop its upload with
+RST_STREAM(NO_ERROR). The hook receives sealed `Transport.Facts`: TLS,
+ClientHello SNI, ALPN, binary peer address and verified mTLS identity. These
+come from the transport, never from request bytes. `LeanNet.Gate` builds this
+hook from a declarative policy.

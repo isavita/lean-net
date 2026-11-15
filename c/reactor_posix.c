@@ -413,6 +413,32 @@ static int rn_format_peer(const struct sockaddr_storage *address, char *out, siz
     } else return -EAFNOSUPPORT;
     return (int)strlen(out);
 }
+
+/* Binary peer address: 4 bytes for IPv4 (including IPv4-mapped IPv6), 16 for
+ * IPv6. Returns the length or a negative errno. */
+static int rn_raw_peer(const struct sockaddr_storage *address, uint8_t out[16]) {
+    if (address->ss_family == AF_INET) {
+        memcpy(out, &((const struct sockaddr_in *)address)->sin_addr, 4);
+        return 4;
+    }
+    if (address->ss_family == AF_INET6) {
+        const uint8_t *bytes = (const uint8_t *)&((const struct sockaddr_in6 *)address)->sin6_addr;
+        static const uint8_t mapped[12] = {0,0,0,0,0,0,0,0,0,0,0xff,0xff};
+        if (memcmp(bytes, mapped, sizeof(mapped)) == 0) { memcpy(out, bytes + 12, 4); return 4; }
+        memcpy(out, bytes, 16);
+        return 16;
+    }
+    return -EAFNOSUPPORT;
+}
+int rn_peer_raw(rn_reactor *r, uint64_t token, uint8_t out[16]) {
+    if (r == NULL || out == NULL) return -EINVAL;
+    rn_conn *c; int error = rn_conn_get(r, token, &c);
+    if (error) return error;
+    if (c->state != 4 || c->fd < 0) return -ENOTCONN;
+    struct sockaddr_storage address; socklen_t length = sizeof(address);
+    if (getpeername(c->fd, (struct sockaddr *)&address, &length) < 0) return -errno;
+    return rn_raw_peer(&address, out);
+}
 int rn_peer_address(rn_reactor *r, uint64_t token, char *out, size_t capacity) {
     if (r == NULL || out == NULL || capacity < 46) return -EINVAL;
     rn_conn *c; int error = rn_conn_get(r, token, &c);

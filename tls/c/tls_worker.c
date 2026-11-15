@@ -130,6 +130,8 @@ typedef struct tw_session {
    * fixed-buffer truncation may turn one verified name into another. */
   char *peer_subject, **peer_sans;
   uint32_t peer_sans_count;
+  /* ClientHello SNI (lowercase DNS name) captured with the peer identity. */
+  char peer_sni[254];
   uint32_t seen_cipher, seen_plain, seen_cipher_tail, seen_plain_tail,
       seen_fence_tail, seen_notifications;
   int more;
@@ -307,6 +309,22 @@ static void tw_clear_peer(tw_session *session) {
   for (uint32_t i = 0; i < session->peer_sans_count; ++i) free(session->peer_sans[i]);
   free(session->peer_sans); session->peer_sans = NULL;
   session->peer_sans_count = 0; session->peer_verified = 0;
+}
+/* SNI is recorded only when it is a syntactically valid DNS name, lowercased;
+ * anything else is treated as absent, so gateways fail closed. */
+static void tw_capture_sni(tw_session *session) {
+  session->peer_sni[0] = 0;
+  const char *name = SSL_get_servername(session->ssl, TLSEXT_NAMETYPE_host_name);
+  if (!name) return;
+  size_t length = strlen(name);
+  if (!length || length > 253) return;
+  for (size_t i = 0; i < length; ++i) {
+    unsigned char c = (unsigned char)name[i];
+    if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
+    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.')) { session->peer_sni[0] = 0; return; }
+    session->peer_sni[i] = (char)c;
+  }
+  session->peer_sni[length] = 0;
 }
 /* Capture complete RFC 2253 subject and individually typed, exact SAN values.
  * Fail the connection if an identity cannot be represented within explicit
@@ -611,6 +629,7 @@ static void tw_drive(tw_engine *engine, tw_session *session) {
         const unsigned char *protocol = NULL; unsigned int n = 0;
         SSL_get0_alpn_selected(session->ssl, &protocol, &n);
         session->protocol = n == 2 && memcmp(protocol, "h2", 2) == 0 ? 2 : 1;
+        tw_capture_sni(session);
         int identity = tw_capture_peer(session);
         if (identity) { tw_fail(engine, session, identity, "invalid or oversized verified client identity"); return; }
         atomic_fetch_add(&tw_handshakes_total, 1);
@@ -1244,4 +1263,15 @@ lean_object *lean_tlsw_handshake_stats(lean_object *unit) {
   array = lean_array_push(array, lean_box_uint64(atomic_load(&tw_handshakes_resumed)));
   array = lean_array_push(array, lean_box_uint64(atomic_load(&tw_client_certificates)));
   return lean_io_result_mk_ok(array);
+}
+
+/* ClientHello SNI of a READY session as bytes; empty when absent or invalid. */
+lean_object *lean_tlsw_sni(uint64_t handle, uint64_t token) {
+  tw_session *session = NULL;
+  tw_bridge_session *owner = handle ? tw_find((tw_bridge *)(uintptr_t)handle, token, &session) : NULL;
+  int ready = owner && atomic_load_explicit(&session->ready, memory_order_acquire);
+  size_t length = ready ? strlen(session->peer_sni) : 0;
+  lean_object *bytes = lean_alloc_sarray(1, length, length);
+  if (length) memcpy(lean_sarray_cptr(bytes), session->peer_sni, length);
+  return lean_io_result_mk_ok(bytes);
 }

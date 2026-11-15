@@ -14,7 +14,8 @@ structure Config where
 /-- Header decisions are explicit, including the legacy HTTP/1.0 EOF-body
     extension. An override can never replace an explicit Content-Length or TE. -/
 inductive HeadDecision where
-  | accept (framing : Option BodyFraming := none)
+  /-- `bodyLimit` tightens the decoded body bound for this request only. -/
+  | accept (framing : Option BodyFraming := none) (bodyLimit : Option Nat := none)
   | reject (reply : Reply)
   | upgrade (reply : Reply)
 
@@ -229,11 +230,19 @@ def State.decideHead (state : State) (requestId : Nat) (decision : HeadDecision)
       else match reply.response.encodeAcceptedUpgrade (context state) reply.options with
         | .error _ => fail state 400
         | .ok wire => output state wire.parts .upgrade true 101 true
-    | .accept override =>
+    | .accept override bodyLimit =>
       if expectation head == some false then fail state 417
       else
         let framing := override.getD state.framing
-        match state.parser.resumeBody framing with
+        let tooLarge : Bool := match framing, bodyLimit with
+          | .contentLength n, some limit => n > limit
+          | _, _ => false
+        if tooLarge then fail state (if expectation head == some true then 417 else 413)
+        else
+        let parser := match bodyLimit with
+          | some limit => state.parser.limitBody limit
+          | none => state.parser
+        match parser.resumeBody framing with
         | .error _ => fail state 400
         | .ok parser =>
           let state : State := { state with parser, framing, phase := .body,

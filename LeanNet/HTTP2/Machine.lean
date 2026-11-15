@@ -14,6 +14,8 @@ inductive Action where
   | requestStarted (streamId : UInt32) (head : HTTP1.RequestHead) (startedAt : Nat)
   | responseAborted (streamId : UInt32) (reason : HTTP.ResponseAbortReason)
   | request (event : RequestEvent)
+  /-- With `Config.headGate`: a validated head awaiting `admitHead`/`rejectHead`. -/
+  | headReady (streamId : UInt32) (head : RequestHead) (startedAt : Nat)
   | tunnelData (event : TunnelDataEvent)
   | tunnelReset (streamId : UInt32)
   /-- One complete bounded WebSocket frame, acknowledged at its wire fence. -/
@@ -205,7 +207,9 @@ private def outputStep (state : State) (connection : Connection) (output : Array
 private def connectionStep (state : State) (result : Connection.Step)
     (reason : HTTP.ResponseAbortReason := .error) : Step := Id.run do
   let state := state.acknowledgePings result.pingAcks
-  let tunnelActions : List Action := result.tunnelData.toList.map Action.tunnelData ++
+  let tunnelActions : List Action :=
+    result.heads.toList.filterMap (fun event => event.gateHead.map (Action.headReady event.streamId · event.startedAt)) ++
+    result.tunnelData.toList.map Action.tunnelData ++
     result.tunnelResets.toList.map Action.tunnelReset
   let mut actions := writes result.output
   if state.config.trackOutput then
@@ -224,6 +228,24 @@ private def connectionStep (state : State) (result : Connection.Step)
   let step := progress state result.connection result.output result.requests result.consumed
     (if state.config.trackOutput then some actions else none)
   return { step with actions := step.actions ++ tunnelActions }
+
+/-- Admit a stream paused by `Config.headGate`, optionally with a tighter body
+    bound. The stream continues exactly as an ungated stream would. -/
+def State.admitHead (state : State) (id : UInt32) (bodyLimit : Option Nat := none) : Step :=
+  match state.connection.admitHead id bodyLimit with
+  | .ok (connection, bytes, requests) =>
+    connectionStep state { connection, output := if bytes.isEmpty then #[] else #[bytes], requests }
+  | .error error => if error.scope == .connection then fatal state error else
+    match state.connection.cancel id .internalError with
+    | .ok (connection, bytes) => outputStep state connection #[bytes]
+    | .error error => fatal state error
+
+/-- Refuse a paused stream with a bodyless final response. -/
+def State.rejectHead (state : State) (id : UInt32) (status : Nat)
+    (headers : Array HTTP1.Header := #[]) : Step :=
+  match state.connection.rejectHead id status headers with
+  | .ok (connection, bytes) => outputStep state connection #[bytes] status
+  | .error error => fatal state error
 
 /-- Application response to a validated RFC8441 opening handshake. -/
 def State.acceptTunnel (state : State) (id : UInt32) (response : HTTP1.Response) : Step :=

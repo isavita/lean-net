@@ -146,6 +146,15 @@ lean_object *shim_reactor_peer_address(uint64_t handle, uint64_t connection) {
     if (length) memcpy(lean_sarray_cptr(bytes), text, (size_t)length);
     return lean_io_result_mk_ok(bytes);
 }
+/* Binary peer IP (4/16 bytes), or an empty array when unavailable. */
+lean_object *shim_reactor_peer_raw(uint64_t handle, uint64_t connection) {
+    uint8_t raw[16];
+    int length = handle ? rn_peer_raw(rn_handle(handle), connection, raw) : -EINVAL;
+    if (length < 0) length = 0;
+    lean_object *bytes = lean_alloc_sarray(1, (size_t)length, (size_t)length);
+    if (length) memcpy(lean_sarray_cptr(bytes), raw, (size_t)length);
+    return lean_io_result_mk_ok(bytes);
+}
 lean_object *shim_reactor_acquire(uint64_t handle, uint32_t minimum) {
     if (handle == 0) return rn_io_number(-EINVAL);
     uint64_t token = 0;

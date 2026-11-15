@@ -20,6 +20,7 @@ lean_object *lean_tlsw_bundle_new(b_lean_obj_arg cert, b_lean_obj_arg key,
     b_lean_obj_arg names, b_lean_obj_arg certs, b_lean_obj_arg keys, uint8_t tickets,
     b_lean_obj_arg ocsp, b_lean_obj_arg client_ca, uint8_t verify_mode);
 lean_object *lean_tlsw_peer(uint64_t handle, uint64_t session);
+lean_object *lean_tlsw_sni(uint64_t handle, uint64_t session);
 lean_object *lean_tlsw_handshake_stats(lean_object *unit);
 /* Stop/wake/join the loader before dropping outer ownership. A join failure
  * retains the graph. After a successful join, wake/destroy/close errors still

@@ -9,6 +9,40 @@ inductive Protocol where
   | http1
   | http2
 
+/-- Connection facts established by the transport itself, never by request
+    bytes. The constructor is private: plain endpoints mint them from the
+    socket and TLS endpoints only from a handshake-complete `Wire`. This is a
+    correctness boundary for library code (handlers receive these read-only),
+    not a defence against hostile code linked into the same process. -/
+structure Facts where
+  private mk ::
+  /-- True for TLS connections. -/
+  secure : Bool
+  /-- ClientHello SNI, lowercase DNS name; `none` when absent or invalid. -/
+  sni : Option ByteArray
+  /-- Negotiated application protocol for TLS (`h2`, `http/1.1`), else empty. -/
+  alpn : ByteArray
+  /-- Binary peer IP: 4 bytes (IPv4) or 16 bytes (IPv6); empty if unknown. -/
+  peer : ByteArray
+  /-- Verified mTLS client identity; `none` without a verified certificate. -/
+  principal : Option HTTP1.ClientCertificate
+
+instance : Inhabited Facts := ⟨⟨false, none, ByteArray.empty, ByteArray.empty, none⟩⟩
+
+def Facts.plain (peer : ByteArray) : Facts := ⟨false, none, ByteArray.empty, peer, none⟩
+
+/-- TLS facts require a handshake-complete wire; SNI and identity come from
+    the TLS provider's own session state. -/
+def Facts.tls (_wire : Reactor.Wire .tls_ready) (sni : ByteArray) (alpn peer : ByteArray)
+    (principal : Option HTTP1.ClientCertificate) : Facts :=
+  ⟨true, if sni.isEmpty then none else some sni, alpn, peer, principal⟩
+
+/-- Synthetic facts for pure tests of admission policies. Never use in a
+    server path: they do not originate from a socket. -/
+def Facts.forTesting (secure : Bool) (sni : Option ByteArray := none) (peer : ByteArray := ByteArray.empty)
+    (principal : Option HTTP1.ClientCertificate := none) : Facts :=
+  ⟨secure, sni, ByteArray.empty, peer, principal⟩
+
 /-- Operations remain on the reactor owner. A TLS endpoint implements these
     through bounded queues; it never exposes its underlying plain socket. -/
 structure Endpoint where
@@ -23,6 +57,9 @@ structure Endpoint where
   cancelTimer : UInt32 → IO Unit
   /-- Verified mTLS client certificate, captured once the handshake completed. -/
   clientCertificate : Option HTTP1.ClientCertificate := none
+  /-- Transport facts for admission. Plain endpoints fill the peer address at
+      admission; TLS endpoints supply SNI, ALPN and identity. -/
+  facts : Option Facts := none
 
 inductive Event where
   | ready (endpoint : Endpoint) (protocol : Protocol)

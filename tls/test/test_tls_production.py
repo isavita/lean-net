@@ -21,6 +21,7 @@ from tls_test_support import ROOT, HOST, NAMES, context, create_certificates, op
 SUFFIX = ".exe" if sys.platform == "win32" else ""
 TLS_BINARY = ROOT / f"tls/.lake/build/bin/lean-net-tls{SUFFIX}"
 PLAIN_BINARY = ROOT / f".lake/build/bin/lean-net-http1{SUFFIX}"
+ADMISSION_BINARY = ROOT / f"tls/.lake/build/bin/lean-net-tls-admission-fixture{SUFFIX}"
 
 
 def free_port():
@@ -325,6 +326,46 @@ class TLSProduction(unittest.TestCase):
                 self.assertEqual(body, b"Hello from lean-net!\n")
                 # curl reports HTTP/1.0 as "1.0" or "1" depending on version.
                 self.assertIn(summary.decode(), {f"{version} 200", f"{version.split('.')[0] if version == '1.0' else version} 200"})
+
+    def test_admission_receives_tls_transport_facts(self):
+        port = free_port()
+        command = [str(ADMISSION_BINARY), str(self.certs.chains[0]), str(self.certs.keys[0]), str(port), str(self.client_ca)]
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self.addCleanup(lambda: (process.kill(), process.wait(), process.stderr.close()))
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            try:
+                socket.create_connection((HOST, port), timeout=0.2).close(); break
+            except OSError:
+                time.sleep(0.05)
+        # SNI and ALPN from the handshake, verified identity from the certificate.
+        for protocols, alpn in ((("h2",), "h2"), (("http/1.1",), "http/1.1")):
+            with self.subTest(alpn=alpn):
+                ctx = self.client(certificate=self.client_chain, key=self.client_key, protocols=protocols)
+                if alpn == "h2":
+                    curl = curl_binary()
+                    result = subprocess.run([curl, "-sS", "--noproxy", "*", "--http2", "--cacert", str(self.certs.ca),
+                        "--cert", str(self.client_chain), "--key", str(self.client_key),
+                        "--resolve", f"{NAMES[0]}:{port}:{HOST}", f"https://{NAMES[0]}:{port}/"],
+                        capture_output=True, timeout=20)
+                    body = result.stdout
+                else:
+                    with tls_socket(port, ctx) as sock:
+                        sock.sendall(request(b"/", close=True))
+                        body = read_http(sock)[2]
+                text = body.decode()
+                self.assertIn(f"secure=true sni={NAMES[0]} alpn={alpn} peer=4", text)
+                self.assertIn("URI:spiffe://lean-net.test/worker", text)
+                self.assertIn(f"authority={NAMES[0]}", text)
+        # Without SNI (IP literal), the fact is absent rather than guessed.
+        ctx = context(self.certs, ("http/1.1",))
+        ctx.check_hostname = False
+        raw = socket.create_connection((HOST, port), timeout=5)
+        with ctx.wrap_socket(raw) as sock:
+            sock.sendall(request(b"/", close=True))
+            text = read_http(sock)[2].decode()
+        self.assertIn("sni=none", text)
+        self.assertIn("principal=none", text)
 
     def test_mtls_curl_acceptance_and_rejection(self):
         curl = curl_binary()

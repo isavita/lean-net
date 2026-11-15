@@ -119,3 +119,6 @@ lean_exe «lean-net-tls-reload-fixture» where
 
 lean_exe «lean-net-tls-worker-lifetime-test» where
   root := `test.TLSWorkerLifetimeTest
+
+lean_exe «lean-net-tls-admission-fixture» where
+  root := `test.TLSAdmissionFixture

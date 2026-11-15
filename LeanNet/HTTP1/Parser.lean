@@ -431,6 +431,10 @@ private def finishRequest (p : Parser) : Request :=
   { method := p.method, version := p.version, target := p.target,
     headers := p.headers, body, trailers := p.trailers }
 
+/-- Tighten the decoded body bound for the paused request (never loosens). -/
+def Parser.limitBody (p : Parser) (limit : Nat) : Parser :=
+  { p with limits := { p.limits with maxBodyBytes := min p.limits.maxBodyBytes limit } }
+
 /-- Only an unframed HTTP/1.0 head may opt into the explicit EOF-body extension. -/
 def Parser.resumeBody (p : Parser) (chosen : BodyFraming) : Except String Parser := do
   if !(match p.stage with | .paused => true | _ => false) then throw "parser is not paused at a head"

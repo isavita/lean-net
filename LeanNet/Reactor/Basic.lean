@@ -75,6 +75,12 @@ def SocketId.peerAddress (id : SocketId) (reactor : Reactor) : IO ByteArray := d
   if id.owner != reactor.handle || !(← reactor.alive.get) then return ByteArray.empty
   FFI.Reactor.peerAddress reactor.handle id.token
 
+/-- Binary peer IP: 4 bytes (IPv4, including IPv4-mapped IPv6) or 16 bytes
+    (IPv6); empty when unavailable. -/
+def SocketId.peerBytes (id : SocketId) (reactor : Reactor) : IO ByteArray := do
+  if id.owner != reactor.handle || !(← reactor.alive.get) then return ByteArray.empty
+  FFI.Reactor.peerRaw reactor.handle id.token
+
 /-- A historical completion identity does not grant socket access. Query before
     taking protocol actions: CLOSED may still be queued for a later poll. -/
 def SocketId.isLive (id : SocketId) (reactor : Reactor) : IO Bool := do

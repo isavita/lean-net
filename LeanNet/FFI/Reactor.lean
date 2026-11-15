@@ -34,6 +34,8 @@ opaque fileWrite (handle connection owner file offset : UInt64)
   (length : UInt32) (operation : UInt64) : IO UInt64
 @[extern "shim_reactor_read_enabled"]
 opaque readEnabled (handle connection : UInt64) (enabled : UInt8) : IO UInt64
+@[extern "shim_reactor_peer_raw"]
+opaque peerRaw (handle connection : UInt64) : IO ByteArray
 @[extern "shim_reactor_peer_address"]
 opaque peerAddress (handle connection : UInt64) : IO ByteArray
 @[extern "shim_reactor_connection_live"]

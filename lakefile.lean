@@ -69,6 +69,9 @@ lean_exe «lean-net-http1-fixture» where
 lean_exe «lean-net-http2-fixture» where
   root := `test.HTTP2Fixture
 
+lean_exe «lean-net-admission-fixture» where
+  root := `test.AdmissionFixture
+
 lean_exe «lean-net-event-ffi-test» where
   root := `test.EventFFITest
 

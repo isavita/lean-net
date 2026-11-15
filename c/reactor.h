@@ -79,6 +79,8 @@ int rn_connection_live(rn_reactor *reactor, uint64_t connection);
 /* Writes the connected peer's numeric IP address (IPv4-mapped IPv6 shown as
  * IPv4) as a NUL-terminated string; returns its length or negative errno. */
 int rn_peer_address(rn_reactor *reactor, uint64_t connection, char *out, size_t capacity);
+/* Binary peer IP (4 or 16 bytes); returns its length or negative errno. */
+int rn_peer_raw(rn_reactor *reactor, uint64_t connection, uint8_t out[16]);
 /* Claim once before any plaintext writes. Plain socket operations then fail
  * with EACCES, including aliases obtained before the claim. Capabilities are
  * scoped to this reactor and connected generation. Modes: 0 plain, 1 TLS

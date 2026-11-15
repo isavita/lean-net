@@ -9,6 +9,7 @@ import LeanNet.HTTP.Observability
 import LeanNet.HTTP.SecureHeaders
 import LeanNet.HTTP.Admin
 import LeanNet.HTTP.TraceContext
+import LeanNet.HTTP.Admission
 import LeanNet.WebSocket.Server
 
 namespace LeanNet.HTTP
@@ -52,6 +53,9 @@ structure ReactorServerConfig where
   /-- Accept HTTP/1.1 `Upgrade: h2c` on cleartext connections (RFC 7540
       §3.2). Never offered over TLS, where ALPN selects h2. -/
   h2cUpgrade : Bool := true
+  /-- Optional head-stage admission (see `LeanNet.HTTP.Admission`). `none`
+      keeps the core server's behaviour unchanged. -/
+  admission : Option Admission.Hook := none
   /-- Demo WebSocket echo route `/ws`; the exact allowed browser Origin must
       be configured explicitly. Applications can use their own policy. -/
   websocketOrigin : Option ByteArray := none
@@ -171,6 +175,11 @@ private structure Client where
   remote : ByteArray := ByteArray.empty
   /-- Accepted h2c upgrade awaiting its 101 write barrier. -/
   h2cUpgrade : Option (ByteArray × HTTP2.RequestHead × RequestHead × Nat) := none
+  /-- Transport facts, resolved once per connection when admission is on. -/
+  facts : Option Transport.Facts := none
+  /-- Admission-selected request handlers keyed by HTTP/1 request ID or
+      HTTP/2 stream ID; consumed when the request is dispatched. -/
+  dispatch : Std.HashMap Nat (Request → IO Reply) := {}
 
 private structure WorkerState where
   clients : Std.HashMap Reactor.SocketId Client := {}
@@ -528,8 +537,15 @@ private def Driver.traced (driver : Driver) (id : Reactor.SocketId) (requestId :
       driver.put id { client with requests := client.requests.insert requestId observation }
   return { request with headers }
 
+private def Driver.takeDispatch (driver : Driver) (id : Reactor.SocketId) (key : Nat) :
+    IO (Option (Request → IO Reply)) := do
+  let some client ← driver.client? id | return none
+  let some handler := client.dispatch[key]? | return none
+  driver.put id { client with dispatch := client.dispatch.erase key }
+  return some handler
+
 private def Driver.reply (driver : Driver) (id : Reactor.SocketId) (requestId : Nat)
-    (request : Request) : IO Reply := do
+    (request : Request) (dispatch : Option (Request → IO Reply) := none) : IO Reply := do
   if let some probe := healthTarget driver request.target then
     if request.method != "GET" && request.method != "HEAD" then
       return { response := { status := 405, headers := #[{ name := "allow", value := "GET, HEAD".toUTF8 }] } }
@@ -550,7 +566,41 @@ private def Driver.reply (driver : Driver) (id : Reactor.SocketId) (requestId : 
     return { response := {
       headers := #[{ name := "Content-Type", value := Observability.metricsContentType }]
       body := snapshot.renderPrometheus ++ (← observer.hub.processMetrics) ++ (← driver.transport.metrics) } }
-  driver.handlers.onRequest (← driver.traced id requestId request)
+  let request ← driver.traced id requestId request
+  match dispatch with
+  | some handler => handler request
+  | none => driver.handlers.onRequest request
+
+private def Driver.factsOf (driver : Driver) (id : Reactor.SocketId) : IO Transport.Facts := do
+  let some client ← driver.client? id | return default
+  if let some facts := client.facts then return facts
+  let facts ← match client.socket.facts with
+    | some facts => pure facts
+    | none => do return Transport.Facts.plain (← id.peerBytes driver.reactor)
+  driver.put id { client with facts := some facts }
+  return facts
+
+/-- Run the configured admission hook. Exceptions become a 500 rejection. -/
+private def Driver.admit (driver : Driver) (id : Reactor.SocketId) (hook : Admission.Hook)
+    (head : Admission.Head) : IO Admission.Verdict := do
+  let facts ← driver.factsOf id
+  try hook.decide facts head
+  catch _ => pure (.reject { status := 500 })
+
+private def admissionHead1 (driver : Driver) (head : RequestHead) (framing : BodyFraming) : Admission.Head :=
+  let authority := (head.headers.find? (·.name == "host")).map (·.value) |>.getD ByteArray.empty
+  let upgrade := head.headers.any (·.name == "upgrade")
+  { protocol := if head.version == "HTTP/1.0" then .http10 else .http11
+    method := head.method, target := head.target, authority, headers := head.headers
+    contentLength := match framing with | .contentLength n => some n | _ => none
+    bodyless := match framing with | .none | .contentLength 0 => true | _ => false
+    kind := if metricTarget driver head.target then .internal else if upgrade then .upgrade else .request }
+
+private def admissionHead2 (driver : Driver) (head : HTTP2.RequestHead) : Admission.Head :=
+  { protocol := .http2, method := head.method, target := head.target, authority := head.authority
+    scheme := some head.scheme, headers := head.headers, contentLength := head.contentLength
+    kind := if head.protocol.isSome then .tunnel
+      else if metricTarget driver head.target then .internal else .request }
 
 private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (step : Machine.Step) : IO Unit := do
   let some client ← driver.client? id | return
@@ -573,6 +623,23 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
       if !(← driver.startObservation id requestId (some head) machine.startedAt) then
         driver.closeNow id
         return
+      let mut bodyLimit : Option Nat := none
+      if let some hook := driver.config.admission then
+        match ← driver.admit id hook (admissionHead1 driver head framing) with
+        | .reject rejection =>
+          let some client ← driver.client? id | return
+          if client.retired then return
+          let .http1 machine := client.protocol | return
+          driver.applyStep id (machine.decideHead requestId (.reject (limitedReply driver.config rejection.reply)))
+          return
+        | .accept limit handler =>
+          bodyLimit := limit
+          if let some handler := handler then
+            if let some client ← driver.client? id then
+              driver.put id { client with dispatch := client.dispatch.insert requestId handler }
+      let some client ← driver.client? id | return
+      if client.retired then return
+      let .http1 machine := client.protocol | return
       let h2c := if driver.config.h2cUpgrade && !driver.transport.secure && !machine.isStopping then
           HTTP2.Upgrade.candidate head framing driver.config.http2.maxRequestBodyBytes
         else none
@@ -594,7 +661,7 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
       if client.retired then return
       let .http1 machine := client.protocol | return
       match decision with
-      | .accept framing => driver.applyStep id (machine.decideHead requestId (.accept framing))
+      | .accept framing => driver.applyStep id (machine.decideHead requestId (.accept framing bodyLimit))
       | .reject reply => driver.applyStep id (machine.decideHead requestId (.reject (limitedReply driver.config reply)))
       | .upgrade reply pipe =>
         driver.cancelRequest id
@@ -606,7 +673,8 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
       driver.cancelRequest id
       let some client ← driver.client? id | return
       if client.retired then return
-      let reply ← try driver.reply id requestId request
+      let handler ← driver.takeDispatch id requestId
+      let reply ← try driver.reply id requestId request handler
         catch _ => pure { response := { status := 500 }, options := { forceClose := true } }
       let some client ← driver.client? id | return
       if client.retired then return
@@ -976,6 +1044,20 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
         | .timeout => .timeout
       driver.abortObservation id streamId.toNat outcome
     | .drainClose => close := true
+    | .headReady streamId head _ =>
+      let .http2 machine := client.protocol | return
+      let verdict ← match driver.config.admission with
+        | some hook => driver.admit id hook (admissionHead2 driver head)
+        | none => pure (.accept none none)
+      let step := match verdict with
+        | .reject rejection => machine.rejectHead streamId rejection.status rejection.headers
+        | .accept limit _ => machine.admitHead streamId limit
+      if let .accept _ (some handler) := verdict then
+        if let some current ← driver.client? id then
+          driver.put id { current with dispatch := current.dispatch.insert streamId.toNat handler }
+      if let some current ← driver.client? id then
+        driver.put id { current with protocol := .http2 step.state, kick := true }
+      actions := step.actions ++ actions
     | .request event =>
       let .http2 machine := client.protocol | return
       if !machine.canRespond event.streamId then continue
@@ -1011,7 +1093,8 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
           driver.put id { client with protocol := .http2 response.state, kick := true }
           actions := response.actions ++ actions
         continue
-      let reply ← try driver.reply id event.streamId.toNat event.request
+      let handler ← driver.takeDispatch id event.streamId.toNat
+      let reply ← try driver.reply id event.streamId.toNat event.request handler
         catch _ => pure { response := { status := 500 } }
       let pushes ← if machine.canPush && !metricTarget driver event.request.target then
         try driver.handlers.onPush event.request catch _ => pure #[]
@@ -1187,7 +1270,11 @@ private def Driver.pump (driver : Driver) (id : Reactor.SocketId) : IO Unit := d
         if requests.contains 1 then
           throw (IO.userError "h2c stream observation collides with an unfinished request")
         requests := requests.insert 1 { request with protocol := .http2 }
-      driver.put id { client with h2cUpgrade := none, requests }
+      -- The head was admitted at the HTTP/1 stage; its handler now serves stream 1.
+      let dispatch := match client.dispatch[requestId]? with
+        | some handler => (client.dispatch.erase requestId).insert 1 handler
+        | none => client.dispatch
+      driver.put id { client with h2cUpgrade := none, requests, dispatch }
       driver.applyH2Step id (machine.upgrade settings h2head head)
   for _ in [:driver.config.workPerClient] do
     let some current ← driver.client? id | return
@@ -1674,6 +1761,8 @@ def serveWorkerFactory (resources : WithWorkerResources) (config : ReactorServer
         path.data.any (fun byte => byte <= 32 || byte >= 127 || byte == 63 || byte == 35) then
       throw (IO.userError "metrics path must be a bounded origin path without query or fragment")
   let workers ← workerCount config.workers config.server.maxClients
+  -- Admission pauses every HTTP/2 stream at its validated head.
+  let config := { config with http2 := { config.http2 with headGate := config.http2.headGate || config.admission.isSome } }
   let observing := config.metricsPath.isSome || config.accessLog.isSome || config.adminPort.isSome
   let config := { config with
     workers

@@ -336,7 +336,10 @@ private def Driver.poll (driver : Driver) : IO (Array HTTP.Transport.Event) := d
         let certificate : Option HTTP1.ClientCertificate := if verified == 1 then
             some { subject, subjectAltNames := sans }
           else none
-        events := events.push (.ready { driver.endpoint id ready with clientCertificate := certificate } protocol)
+        let sni ← FFI.Worker.sni driver.handle session.native
+        let alpn := match protocol with | .http2 => "h2".toUTF8 | _ => "http/1.1".toUTF8
+        let facts := HTTP.Transport.Facts.tls ready sni alpn (← id.peerBytes driver.reactor) certificate
+        events := events.push (.ready { driver.endpoint id ready with clientCertificate := certificate, facts := some facts } protocol)
       | 3 => events := events.push (.written id raw.operation (Errno.decode raw.result).toNat)
       | 4 => events := events.push (.eof id)
       | 6 =>
