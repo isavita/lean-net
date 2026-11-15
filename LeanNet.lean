@@ -18,6 +18,7 @@ import LeanNet.HTTP1.Server
 import LeanNet.HTTP.Transport
 import LeanNet.HTTP.Admission
 import LeanNet.HTTP.ReactorServer
+import LeanNet.Gate
 import LeanNet.HTTP.SecureHeaders
 import LeanNet.HTTP.Admin
 import LeanNet.HTTP.TraceContext
@@ -37,7 +38,6 @@ import LeanNet.WebSocket.Connection
 import LeanNet.WebSocket.Handshake
 import LeanNet.WebSocket.Application
 import LeanNet.WebSocket.Server
-import LeanNet.Proxy.Admission
 import LeanNet.HTTP.Static
 import LeanNet.HTTP.Observability
 

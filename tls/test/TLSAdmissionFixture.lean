@@ -18,5 +18,5 @@ def main (args : List String) : IO UInt32 := do
     return .accept none (some fun _ => pure { response := { status := 200, body := line.toUTF8 } }) }
   let tls : LeanNetTLS.Reactor.Config := { certificateChain := cert, privateKey := key, clientCA }
   LeanNetTLS.ReactorServer.serveFactory (fun _ => pure Handlers.default) tls
-    { admission := some hook, workers := 2 } "127.0.0.1" port.toUInt16
+    { admission := some (Admission.Factory.shared hook), workers := 2 } "127.0.0.1" port.toUInt16
   return 0

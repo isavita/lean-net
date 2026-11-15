@@ -32,4 +32,4 @@ private def handlers : Handlers := {
 def main (args : List String) : IO Unit := do
   let some port := args.head?.bind String.toNat? | throw (IO.userError "expected port")
   let decisions ← IO.mkRef 0
-  ReactorServer.serveWithHandlers handlers { admission := some (hook decisions) } "127.0.0.1" port.toUInt16
+  ReactorServer.serveWithHandlers handlers { admission := some (Admission.Factory.shared (hook decisions)) } "127.0.0.1" port.toUInt16

@@ -55,7 +55,7 @@ structure ReactorServerConfig where
   h2cUpgrade : Bool := true
   /-- Optional head-stage admission (see `LeanNet.HTTP.Admission`). `none`
       keeps the core server's behaviour unchanged. -/
-  admission : Option Admission.Hook := none
+  admission : Option Admission.Factory := none
   /-- Demo WebSocket echo route `/ws`; the exact allowed browser Origin must
       be configured explicitly. Applications can use their own policy. -/
   websocketOrigin : Option ByteArray := none
@@ -142,6 +142,11 @@ private structure RequestObservation where
   remote : ByteArray := ByteArray.empty
   traceId : ByteArray := ByteArray.empty
 
+/-- Admission-selected per-request handling. -/
+private structure Dispatch where
+  handler : Option (Request → IO Reply) := none
+  rewrite : Option (Request → Request) := none
+
 private structure Client where
   socket : Transport.Endpoint
   protocol : Protocol := .detect 0
@@ -179,7 +184,7 @@ private structure Client where
   facts : Option Transport.Facts := none
   /-- Admission-selected request handlers keyed by HTTP/1 request ID or
       HTTP/2 stream ID; consumed when the request is dispatched. -/
-  dispatch : Std.HashMap Nat (Request → IO Reply) := {}
+  dispatch : Std.HashMap Nat Dispatch := {}
 
 private structure WorkerState where
   clients : Std.HashMap Reactor.SocketId Client := {}
@@ -213,6 +218,8 @@ private structure Driver where
   /-- Worker 0 serves process-level control: SIGHUP reload requests. -/
   control : Bool := false
   reloadSeen : IO.Ref UInt64
+  /-- This worker's admission hook, built on its own thread. -/
+  admission : Option Admission.Hook := none
 
 private def Driver.client? (driver : Driver) (id : Reactor.SocketId) : IO (Option Client) := do
   return (← driver.state.get).clients[id]?
@@ -538,14 +545,14 @@ private def Driver.traced (driver : Driver) (id : Reactor.SocketId) (requestId :
   return { request with headers }
 
 private def Driver.takeDispatch (driver : Driver) (id : Reactor.SocketId) (key : Nat) :
-    IO (Option (Request → IO Reply)) := do
+    IO (Option Dispatch) := do
   let some client ← driver.client? id | return none
-  let some handler := client.dispatch[key]? | return none
+  let some entry := client.dispatch[key]? | return none
   driver.put id { client with dispatch := client.dispatch.erase key }
-  return some handler
+  return some entry
 
 private def Driver.reply (driver : Driver) (id : Reactor.SocketId) (requestId : Nat)
-    (request : Request) (dispatch : Option (Request → IO Reply) := none) : IO Reply := do
+    (request : Request) (dispatch : Option Dispatch := none) : IO Reply := do
   if let some probe := healthTarget driver request.target then
     if request.method != "GET" && request.method != "HEAD" then
       return { response := { status := 405, headers := #[{ name := "allow", value := "GET, HEAD".toUTF8 }] } }
@@ -567,7 +574,8 @@ private def Driver.reply (driver : Driver) (id : Reactor.SocketId) (requestId : 
       headers := #[{ name := "Content-Type", value := Observability.metricsContentType }]
       body := snapshot.renderPrometheus ++ (← observer.hub.processMetrics) ++ (← driver.transport.metrics) } }
   let request ← driver.traced id requestId request
-  match dispatch with
+  let request := match dispatch.bind (·.rewrite) with | some rewrite => rewrite request | none => request
+  match dispatch.bind (·.handler) with
   | some handler => handler request
   | none => driver.handlers.onRequest request
 
@@ -624,19 +632,22 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
         driver.closeNow id
         return
       let mut bodyLimit : Option Nat := none
-      if let some hook := driver.config.admission then
+      if let some hook := driver.admission then
         match ← driver.admit id hook (admissionHead1 driver head framing) with
         | .reject rejection =>
           let some client ← driver.client? id | return
           if client.retired then return
+          if rejection.drop then
+            driver.closeNow id
+            return
           let .http1 machine := client.protocol | return
           driver.applyStep id (machine.decideHead requestId (.reject (limitedReply driver.config rejection.reply)))
           return
-        | .accept limit handler =>
+        | .accept limit handler rewrite =>
           bodyLimit := limit
-          if let some handler := handler then
+          if handler.isSome || rewrite.isSome then
             if let some client ← driver.client? id then
-              driver.put id { client with dispatch := client.dispatch.insert requestId handler }
+              driver.put id { client with dispatch := client.dispatch.insert requestId { handler, rewrite } }
       let some client ← driver.client? id | return
       if client.retired then return
       let .http1 machine := client.protocol | return
@@ -1046,15 +1057,18 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
     | .drainClose => close := true
     | .headReady streamId head _ =>
       let .http2 machine := client.protocol | return
-      let verdict ← match driver.config.admission with
+      let verdict ← match driver.admission with
         | some hook => driver.admit id hook (admissionHead2 driver head)
-        | none => pure (.accept none none)
+        | none => pure (.accept none none none)
       let step := match verdict with
-        | .reject rejection => machine.rejectHead streamId rejection.status rejection.headers
-        | .accept limit _ => machine.admitHead streamId limit
-      if let .accept _ (some handler) := verdict then
-        if let some current ← driver.client? id then
-          driver.put id { current with dispatch := current.dispatch.insert streamId.toNat handler }
+        | .reject rejection =>
+          if rejection.drop then machine.rejectHead streamId 421 #[]
+          else machine.rejectHead streamId rejection.status rejection.headers
+        | .accept limit _ _ => machine.admitHead streamId limit
+      if let .accept _ handler rewrite := verdict then
+        if handler.isSome || rewrite.isSome then
+          if let some current ← driver.client? id then
+            driver.put id { current with dispatch := current.dispatch.insert streamId.toNat { handler, rewrite } }
       if let some current ← driver.client? id then
         driver.put id { current with protocol := .http2 step.state, kick := true }
       actions := step.actions ++ actions
@@ -1704,7 +1718,10 @@ private def runWorker (resources : WithWorkerResources) (config : ReactorServerC
         pure (some { hub, lane : WorkerObserver })
     let resetErrno := -(Errno.decode (← FFI.errnoEconnreset))
     let reloadSeen ← IO.mkRef (← Reactor.reloadRequests)
-    let driver : Driver := { reactor, group, config, handlers, transport, clientLimit, state, observer,
+    let admission ← match config.admission with
+      | some factory => some <$> factory workerId
+      | none => pure none
+    let driver : Driver := { admission, reactor, group, config, handlers, transport, clientLimit, state, observer,
                              resetErrno, control := workerId == 0, reloadSeen }
     try
       driver.loop

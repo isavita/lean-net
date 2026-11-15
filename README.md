@@ -23,6 +23,8 @@ The [production controls guide](docs/production-hardening.md) covers metrics,
 access logs, graceful shutdown and opt-in certificate reload. The
 [production checklist status](docs/production-checklist.md) maps every
 production-readiness requirement to its implementation, tests and open gaps.
+The optional [request gate and gateway](docs/gateway.md) adds host and path
+policies, typed rejections and rate limits in front of the core server.
 
 ## Build and test
 

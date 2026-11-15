@@ -57,6 +57,9 @@ structure Rejection where
   status : Nat
   headers : Array HTTP1.Header := #[]
   body : ByteArray := ByteArray.empty
+  /-- Close without any response (HTTP/1) or refuse the stream (HTTP/2),
+      e.g. for unknown hosts probed by scanners. -/
+  drop : Bool := false
   deriving Inhabited
 
 def Rejection.reply (rejection : Rejection) : HTTP1.Reply :=
@@ -66,14 +69,23 @@ def Rejection.reply (rejection : Rejection) : HTTP1.Reply :=
     options := { forceClose := true } }
 
 /-- `dispatch`, when present, replaces `Handlers.onRequest` for this request;
-    it typically closes over the admitted, policy-bound request. -/
+    it typically closes over the admitted, policy-bound request. `rewrite`
+    (e.g. stripping headers) is applied before whichever handler runs. -/
 inductive Verdict where
   | accept (bodyLimit : Option Nat := none) (dispatch : Option (HTTP1.Request → IO HTTP1.Reply) := none)
+      (rewrite : Option (HTTP1.Request → HTTP1.Request) := none)
   | reject (rejection : Rejection)
 
 /-- Runs synchronously on the worker; must not block. Exceptions are treated
     as a 500 rejection by the server. -/
 structure Hook where
   decide : Transport.Facts → Head → IO Verdict
+
+/-- Builds a hook on each worker's own thread (argument: worker index), so
+    per-worker state such as a compiled policy or rate-limit leases is never
+    shared across cores (shared Lean objects use atomic reference counts). -/
+abbrev Factory := Nat → IO Hook
+
+def Factory.shared (hook : Hook) : Factory := fun _ => pure hook
 
 end LeanNet.HTTP.Admission

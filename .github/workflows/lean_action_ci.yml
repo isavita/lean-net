@@ -45,7 +45,7 @@ jobs:
           lake env lean --run test/HTTP2UpgradeTest.lean
           lake env lean --run test/HTTP2HeadGateTest.lean
           lake env lean --run test/WebSocketTest.lean
-          lake env lean --run test/ProxyAdmissionTest.lean
+          lake env lean --run test/GateTest.lean
           lake env lean --run test/StaticSelectionTest.lean
           lake env lean --run test/TraceContextTest.lean
           python3 test/test_echo.py -v
@@ -60,6 +60,8 @@ jobs:
           python3 test/test_resilience.py -v
           lake build lean-net-admission-fixture
           python3 test/test_admission.py -v
+          lake build lean-net-gate-fixture LeanNet.Gate.Literal
+          python3 test/test_gate.py -v
           python3 test/test_admin.py -v
       - name: Short deterministic protocol fuzz and controller invariants
         run: |
