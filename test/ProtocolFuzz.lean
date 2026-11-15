@@ -231,8 +231,9 @@ private def h2Actions (initial : H2Capture) (actions : List HTTP2.Machine.Action
       let output := parts.foldl ByteArray.append capture.output
       check (output.size <= 131072) "HTTP2 output exceeds harness bound"
       capture := { capture with output }
-    | .writeObserved .. | .requestStarted .. | .responseAborted .. =>
-      throw (IO.userError "output tracking unexpectedly enabled in default HTTP2 fixture")
+    | .writeObserved .. | .requestStarted .. | .responseAborted .. |
+      .writeTunnel .. | .tunnelData .. | .tunnelReset .. =>
+      throw (IO.userError "unexpected tracking or tunnel action in default HTTP2 fixture")
     | .writePing .. => throw (IO.userError "keepalive unexpectedly enabled in default HTTP2 fixture")
     | .writeParts _ => throw (IO.userError "HTTP2 file output without a file reply")
     | .drainClose => capture := { capture with closed := capture.closed + 1 }

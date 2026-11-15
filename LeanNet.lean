@@ -31,6 +31,11 @@ import LeanNet.HTTP2.Machine
 import LeanNet.HTTP2.Upgrade
 import LeanNet.HTTP2.Connection
 import LeanNet.HTTP2.Server
+import LeanNet.WebSocket.Frame
+import LeanNet.WebSocket.Connection
+import LeanNet.WebSocket.Handshake
+import LeanNet.WebSocket.Application
+import LeanNet.WebSocket.Server
 import LeanNet.HTTP.Static
 import LeanNet.HTTP.Observability
 

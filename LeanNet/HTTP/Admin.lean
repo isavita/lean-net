@@ -21,6 +21,9 @@ structure Source where
   draining : IO Bool
   /-- Additional Prometheus text from the transport (e.g. TLS counters). -/
   extraMetrics : IO ByteArray := pure ByteArray.empty
+  /-- The complete server supplies cached off-loop process gauges. Standalone
+      admin listeners collect them on their dedicated control thread. -/
+  processMetrics : IO ByteArray := processPrometheus
 
 private def statsJson (source : Source) : IO String := do
   let now ← Reactor.nowMs
@@ -63,7 +66,7 @@ private def route (source : Source) (method target : String) : IO ByteArray := d
     if ← source.draining then return response 503 "Service Unavailable" "text/plain; charset=utf-8" "draining\n".toUTF8 head
     return response 200 "OK" "text/plain; charset=utf-8" "ready\n".toUTF8 head
   | "/metrics" =>
-    let mut body := ← processPrometheus
+    let mut body := ← source.processMetrics
     if let some snapshot ← source.snapshot then body := snapshot.renderPrometheus ++ body
     body := body ++ (← source.extraMetrics)
     return response 200 "OK" (String.fromUTF8! Observability.metricsContentType) body head
@@ -79,11 +82,13 @@ private def findHeadEnd (bytes : ByteArray) : Option Nat := Id.run do
 private partial def serveConnection (source : Source) (connection : Connection) : IO Unit := do
   let deadline := (← Reactor.nowMs) + 1000
   let rec readHead (buffer : ByteArray) : IO (Option ByteArray) := do
-    if let some stop := findHeadEnd buffer then return some (buffer.extract 0 stop)
-    if buffer.size > 8192 then return none
+    if let some stop := findHeadEnd buffer then
+      if stop + 4 > 8192 then return none
+      return some (buffer.extract 0 stop)
+    if buffer.size >= 8192 then return none
     let now ← Reactor.nowMs
     if now >= deadline then return none
-    match ← connection.recv 4096 with
+    match ← connection.recv (min 4096 (8192 - buffer.size)).toUSize with
     | .data bytes => readHead (buffer ++ bytes)
     | .wouldBlock | .interrupted | .wantWrite => IO.sleep 2; readHead buffer
     | .eof => return none
@@ -108,7 +113,8 @@ private partial def serveConnection (source : Source) (connection : Connection) 
 /-- Serve the admin API on `127.0.0.1:port` from the calling (dedicated) thread
     until `stop` becomes true. Never shares worker reactors; connections are
     handled one at a time with strict size and time bounds. -/
-partial def serve (port : UInt16) (source : Source) (stop : IO.Ref Bool) : IO Unit :=
+partial def withServer (port : UInt16) (source : Source) (stop : IO.Ref Bool)
+    (use : IO Unit → IO α) : IO α :=
   withListener "127.0.0.1" port fun listener => withConnectionPool fun pool => do
     listener.setNonblocking
     let rec loop : IO Unit := do
@@ -125,6 +131,11 @@ partial def serve (port : UInt16) (source : Source) (stop : IO.Ref Bool) : IO Un
       | .wouldBlock => IO.sleep 20
       | .retry | .interrupted => IO.sleep 1
       loop
-    loop
+    -- Bind before starting the control task so configuration errors fail the
+    -- complete server startup, while the bracket outlives its awaited task.
+    use loop
+
+def serve (port : UInt16) (source : Source) (stop : IO.Ref Bool) : IO Unit :=
+  withServer port source stop fun run => run
 
 end LeanNet.HTTP.Admin

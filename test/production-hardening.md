@@ -199,7 +199,11 @@ log-writer helper; shared-map RSS is deliberately charged to both processes.
 Child identity/count changes, zombies or census races fail. Every member must
 keep its descriptors/handles flat, so a helper leak cannot hide behind a
 parent descriptor release.
-The actual acceptance host is the declared macOS M2 benchmark box.
+The next production acceptance run should declare its Linux container host,
+CPU quota, memory limit and load-balancer placement in the evidence. Earlier
+macOS M2 measurements are a baseline, not Linux production capacity evidence.
+Size the host for the independent plain and TLS rate floors before launching
+the full-duration run.
 
 A fixed clock guard checks at least once per controller-loop second. UTC versus
 monotonic divergence above two seconds, or an observation gap above five

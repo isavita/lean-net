@@ -41,6 +41,8 @@ structure Hub where
   private workers : Nat
   private alive : IO.Ref Bool
   private access : Option AccessConfig
+  private processCache : IO.Ref ByteArray
+  private samplerFailure : IO.Ref (Option IO.Error)
 structure Lane where
   private mk ::
   private hub : Hub
@@ -90,6 +92,7 @@ def Hub.snapshot (hub : Hub) : IO Snapshot := do
   throw (IO.userError "observability snapshot publication is contended")
 def Hub.check (hub : Hub) : IO Unit := do
   hub.ensureAlive
+  if let some error ← hub.samplerFailure.get then throw error
   for _ in [:3] do
     let raw ← FFI.Observability.check hub.handle
     let code := Errno.decode raw
@@ -100,6 +103,43 @@ def Hub.check (hub : Hub) : IO Unit := do
     zero "access log writer" raw
     return
   throw (IO.userError "access log health check repeatedly interrupted")
+
+/-- Process gauges are published by a dedicated task, never collected on a
+    network worker. Like counter snapshots, these can lag by one second. -/
+def Hub.processMetrics (hub : Hub) : IO ByteArray := do
+  hub.ensureAlive
+  if let some error ← hub.samplerFailure.get then throw error
+  hub.processCache.get
+
+private def Hub.withSampler (hub : Hub) (sample : Option (IO ByteArray))
+    (use : IO α) : IO α := do
+  let some sample := sample | use
+  hub.processCache.set (← sample)
+  let stop ← IO.mkRef false
+  let task ← IO.asTask (do
+    try
+      let mut ticks := 0
+      repeat
+        if ← stop.get then break
+        IO.sleep 100
+        ticks := ticks + 1
+        if ticks >= 10 then
+          if ← stop.get then break
+          hub.processCache.set (← sample)
+          ticks := 0
+    catch error =>
+      hub.samplerFailure.set (some error)
+      throw error) Task.Priority.dedicated
+  let original ← IO.mkRef (none : Option IO.Error)
+  try captureFailure original use
+  finally
+    stop.set true
+    match ← IO.wait task with
+    | .ok _ => pure ()
+    | .error error =>
+      if let some first ← original.get then
+        throw (IO.userError s!"{first}; process metrics sampler: {error}")
+      throw error
 
 private def Hub.close (hub : Hub) : IO Unit := do
   hub.ensureAlive
@@ -138,7 +178,8 @@ private def Hub.close (hub : Hub) : IO Unit := do
 /-- Bracket outside all worker lifetimes. Workers exclusively own their Lane;
     stop/join runs only after every producer has stopped. Metrics-only hubs do
     not spawn a helper or allocate log queues. -/
-def withHub (workers : Nat) (access : Option AccessConfig := none) (use : Hub → IO α) : IO α := do
+def withHub (workers : Nat) (access : Option AccessConfig := none) (use : Hub → IO α)
+    (sampleProcessMetrics : Option (IO ByteArray) := none) : IO α := do
   if workers == 0 || workers > 256 then throw (IO.userError "observability supports between 1 and 256 workers")
   if let some config := access then
     if config.path.toString.isEmpty || config.helperBinary.toString.isEmpty ||
@@ -155,7 +196,8 @@ def withHub (workers : Nat) (access : Option AccessConfig := none) (use : Hub �
     ((access.map (·.maxFileBytes.toUInt64)).getD 0) ((access.map (·.fileCount.toUInt32)).getD 0)
     ((access.map (·.pollIntervalMs.toUInt32)).getD 0))
   if handle == 0 then throw (IO.userError "observability startup returned no hub")
-  let hub : Hub := ⟨handle, workers, ← IO.mkRef true, access⟩
+  let hub : Hub := ⟨handle, workers, ← IO.mkRef true, access,
+    ← IO.mkRef ByteArray.empty, ← IO.mkRef none⟩
   let original ← IO.mkRef (none : Option IO.Error)
   try
     captureFailure original (do
@@ -172,7 +214,7 @@ def withHub (workers : Nat) (access : Option AccessConfig := none) (use : Hub �
         if result == 1 then break
         if result != 0 then throw (IO.userError "access log handshake returned an invalid result")
         IO.sleep 1
-      use hub
+      hub.withSampler sampleProcessMetrics (use hub)
     )
   finally
     try hub.close

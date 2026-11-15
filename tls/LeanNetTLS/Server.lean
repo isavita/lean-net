@@ -29,7 +29,7 @@ def serveWith (router : LeanNet.HTTP1.Router) (certificate privateKey : String)
 def serveWithOptions (certificate privateKey : String)
     (http : LeanNet.HTTP.ReactorServerConfig := {})
     (host : String := "127.0.0.1") (port : UInt16 := 8443) : IO Unit :=
-  ReactorServer.serveFactory (fun _ => pure LeanNet.HTTP2.demoHandlers)
+  ReactorServer.serveFactory (fun _ => pure (LeanNet.HTTP2.demoHandlersWith http.websocketOrigin))
     { certificateChain := certificate, privateKey } http host port
 
 /-- Serve the default route with one HTTP reactor per available core. -/

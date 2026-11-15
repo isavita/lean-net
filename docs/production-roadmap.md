@@ -47,8 +47,9 @@ crashes on descriptor exhaustion, SIGTERM terminating without a drain,
 SIGHUP killing the process, unrestricted TLS 1.2 cipher suites and
 undifferentiated HTTP/1 error statuses. It added mTLS, OCSP stapling, h2c
 Upgrade, health and admin endpoints, secure default headers, W3C tracing,
-structured log fields and CPU pinning. RFC 8441 extended CONNECT, TLS 1.3
-0-RTT and the actual 24-hour soak remain open.
+structured log fields and CPU pinning. RFC 8441 extended CONNECT and bounded
+WebSocket framing have been implemented and are awaiting cross-platform CI.
+TLS 1.3 0-RTT and the actual 24-hour soak remain open.
 
 ## Current phase status
 

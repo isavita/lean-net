@@ -74,6 +74,12 @@ class WindowsNative(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("tests passed", result.stdout)
 
+    def test_accept_exhaustion_wait_deadline_and_recovery(self):
+        result = subprocess.run([str(self.binary), "--accept-backoff"], capture_output=True,
+                                text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("tests passed", result.stdout)
+
     def test_file_regions_fifo_residency_and_lifetime(self):
         result = subprocess.run([str(self.binary), "--files"], capture_output=True,
                                 text=True, timeout=90)

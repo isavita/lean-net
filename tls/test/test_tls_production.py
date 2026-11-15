@@ -104,6 +104,38 @@ class TLSProduction(unittest.TestCase):
         cls.client_chain.write_bytes(cls.client_cert.read_bytes() + (root / "intermediate.pem").read_bytes())
         cls.client_ca = root / "clients-ca.pem"
         cls.client_ca.write_bytes(cls.certs.ca.read_bytes() + (root / "intermediate.pem").read_bytes())
+        # These CA-signed identities exercise separator preservation and both
+        # former fixed-buffer truncation boundaries through the public server.
+        cls.identity_cases = {}
+        for serial, label, subject, sans in (
+            (78, "comma", "/O=lean-net/CN=comma-client",
+             ["URI:spiffe://lean-net.test/al,ice", "URI:spiffe://lean-net.test/admin"]),
+            (79, "large-san", "/O=lean-net/CN=large-san-client",
+             ["URI:spiffe://lean-net.test/" + "x" * 1010,
+              "URI:spiffe://lean-net.test/last"]),
+            (80, "long-subject", "/CN=long-subject/OU=last-marker" +
+             "".join(f"/OU=division-{i:02d}-" + "z" * 20 for i in range(20)),
+             ["URI:spiffe://lean-net.test/long-subject"]),
+            (81, "over-limit", "/CN=over-limit-client",
+             [f"URI:spiffe://lean-net.test/{i:03d}/" + "x" * 240 for i in range(256)]),
+        ):
+            key, cert = root / f"{label}.key", root / f"{label}.pem"
+            csr, ext = root / f"{label}.csr", root / f"{label}.ext"
+            ext.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n"
+                           "extendedKeyUsage=clientAuth\nsubjectAltName=@names\n[names]\n" +
+                           "".join(f"URI.{i}={name.removeprefix('URI:')}\n"
+                                   for i, name in enumerate(sans, 1)))
+            openssl("req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
+                    "-nodes", "-keyout", key, "-out", csr, "-subj", subject)
+            openssl("x509", "-req", "-in", csr, "-CA", root / "intermediate.pem",
+                    "-CAkey", root / "intermediate.key", "-set_serial", str(serial),
+                    "-sha256", "-out", cert, "-days", "30", "-extfile", ext)
+            chain = root / f"{label}.chain.pem"
+            chain.write_bytes(cert.read_bytes() + (root / "intermediate.pem").read_bytes())
+            if label == "over-limit":
+                cls.over_limit_identity = (key, chain)
+            else:
+                cls.identity_cases[label] = (key, chain, cert, sans)
         # Foreign client certificate (self-signed, unrelated CA).
         cls.foreign_key, cls.foreign_cert = root / "foreign.key", root / "foreign.pem"
         openssl("req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
@@ -158,6 +190,38 @@ class TLSProduction(unittest.TestCase):
                     raise ssl.SSLError("rejected")
         self.assertIsNone(server.process.poll())
 
+    def test_verified_identity_is_complete_and_separate(self):
+        server = self.start("--client-ca", self.client_ca, "--require-client-cert")
+        for label, (key, chain, cert, sans) in self.identity_cases.items():
+            with self.subTest(label=label):
+                status, _, body = self.get(server, self.client(certificate=chain, key=key),
+                                           b"/client-certificate")
+                self.assertEqual(status, 200)
+                subject = openssl("x509", "-in", cert, "-noout", "-subject",
+                                  "-nameopt", "RFC2253").stdout.decode().strip().removeprefix("subject=")
+                self.assertIn(b"subject=" + subject.encode() + b"\n", body)
+                actual_sans = [line.removeprefix(b"san=") for line in body.splitlines()
+                               if line.startswith(b"san=")]
+                self.assertEqual(actual_sans, [name.encode() for name in sans])
+                if label == "long-subject":
+                    self.assertGreater(len(subject), 511)
+
+    def test_oversized_verified_identity_fails_closed(self):
+        server = self.start("--client-ca", self.client_ca, "--require-client-cert")
+        key, chain = self.over_limit_identity
+        try:
+            status, _, _ = self.get(server, self.client(certificate=chain, key=key),
+                                    b"/client-certificate")
+            self.assertIsNone(status)
+        except (ssl.SSLError, ConnectionError, OSError):
+            pass
+        time.sleep(0.5)
+        try:
+            self.assertEqual(self.get(server, self.client(certificate=self.client_chain,
+                                                          key=self.client_key))[0], 200)
+        except OSError:
+            self.fail(f"server stopped after oversized identity ({server.process.poll()}): " + server.output())
+
     def test_optional_client_certificate(self):
         server = self.start("--client-ca", self.client_ca)
         status, _, _ = self.get(server, self.client(), b"/client-certificate")
@@ -185,7 +249,7 @@ class TLSProduction(unittest.TestCase):
         self.assertIn("OCSP Response Status: successful", text)
         self.assertIn("Cert Status: good", text)
         plain = self.s_client(self.start(), "-status").stdout.decode(errors="replace")
-        self.assertIn("OCSP response: no response sent", plain)
+        self.assertRegex(plain, r"OCSP responses?: no responses? sent")
 
     def test_invalid_ocsp_response_fails_startup(self):
         bogus = Path(self.directory.name) / "bogus.der"

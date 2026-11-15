@@ -14,6 +14,13 @@ structure RequestEvent where
   streamId : UInt32
   request : HTTP1.Request
   startedAt : Nat := 0
+  /-- Present only for an accepted extended CONNECT header block. -/
+  tunnelHead : Option RequestHead := none
+
+structure TunnelDataEvent where
+  streamId : UInt32
+  data : ByteArray
+  endStream : Bool := false
 
 /-- Opt-in metadata at validated header completion, before an upload body. -/
 structure RequestStarted where
@@ -58,6 +65,9 @@ private structure Exchange where
   startedAt : Nat := 0
   priority : Priority := {}
   receiveCredit : Nat := 0
+  tunnel : Bool := false
+  tunnelAccepted : Bool := false
+  tunnelDebt : Nat := 0
 
 private structure HeaderAssembly where
   streamId : UInt32
@@ -92,6 +102,7 @@ structure Config where
   maxResetHistory : Nat := 256
   maxPushes : Nat := 128
   enablePush : Bool := false
+  enableConnectProtocol : Bool := false
   /-- Zero disables active server PINGs. Periodic scheduling belongs to Machine. -/
   pingIntervalMs : Nat := 0
   pingTimeoutMs : Nat := 10000
@@ -133,6 +144,7 @@ structure Connection where
   private peerMaxConcurrentStreams : Nat := 4294967295
   private peerEnablePush : Bool := true
   private peerNoPriorities : Bool := false
+  private peerEnableConnectProtocol : Bool := false
   private pendingPriorities : Array (UInt32 × Priority) := #[]
   private nextPushStream : Nat := 2
   private pushes : Nat := 0
@@ -173,6 +185,8 @@ structure Step where
   started : Array RequestStarted := #[]
   /-- Successfully validated ACK payloads; collected only when PING is enabled. -/
   pingAcks : Array UInt64 := #[]
+  tunnelData : Array TunnelDataEvent := #[]
+  tunnelResets : Array UInt32 := #[]
 
 end Connection
 
@@ -198,7 +212,9 @@ private def windowUpdate (id : UInt32) (size : Nat) : Except ProtocolError ByteA
 /-- Advertise the configured receive limits and RFC 9218 priority support. -/
 def Connection.settingsFrame (connection : Connection) : ByteArray := Id.run do
   let mut payload := ByteArray.empty
-  for (id, value) in (#[(3, connection.config.maxConcurrentStreams), (4, connection.config.initialWindowSize), (5, connection.config.maxFrameSize), (6, connection.config.maxHeaderListBytes), (9, 1)] : Array (Nat × Nat)) do
+  let mut settings : Array (Nat × Nat) := #[(3, connection.config.maxConcurrentStreams), (4, connection.config.initialWindowSize), (5, connection.config.maxFrameSize), (6, connection.config.maxHeaderListBytes), (9, 1)]
+  if connection.config.enableConnectProtocol then settings := settings.push (8, 1)
+  for (id, value) in settings do
     payload := payload.append (ByteArray.mk #[UInt8.ofNat (id / 256), UInt8.ofNat id])
     payload := payload.append (u32 (UInt32.ofNat value))
   return match wire ⟨4, 0, 0, payload⟩ with | .ok bytes => bytes | .error _ => ByteArray.empty
@@ -287,7 +303,8 @@ private def finishRequest (connection : Connection) (entry : Exchange) : Except 
   | .error message => throw (streamError entry.stream.id .protocolError message)
   | .ok request =>
     let connection := putStream connection { entry with delivered := true, bodyBlocks := [], body := ByteArray.empty, bodySize := 0 }
-    return ({ connection with processedStream := max connection.processedStream entry.stream.id }, #[⟨entry.stream.id, request, entry.startedAt⟩])
+    return ({ connection with processedStream := max connection.processedStream entry.stream.id },
+      #[{ streamId := entry.stream.id, request, startedAt := entry.startedAt }])
 
 private def headerFragment (frame : Frame) : ByteArray := Id.run do
   let mut offset := 0
@@ -379,13 +396,19 @@ private def finishHeaders (connection : Connection) (assembly : HeaderAssembly) 
   let some entry := findStream connection assembly.streamId |
     throw (connError .protocolError "missing stream for header block")
   if entry.head.isNone then
-    match validateRequestHead headers connection.config.maxRequestBodyBytes with
+    match validateRequestHead headers connection.config.maxRequestBodyBytes connection.config.enableConnectProtocol with
     | .error _ => return ← resetStream connection assembly.streamId .protocolError
     | .ok head =>
       let priority := (connection.pendingPriorities.find? (fun p => p.1 == assembly.streamId)).map (·.2)
       let entry := { entry with head := some head, priority := priority.getD (requestPriority head.headers) }
       let connection := { connection with pendingPriorities := connection.pendingPriorities.filter (fun p => p.1 != assembly.streamId) }
       let connection := putStream connection entry
+      if head.protocol.isSome then
+        if assembly.endStream then return ← resetStream connection assembly.streamId .protocolError
+        let request : HTTP1.Request := { method := head.method, version := "HTTP/2", target := head.target, headers := head.headers, body := ByteArray.empty }
+        let connection := putStream connection { entry with delivered := true, tunnel := true }
+        return ({ connection with processedStream := max connection.processedStream assembly.streamId },
+          ByteArray.empty, #[{ streamId := assembly.streamId, request, startedAt := entry.startedAt, tunnelHead := some head }])
       match expectation head.headers with
       | .unsupported => return ← expectationResponse connection entry 417 true assembly.endStream
       | .continue =>
@@ -446,6 +469,10 @@ private def settings (connection : Connection) (frame : Frame) : Except Protocol
       connection := { connection with streams, peerInitialWindow := value }
     else if id == 5 then connection := { connection with peerFrameSize := value }
     else if id == 6 then connection := { connection with peerHeaderListBytes := value }
+    else if id == 8 then
+      if connection.peerEnableConnectProtocol && value == 0 then
+        throw (connError .protocolError "SETTINGS_ENABLE_CONNECT_PROTOCOL disabled after enable")
+      connection := { connection with peerEnableConnectProtocol := value == 1 }
     else if id == 9 then
       if connection.peerSettings && (value == 1) != connection.peerNoPriorities then
         throw (connError .protocolError "SETTINGS_NO_RFC7540_PRIORITIES changed")
@@ -461,7 +488,12 @@ def Connection.upgrade (connection : Connection) (settingsPayload : ByteArray) (
   if connection.prefaceRead != 0 || connection.highestStream != 0 || connection.peerSettings then
     throw (connError .internalError "upgrade requires a fresh connection")
   if settingsPayload.size % 6 != 0 then throw (connError .protocolError "invalid HTTP2-Settings")
-  let (connection, _) ← settings connection ⟨4, 0, 0, settingsPayload⟩
+  let frame : Frame := ⟨4, 0, 0, settingsPayload⟩
+  -- This public pure entry point can also be called without Upgrade.candidate.
+  -- Validate the synthetic frame before applying settings, just as feedSlice
+  -- validates SETTINGS received on the wire.
+  frame.validate 16777215
+  let (connection, _) ← settings connection frame
   let connection := { connection with peerSettings := false }
   let stream ← Stream.new 1 connection.peerInitialWindow defaultWindow
   let (stream, _) ← stream.apply .server (.headers .inbound true)
@@ -574,6 +606,14 @@ private def receiveData (connection : Connection) (frame : Frame) :
   let padding := if flag frame.flags 8 then (frame.payload[0]!).toNat else 0
   let start := if flag frame.flags 8 then 1 else 0
   let data := frame.payload.extract start (frame.payload.size - padding)
+  if entry.tunnel then
+    if !entry.tunnelAccepted then return ← discardData connection id .protocolError frame.payload.size
+    let (connection, connectionOutput) ← consumeConnection connection frame.payload.size
+    let (entry, paddingOutput) ← consumeStream connection { entry with stream } (frame.payload.size - data.size) ended
+    let entry := { entry with tunnelDebt := entry.tunnelDebt + data.size }
+    let connection := putStream connection entry
+    return (if stream.state == .closed && entry.tunnelDebt == 0 then removeStream connection id else connection,
+      connectionOutput.append paddingOutput, #[])
   let buffered := connection.streams.foldl (fun n e => n + e.bodySize) 0
   if entry.bodySize + data.size > connection.config.maxRequestBodyBytes || buffered + data.size > connection.config.maxBufferedRequestBytes then
     return ← discardData connection id .enhanceYourCalm frame.payload.size
@@ -879,6 +919,83 @@ def Connection.queueFileResponse (connection : Connection) (id : UInt32) (respon
     (region : FileRegion) (trailers : Array HTTP1.Header := #[]) : Except ProtocolError (Connection × ByteArray) :=
   queueResponseBody connection id response (.file region) trailers
 
+/-- Commit an RFC8441 extended CONNECT response without END_STREAM. -/
+def Connection.acceptTunnel (connection : Connection) (id : UInt32)
+    (response : HTTP1.Response) : Except ProtocolError (Connection × ByteArray) := do
+  let some entry := findStream connection id | throw (streamError id .streamClosed "tunnel stream is closed")
+  if !entry.tunnel || entry.tunnelAccepted || response.status != 200 || !response.body.isEmpty then
+    throw (streamError id .protocolError "invalid tunnel acceptance")
+  let fields ← responseFields connection id response
+  checkPeerHeaders connection id fields
+  let (encoder, bytes) ← encodedHeaders connection.encoder fields id false connection.peerFrameSize
+  if bytes.size > connection.config.maxOutputBatchBytes then throw (streamError id .internalError "tunnel headers exceed output batch")
+  let (stream, _) ← entry.stream.apply .server (.headers .outbound false)
+  return (putStream { connection with encoder } { entry with stream, tunnelAccepted := true }, bytes)
+
+/-- Refuse an extended CONNECT without interpreting later DATA as HTTP body. -/
+def Connection.rejectTunnel (connection : Connection) (id : UInt32) (response : HTTP1.Response) :
+    Except ProtocolError (Connection × ByteArray) := do
+  let some entry := findStream connection id | throw (streamError id .streamClosed "tunnel stream is closed")
+  if !entry.tunnel || entry.tunnelAccepted || response.status < 400 || response.status > 599 || !response.body.isEmpty then
+    throw (streamError id .protocolError "invalid tunnel rejection")
+  let fields ← responseFields connection id response
+  checkPeerHeaders connection id fields
+  let (encoder, bytes) ← encodedHeaders connection.encoder fields id true connection.peerFrameSize
+  let (stream, _) ← entry.stream.apply .server (.headers .outbound true)
+  return (putStream { connection with encoder } { entry with stream }, bytes)
+
+/-- Return only tunnel stream credit for bytes the application actually
+    consumed. Connection credit is returned when the bounded DATA frame lands. -/
+def Connection.consumeTunnel (connection : Connection) (id : UInt32) (count : Nat) :
+    Except ProtocolError (Connection × ByteArray) := do
+  let some entry := findStream connection id | throw (streamError id .streamClosed "tunnel stream is closed")
+  if !entry.tunnelAccepted || count > entry.tunnelDebt then
+    throw (streamError id .internalError "invalid tunnel consume credit")
+  let entry := { entry with tunnelDebt := entry.tunnelDebt - count }
+  if entry.stream.state == .halfClosedRemote || entry.stream.state == .closed then
+    return (if entry.stream.state == .closed && entry.tunnelDebt == 0 then
+      removeStream connection id else putStream connection entry, ByteArray.empty)
+  let (entry, wire) ← consumeStream connection entry count false
+  return (putStream connection entry, wire)
+
+/-- One bounded WebSocket wire frame is emitted atomically when H2 flow
+    credit permits. `none` is backpressure and leaves the connection unchanged. -/
+def Connection.trySendTunnel (connection : Connection) (id : UInt32) (bytes : ByteArray) :
+    Except ProtocolError (Option (Connection × ByteArray)) := do
+  let some entry := findStream connection id | throw (streamError id .streamClosed "tunnel stream is closed")
+  if !entry.tunnelAccepted || bytes.isEmpty || bytes.size > 65536 || entry.pending.isSome ||
+      connection.failure.isSome || entry.stream.state == .halfClosedLocal || entry.stream.state == .closed then
+    throw (streamError id .protocolError "invalid tunnel DATA send")
+  if connection.flow.sendWindow < Int.ofNat bytes.size || entry.stream.sendWindow < Int.ofNat bytes.size then
+    return none
+  let mut flow := connection.flow
+  let mut stream := entry.stream
+  let mut output := ByteArray.empty
+  let mut offset := 0
+  for _ in [:bytes.size / 16384 + 2] do
+    if offset == bytes.size then break
+    let size := min 16384 (min connection.peerFrameSize (bytes.size - offset))
+    let some (nextFlow, nextStream) := flow.sendData stream size false |
+      throw (streamError id .internalError "reserved tunnel flow credit disappeared")
+    let (nextStream, _) ← nextStream.apply .server (.data .outbound false)
+    flow := nextFlow; stream := nextStream
+    output := output.append (← wire ⟨0, 0, id, bytes.extract offset (offset + size)⟩)
+    offset := offset + size
+  if offset != bytes.size || output.size > connection.config.maxOutputBatchBytes then
+    throw (streamError id .internalError "tunnel output batch exceeded")
+  return some (putStream { connection with flow } { entry with stream }, output)
+
+/-- Close only the local direction of a tunnel after its final WebSocket
+    frame physically completes. The peer may still send its own END_STREAM. -/
+def Connection.endTunnel (connection : Connection) (id : UInt32) :
+    Except ProtocolError (Connection × ByteArray) := do
+  let some entry := findStream connection id | throw (streamError id .streamClosed "tunnel stream is closed")
+  if !entry.tunnelAccepted then throw (streamError id .protocolError "tunnel was not accepted")
+  let (stream, _) ← entry.stream.apply .server (.data .outbound true)
+  let connection := putStream connection { entry with stream }
+  return (if stream.state == .closed then removeStream connection id else connection,
+    ← wire ⟨0, 1, id, ByteArray.empty⟩)
+
 /-- Compatibility helper: queue HEADERS, then schedule a bounded body batch. -/
 def Connection.respond (connection : Connection) (id : UInt32) (response : HTTP1.Response) :
     Except ProtocolError (Connection × ByteArray) := do
@@ -991,6 +1108,8 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
   let mut peerResets := #[]
   let mut started := #[]
   let mut pingAcks := #[]
+  let mut tunnelData := #[]
+  let mut tunnelResets := #[]
   for _ in [:min length 24] do
     if connection.prefaceRead == 24 then break
     if input[offset + consumed]! != preface[connection.prefaceRead]! then
@@ -1013,12 +1132,17 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
       match error.scope with
       | .connection => return failedStep connection error consumed output requests peerResets started pingAcks
       | .stream id =>
+        let priorTunnel := (findStream connection id).any (·.tunnel)
         match resetStream connection id error.code with
         | .error fatal => return failedStep connection fatal consumed output requests peerResets started pingAcks
-        | .ok (next, bytes, _) => connection := next; output := output.push bytes; outputSize := outputSize + bytes.size
+        | .ok (next, bytes, _) =>
+          connection := next; output := output.push bytes; outputSize := outputSize + bytes.size
+          if priorTunnel then tunnelResets := tunnelResets.push id
     | .complete frame used =>
       consumed := consumed + used
       connection := { connection with parser := FrameParser.new connection.config.maxFrameSize }
+      let priorTunnel := (findStream connection frame.streamId).any (·.tunnel)
+      let priorAccepted := (findStream connection frame.streamId).any (·.tunnelAccepted)
       let previousMetadata := if connection.config.trackOutput && (frame.kind == 1 || frame.kind == 9) then
         connection.outputMetadata frame.streamId else none
       match handleFrame connection frame with
@@ -1028,9 +1152,16 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
         | .stream id =>
           match resetStream connection id error.code with
           | .error fatal => return failedStep connection fatal consumed output requests peerResets started pingAcks
-          | .ok (next, bytes, _) => connection := next; output := output.push bytes; outputSize := outputSize + bytes.size
+          | .ok (next, bytes, _) =>
+            connection := next; output := output.push bytes; outputSize := outputSize + bytes.size
+            if priorTunnel then tunnelResets := tunnelResets.push id
       | .ok (next, bytes, events) =>
         connection := next
+        if frame.kind == 0 && priorAccepted then
+          let padding := if flag frame.flags 8 then (frame.payload[0]!).toNat else 0
+          let start := if flag frame.flags 8 then 1 else 0
+          tunnelData := tunnelData.push { streamId := frame.streamId, data := frame.payload.extract start (frame.payload.size - padding), endStream := flag frame.flags 1 }
+        if frame.kind == 3 && priorTunnel then tunnelResets := tunnelResets.push frame.streamId
         if connection.config.pingIntervalMs != 0 && frame.kind == 6 && flag frame.flags 1 then
           pingAcks := pingAcks.push (readPingNonce frame.payload)
         if connection.config.trackOutput then
@@ -1041,9 +1172,10 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
         if !bytes.isEmpty then output := output.push bytes
         outputSize := outputSize + bytes.size
         requests := requests ++ events
+        if !tunnelData.isEmpty || events.any (·.tunnelHead.isSome) then break
     if outputSize > connection.config.maxOutputBatchBytes then
       return failedStep connection (connError .enhanceYourCalm "connection output batch exceeded") consumed output requests peerResets started pingAcks
-  return { connection, consumed, output, requests := requests.filter (fun event => connection.canRespond event.streamId), peerResets, started, pingAcks }
+  return { connection, consumed, output, requests := requests.filter (fun event => connection.canRespond event.streamId), peerResets, started, pingAcks, tunnelData, tunnelResets }
 
 /-- Mark peer EOF. Partial framing is fatal; incomplete requests are canceled, while accepted requests and queued responses can finish draining. -/
 def Connection.finish (connection : Connection) : Connection.Step := Id.run do

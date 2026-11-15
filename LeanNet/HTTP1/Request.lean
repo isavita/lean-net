@@ -15,8 +15,10 @@ structure RequestHead where
   headers : Array Header
 
 /-- A client certificate that the TLS layer verified against the configured
-    client CA (mTLS). Subject is an RFC 2253 DN; SANs are typed entries such as
-    `DNS:example.com`, `URI:spiffe://...`, `email:a@b` or `IP:10.0.0.1`. -/
+    client CA (mTLS). Subject is a complete RFC 2253 DN; SANs are separate,
+    exact typed entries such as `DNS:example.com`, `URI:spiffe://...`,
+    `email:a@b` or `IP:10.0.0.1`. Malformed or oversized identity metadata
+    fails the connection before reaching a handler. -/
 structure ClientCertificate where
   subject : String
   subjectAltNames : Array String := #[]

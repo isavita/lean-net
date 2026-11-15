@@ -162,7 +162,8 @@ Date header. The default router serves `/`.
 HTTP/2 supports request multiplexing, HPACK with static and dynamic tables
 and Huffman coding, stream and connection flow control, RFC 9218 priorities,
 and optional push. Cleartext HTTP/2 works with prior knowledge or with
-an HTTP/1.1 `Upgrade: h2c` (bodyless requests). RFC 8441 extended CONNECT
-is not implemented yet. For
+an HTTP/1.1 `Upgrade: h2c` (bodyless requests). WebSocket applications can use
+HTTP/1.1 Upgrade or RFC 8441 extended CONNECT on HTTP/2; both are disabled in
+the demo unless `--websocket-origin` names one exact allowed Origin. For
 TLS setup, certificate requirements, and verified-client tests, see
 [tls/README.md](tls/README.md).

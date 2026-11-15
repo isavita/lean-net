@@ -28,10 +28,10 @@ class ReactorGroupNative(unittest.TestCase):
         if os.environ.get("RN_GROUP_SANITIZERS", "1") != "0":
             cls.flags += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
 
-    def compile_and_run(self, name, sources):
+    def compile_and_run(self, name, sources, arguments=()):
         binary = Path(self.temporary.name) / name
         subprocess.run(self.compiler + self.flags + [str(ROOT / path) for path in sources] + ["-o", str(binary)], check=True, capture_output=True, text=True)
-        result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
+        result = subprocess.run([str(binary), *arguments], capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("passed", result.stdout)
 
@@ -40,6 +40,19 @@ class ReactorGroupNative(unittest.TestCase):
 
     def test_failed_restoration_never_retains_reactors(self):
         self.compile_and_run("group-restore-failure", ["test/reactor_group_restore_test.c"])
+
+    def test_failed_install_rollback_poisoning(self):
+        self.compile_and_run("group-install-rollback", ["test/reactor_group_restore_test.c"], ("partial-install",))
+
+    def test_interrupted_install_restores_all_prior_handlers(self):
+        self.compile_and_run("group-install-interrupted", ["test/reactor_group_restore_test.c"], ("partial-restored",))
+
+    def test_process_gauges_track_owned_descriptors(self):
+        self.compile_and_run("group-process-metrics", ["c/reactor_group.c", "test/reactor_group_metrics_test.c"])
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS libproc failure contract")
+    def test_descriptor_scan_surfaces_errors_without_retry(self):
+        self.compile_and_run("group-process-metrics-faults", ["test/reactor_group_metrics_fault_test.c"])
 
 
 if __name__ == "__main__":

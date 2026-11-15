@@ -4,7 +4,9 @@
 #define _GNU_SOURCE 1
 #endif
 #ifndef _WIN32
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
 #ifdef __APPLE__
 #ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
@@ -38,6 +40,8 @@
 #endif
 #if defined(__linux__)
 #include <dirent.h>
+#include "reactor_cpu.h"
+#include "reactor_affinity.h"
 #endif
 #ifdef _WIN32
 #ifndef PSAPI_VERSION
@@ -198,12 +202,19 @@ int rn_group_install(rn_group *group) {
         }
     }
     if (error) {
-        /* Restore every disposition installed before the failure. */
-        while (installed-- > 0) (void)sigaction(group_signals[installed], &group->previous[installed], NULL);
+        /* Restore every disposition installed before the failure. A failed
+         * rollback has the same poisoned-disposition policy as uninstall. */
+        int rollback_error = 0;
+        while (installed-- > 0) {
+            if (sigaction(group_signals[installed], &group->previous[installed], NULL) < 0 && rollback_error == 0)
+                rollback_error = -errno;
+        }
+        group->restore_error = rollback_error;
+        if (rollback_error < 0) error = rollback_error;
 #endif
         atomic_store_explicit(&active_group, NULL, memory_order_seq_cst);
         wait_for_handlers();
-        atomic_store_explicit(&registration, 0, memory_order_seq_cst);
+        atomic_store_explicit(&registration, group->restore_error < 0 ? 2 : 0, memory_order_seq_cst);
         return error;
     }
     group->installed = 1;
@@ -273,19 +284,25 @@ int rn_group_cpu_count(uint32_t *out) {
     if (count == 0) return win_error();
     *out = (uint32_t)count;
 #else
-#if defined(__linux__) && defined(CPU_SETSIZE)
-    /* Respect cpusets (containers, taskset): count CPUs this process may use. */
-    cpu_set_t allowed;
-    if (sched_getaffinity(0, sizeof(allowed), &allowed) == 0) {
-        int usable = CPU_COUNT(&allowed);
-        if (usable > 0) { *out = (uint32_t)usable; return 0; }
-    }
+#if defined(__linux__)
+    /* Affinity supplies CPU identities; visible cgroup quotas supply a shared
+     * CPU-time ceiling. Neither grants exclusive cores. Startup only. */
+    rn_affinity allowed = {0};
+    int affinity_error = rn_affinity_load(rn_affinity_get_linux, NULL, &allowed);
+    if (affinity_error) return affinity_error;
+    uint32_t usable = allowed.count;
+    rn_affinity_release(&allowed);
+    return rn_cpu_quota_hint(usable, out);
 #endif
     errno = 0;
     long count = sysconf(_SC_NPROCESSORS_ONLN);
     if (count <= 0) return errno != 0 ? -errno : -ENOSYS;
     if ((unsigned long)count > UINT32_MAX) return -EOVERFLOW;
+#if defined(__linux__)
+    return rn_cpu_quota_hint((uint32_t)count, out);
+#else
     *out = (uint32_t)count;
+#endif
 #endif
     return 0;
 }
@@ -366,23 +383,8 @@ int rn_endpoint_release(rn_endpoint_claim *claim) {
  * set. Returns the selected CPU number, or negative errno. macOS exposes only
  * affinity tags (a scheduling hint; unsupported on Apple silicon). */
 int rn_pin_current_thread(uint32_t index) {
-#if defined(__linux__) && defined(CPU_SETSIZE)
-    cpu_set_t allowed;
-    if (sched_getaffinity(0, sizeof(allowed), &allowed) < 0) return -errno;
-    int count = CPU_COUNT(&allowed);
-    if (count <= 0) return -EINVAL;
-    int wanted = (int)(index % (uint32_t)count), seen = 0;
-    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
-        if (!CPU_ISSET(cpu, &allowed)) continue;
-        if (seen++ != wanted) continue;
-        cpu_set_t one;
-        CPU_ZERO(&one);
-        CPU_SET(cpu, &one);
-        /* pid 0 selects the calling thread on Linux. */
-        if (sched_setaffinity(0, sizeof(one), &one) < 0) return -errno;
-        return cpu;
-    }
-    return -EINVAL;
+#if defined(__linux__)
+    return rn_affinity_pin(rn_affinity_get_linux, rn_affinity_set_linux, NULL, index);
 #elif defined(__APPLE__)
     thread_affinity_policy_data_t policy = { (integer_t)index + 1 };
     mach_port_t thread = mach_thread_self();
@@ -458,9 +460,26 @@ int64_t rn_process_open_fds(void) {
     if (closedir(directory) != 0) return -errno;
     return count > 0 ? count - 1 : 0; /* exclude the directory stream itself */
 #elif defined(__APPLE__)
+    /* A NULL-buffer query reports descriptor-table capacity, including spare
+     * slots. Count the records actually copied instead. This bounded scan is
+     * diagnostic work; callers keep it off protocol/reactor threads. */
+    errno = 0;
     int bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, NULL, 0);
-    if (bytes < 0) return -errno;
-    return (int64_t)bytes / (int64_t)PROC_PIDLISTFD_SIZE;
+    if (bytes <= 0) return errno != 0 ? -errno : -EIO;
+    if (bytes % PROC_PIDLISTFD_SIZE != 0) return -EIO;
+    if (bytes > 16 * 1024 * 1024) return -EOVERFLOW;
+    void *records = malloc((size_t)bytes);
+    if (records == NULL) return -ENOMEM;
+    errno = 0;
+    int used = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, records, bytes);
+    int error = errno;
+    free(records);
+    if (used <= 0 && error != 0) return -error;
+    if (used < 0 || used > bytes || used % PROC_PIDLISTFD_SIZE != 0) return -EIO;
+    /* A concurrent descriptor-table expansion may fill/truncate this scan.
+     * Surface it once; a later diagnostic snapshot owns any retry decision. */
+    if (used == bytes) return -ENOBUFS;
+    return (int64_t)used / (int64_t)PROC_PIDLISTFD_SIZE;
 #elif defined(_WIN32)
     DWORD handles = 0;
     if (!GetProcessHandleCount(GetCurrentProcess(), &handles)) return win_error();

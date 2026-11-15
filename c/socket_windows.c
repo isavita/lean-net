@@ -310,6 +310,10 @@ LN_ERRNO(eagain, EAGAIN) LN_ERRNO(ewouldblock, EWOULDBLOCK)
                                     LN_ERRNO(enoprotoopt, ENOPROTOOPT)
                                         LN_ERRNO(ehostdown, 0)
                                             LN_ERRNO(eopnotsupp, EOPNOTSUPP)
+LN_ERRNO(emfile, EMFILE)
+LN_ERRNO(enfile, ENFILE)
+LN_ERRNO(enobufs, ENOBUFS)
+LN_ERRNO(enomem, ENOMEM)
 #undef LN_ERRNO
 
     /* Console handlers run on another Windows thread. Reader barriers ensure a

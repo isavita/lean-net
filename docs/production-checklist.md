@@ -32,7 +32,7 @@ coverage comes from the CI matrices.
 | Pipelining with ordered responses | Done | `test_valid_pipeline_keeps_order` and the reactor suites. |
 | `Expect: 100-continue`, 417 on oversized payload | Done (fixed) | An oversized Content-Length with `Expect: 100-continue` now gets **417** before the body is sent; without the expectation it gets **413**. All parser errors used to return 400. Requests now also get 414, 431, 501 and 505 where these apply. |
 | Host enforcement and virtual hosting | Done | Exactly one valid Host is required in HTTP/1.1. Routing by Host/SNI is left to the application and the TLS SNI table. |
-| Upgrade hand-off (`websocket`, `h2c`) | Done (h2c added) | Raw-socket `RawPipe` hand-off for application protocols. HTTP/1.1 `Upgrade: h2c` now switches to HTTP/2 after the 101 (`test_resilience.py::H2CUpgrade`, curl `--http2` on `http://`). |
+| Upgrade hand-off (`websocket`, `h2c`) | Done | Raw-socket `RawPipe` hand-off for application protocols. HTTP/1.1 `Upgrade: h2c` switches to HTTP/2 after the 101. WebSocket Upgrade uses a bounded RFC 6455 frame and connection machine with physical output acknowledgements (`test_websocket.py`). |
 | 408 on slow headers/body | Done | Verified live: a stalled request head receives `408 Request Timeout` at the 30 s default. |
 | HTTP/1.x minor versions | Done (fixed) | `HTTP/1.2` and later minors are served as HTTP/1.1 (RFC 9110 §6.2). Other major versions get 505. |
 
@@ -48,7 +48,7 @@ coverage comes from the CI matrices.
 | RST_STREAM / GOAWAY error handling | Done | h2spec, isolation tests. |
 | RFC 9218 priorities (no RFC 7540 tree) | Done | `PriorityTest`, priority wire cases. |
 | Server push behind `--enable-push` (off by default) | Done | `test_http2_cli.py`. |
-| RFC 8441 extended CONNECT (WebSockets over h2) | **Open** | Needs streaming bidirectional stream tunnels in the HTTP/2 connection. The current machine buffers whole request and response bodies. `SETTINGS_ENABLE_CONNECT_PROTOCOL` is therefore not advertised, and `:protocol` requests are rejected as malformed. WebSockets work over HTTP/1.1 Upgrade. |
+| RFC 8441 extended CONNECT (WebSockets over h2) | Done (pending cross-platform CI) | Opt-in `SETTINGS_ENABLE_CONNECT_PROTOCOL`, validated early CONNECT delivery, bounded bidirectional DATA tunnels, stream flow credit on consumption, output fences, close/reset cleanup. `test_websocket.py` covers plain and TLS multiplexing, zero-window backpressure and clean close. |
 | Load: `h2load -n 100000 -c 10 -m 100` | Done | Three local rounds on 4 workers: 300,000/300,000 succeeded, 0 failed/errored/timed out. RSS stayed flat at 152,024 → 151,456 → 151,400 KiB and descriptors at 28. These runs used a shared 4-vCPU VM, so the >100k req/s gate rests on the recorded M2 results (`docs/production-roadmap.md`). |
 
 ## 4. TLS and security
@@ -58,7 +58,7 @@ coverage comes from the CI matrices.
 | TLS 1.2/1.3 only, no weak ciphers | Done (fixed) | The production context did **not** restrict TLS 1.2 suites, so OpenSSL defaults (static-RSA and CBC suites) were accepted. TLS 1.2 is now limited to ECDHE with AES-GCM or ChaCha20-Poly1305. sslyze 2026-11-15: SSL 2/3 and TLS 1.0/1.1 rejected; TLS 1.2 offers 3 ECDHE AEAD suites and TLS 1.3 offers 3 AEAD suites; forward secrecy OK; ROBOT not vulnerable (no RSA key exchange); Heartbleed and CCS OK; compression disabled; secure renegotiation only; `TLS_FALLBACK_SCSV` supported. `test_tls_production.py::test_cipher_and_protocol_policy`. |
 | ALPN `h2`/`http/1.1`, HTTP/2 only via ALPN on TLS | Done | s_client ALPN cases. h2c Upgrade is never offered over TLS. |
 | SNI certificate selection | Done | Existing two-host suites. |
-| mTLS with subject DN/SANs exposed | Done (added) | `--client-ca PEM [--require-client-cert]`. Verified identities appear as `Request.clientCertificate` (RFC 2253 subject; `DNS:`, `URI:`, `email:` and `IP:` SANs). Tests cover acceptance, missing-certificate and foreign-CA rejection, optional mode, and curl with and without `--cert`. |
+| mTLS with subject DN/SANs exposed | Done (pending cross-platform CI) | `--client-ca PEM [--require-client-cert]`. Verified identities appear as `Request.clientCertificate` (RFC 2253 subject; separate `DNS:`, `URI:`, `email:` and `IP:` SANs). Capture rejects unrepresentable or oversized identity instead of truncating. CA-signed comma-URI, long-SAN and long-subject cases are exercised in `test_tls_production.py`. |
 | Session tickets and session IDs | Done | Tickets and session IDs both resume (`-sess_in` with and without `-no_ticket`). sslyze reports session-ID resumption as unsupported because its probe offers the ticket extension, in which case OpenSSL issues tickets instead. |
 | TLS 1.3 0-RTT with replay protection | **Open (deliberately disabled)** | Early data would have to be read through `SSL_read_early_data` before the handshake fence, and requests would have to be marked replayable (RFC 8470 `Early-Data`/425). OpenSSL's `max_early_data` stays 0, so no request can be replayed. |
 | OCSP stapling | Done (added) | `--ocsp-response DER` (and `HostConfig.ocspResponse`). The response is accepted only if it is successful, GOOD and currently valid for the leaf. It is re-read with certificates on reload or SIGHUP. Tests use `s_client -status`, and an invalid response fails startup. |

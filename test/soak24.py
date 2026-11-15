@@ -468,20 +468,22 @@ def log_queue_options(server):
 
 
 def active_cpu_count():
-    """Match Reactor.cpuCount; startup-only, never inferred from load rates."""
-    if os.name == 'nt':
-        import ctypes
-        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-        count = kernel.GetActiveProcessorCount
-        count.argtypes = [ctypes.c_uint16]
-        count.restype = ctypes.c_uint32
-        value = count(0xffff)  # ALL_PROCESSOR_GROUPS, as in reactor_group.c.
-        if value == 0:
-            raise ValueError('active CPU count failed: ' + str(ctypes.get_last_error()))
-    else:
-        value = os.sysconf('SC_NPROCESSORS_ONLN')
-    if type(value) is not int or value <= 0:
-        raise ValueError('active CPU count must be positive')
+    """Ask the same native CPU-hint implementation used by server startup."""
+    binary = ROOT / '.lake/build/bin' / ('lean-net-platform-info.exe' if os.name == 'nt' else 'lean-net-platform-info')
+    if not binary.is_file():
+        raise ValueError('build lean-net-platform-info before automatic-worker soak validation')
+    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=5)
+    if result.returncode or result.stderr or result.stdout.count('\n') != 1:
+        raise ValueError('native platform-info probe failed or emitted unexpected output')
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError('native platform-info probe emitted invalid JSON') from error
+    if not isinstance(data, dict) or set(data) != {'cpu_count'}:
+        raise ValueError('native platform-info probe emitted invalid schema')
+    value = data['cpu_count']
+    if type(value) is not int or not 1 <= value <= 1000000:
+        raise ValueError('native CPU count must be positive and bounded')
     return value
 
 

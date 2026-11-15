@@ -11,6 +11,31 @@
 #include <windows.h>
 static atomic_int track_native_allocations, native_allocations;
 static atomic_uint transport_send_limit, transport_send_calls, transport_max_vectors;
+static atomic_int fail_accept_socket, capture_completion_wait;
+static atomic_uint captured_completion_wait;
+static atomic_uint_fast64_t accept_test_now;
+static ULONGLONG WINAPI resource_test_GetTickCount64(void) {
+  uint64_t now = atomic_load(&accept_test_now);
+  return now ? now : GetTickCount64();
+}
+static SOCKET WSAAPI resource_test_WSASocketW(int family, int type, int protocol,
+    LPWSAPROTOCOL_INFOW info, GROUP group, DWORD flags) {
+  if (atomic_exchange(&fail_accept_socket, 0)) {
+    WSASetLastError(WSAEMFILE);
+    return INVALID_SOCKET;
+  }
+  return WSASocketW(family, type, protocol, info, group, flags);
+}
+static BOOL WINAPI resource_test_GetQueuedCompletionStatus(HANDLE port, LPDWORD bytes,
+    PULONG_PTR key, LPOVERLAPPED *overlapped, DWORD wait) {
+  if (atomic_load(&capture_completion_wait)) {
+    atomic_store(&captured_completion_wait, wait);
+    *bytes = 0; *key = 0; *overlapped = NULL;
+    SetLastError(WAIT_TIMEOUT);
+    return FALSE;
+  }
+  return GetQueuedCompletionStatus(port, bytes, key, overlapped, wait);
+}
 static int WSAAPI transport_test_WSASend(SOCKET socket, LPWSABUF buffers, DWORD count,
                                         LPDWORD sent, DWORD flags, LPWSAOVERLAPPED overlapped,
                                         LPWSAOVERLAPPED_COMPLETION_ROUTINE callback) {
@@ -42,10 +67,16 @@ static void *tracked_calloc(size_t count, size_t size) {
 #define malloc tracked_malloc
 #define calloc tracked_calloc
 #define WSASend(...) transport_test_WSASend(__VA_ARGS__)
+#define WSASocketW(...) resource_test_WSASocketW(__VA_ARGS__)
+#define GetQueuedCompletionStatus(...) resource_test_GetQueuedCompletionStatus(__VA_ARGS__)
+#define GetTickCount64() resource_test_GetTickCount64()
 #include "../c/reactor_windows.c"
 #undef malloc
 #undef calloc
 #undef WSASend
+#undef WSASocketW
+#undef GetQueuedCompletionStatus
+#undef GetTickCount64
 #include "../c/socket_windows.c"
 
 void lean_initialize_runtime_module(void);
@@ -63,6 +94,21 @@ static int64_t result_i64(lean_object *result) {
   int64_t value = (int64_t)lean_unbox_uint64(lean_io_result_get_value(result));
   lean_dec(result);
   return value;
+}
+static void test_exhaustion_errno_exports(void) {
+  int64_t descriptor_limit = result_i64(shim_errno_emfile());
+  int64_t system_limit = result_i64(shim_errno_enfile());
+  int64_t buffer_limit = result_i64(shim_errno_enobufs());
+  int64_t memory_limit = result_i64(shim_errno_enomem());
+  check(descriptor_limit == EMFILE && system_limit == ENFILE &&
+            buffer_limit == ENOBUFS && memory_limit == ENOMEM,
+        "exhaustion FFI exports preserve the normalized CRT errno domain");
+  check(ln_windows_errno(WSAEMFILE) == descriptor_limit,
+        "Winsock descriptor exhaustion matches the Lean errno comparison");
+  check(ln_windows_errno(WSAENOBUFS) == memory_limit &&
+            ln_windows_errno(ERROR_NOT_ENOUGH_MEMORY) == memory_limit &&
+            ln_windows_errno(ERROR_OUTOFMEMORY) == memory_limit,
+        "Winsock and Win32 memory exhaustion match the Lean errno comparison");
 }
 static int64_t result_count(lean_object *result, uint8_t *data,
                             size_t capacity) {
@@ -118,6 +164,50 @@ static uint64_t accept_client(rn_reactor *reactor) {
   }
   check(0, "accept deadline");
   return 0;
+}
+static void test_accept_resource_backoff_tick(uint32_t tick) {
+  rn_config options = config();
+  options.timer_tick_ms = tick;
+  rn_reactor *reactor = NULL;
+  uint64_t listener = 0;
+  check(rn_new(&options, &reactor) == 0 &&
+            rn_socket_new(reactor, &listener) == 0 &&
+            rn_bind(reactor, listener, "127.0.0.1", 0, 0) == 0,
+        "resource-backoff listener setup");
+  uint64_t now = GetTickCount64();
+  atomic_store(&accept_test_now, now);
+  atomic_store(&fail_accept_socket, 1);
+  check(rn_start_listening(reactor, listener, 16) == 0,
+        "resource exhaustion keeps listener available");
+  rn_connection *connection = rn_connection_get(reactor, listener);
+  check(connection && connection->state == RN_LISTENING &&
+            reactor->outstanding == 0 && connection->pending == 0 &&
+            reactor->accept_backoff_until > rn_now_ms(),
+        "descriptor exhaustion pauses AcceptEx without outstanding IO");
+  check(rn_step(reactor, 0) == 1 && reactor->events[0].kind == RN_ERROR &&
+            reactor->events[0].result == -EMFILE &&
+            reactor->events[0].flags == RN_ACCEPT_ERROR,
+        "descriptor exhaustion is observable as a transient accept error");
+  atomic_store(&capture_completion_wait, 1);
+  check(rn_step(reactor, -1) == 0 && atomic_load(&captured_completion_wait) <= 100,
+        "infinite wait is bounded by accept recovery deadline");
+  check(rn_step(reactor, 7) == 0 && atomic_load(&captured_completion_wait) <= 7,
+        "short caller timeout remains authoritative");
+  atomic_store(&capture_completion_wait, 0);
+  atomic_store(&accept_test_now, now + 100);
+  check(rn_step(reactor, 0) == 0 && connection->pending == 1 &&
+            reactor->outstanding == 1,
+        "AcceptEx reposts after the exhausted resource recovers");
+  atomic_store(&accept_test_now, 0);
+  SOCKET client = connect_client(listener_port(reactor, listener));
+  uint64_t accepted = accept_client(reactor);
+  check(rn_close_connection(reactor, accepted) == 0 && closesocket(client) == 0 &&
+            rn_free(reactor) == 0,
+        "resource-backoff recovery accepts and cancels without leaked IO");
+}
+static void test_accept_resource_backoff(void) {
+  test_accept_resource_backoff_tick(1000);
+  test_accept_resource_backoff_tick(UINT32_MAX);
 }
 static BOOL PASCAL fail_transmit_file(SOCKET socket, HANDLE file, DWORD bytes, DWORD per_send,
                                      LPOVERLAPPED overlapped, LPTRANSMIT_FILE_BUFFERS buffers, DWORD flags) {
@@ -493,6 +583,7 @@ static void test_legacy_borrow_bridge(void) {
 }
 
 static void test_legacy_and_handles(void) {
+  test_exhaustion_errno_exports();
   lean_object *host = lean_mk_string("127.0.0.1");
   int64_t listener = result_i64(shim_tcp_listen(host, 0));
   lean_dec(host);
@@ -1236,6 +1327,8 @@ int main(int argc, char **argv) {
     test_claimed_transport();
     test_read_batch_pause_boundary();
     test_retained_waker();
+  } else if (argc == 2 && strcmp(argv[1], "--accept-backoff") == 0) {
+    test_accept_resource_backoff();
   } else if (argc == 2 && strcmp(argv[1], "--files") == 0) {
     test_file_queue();
   } else if (argc == 2 && strcmp(argv[1], "--dispatch") == 0) {

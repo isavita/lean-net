@@ -1217,6 +1217,16 @@ int rn_step(rn_reactor *r, int timeout_ms) {
   DWORD tick = r->config.timer_tick_ms;
   if (wait == INFINITE || wait > tick)
     wait = tick;
+  if (r->accept_backoff_until) {
+    uint64_t now = rn_now_ms();
+    if (now >= r->accept_backoff_until)
+      r->accept_backoff_until = 0;
+    else {
+      uint64_t remaining = r->accept_backoff_until - now;
+      if (wait == INFINITE || remaining < wait)
+        wait = (DWORD)remaining;
+    }
+  }
   if (r->queue_count)
     wait = 0;
   for (uint32_t n = 0; n < r->config.max_events; ++n) {

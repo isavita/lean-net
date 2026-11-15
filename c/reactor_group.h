@@ -38,6 +38,9 @@ int rn_group_uninstall(rn_group *group);
 /* Uninstalls if necessary, then consumes the group even on restoration error.
  * After return no handler can access this group or its borrowed reactors. */
 int rn_group_free(rn_group *group);
+/* Startup parallelism hint: affinity CPUs, capped by the rounded-up visible
+ * Linux cgroup quota. Hidden ancestor quotas, sibling contention and later
+ * configuration changes cannot be inferred. This is not a CPU reservation. */
 int rn_group_cpu_count(uint32_t *out);
 int rn_pin_current_thread(uint32_t index);
 int64_t rn_process_resident_bytes(void);

@@ -9,6 +9,7 @@ import LeanNet.HTTP.Observability
 import LeanNet.HTTP.SecureHeaders
 import LeanNet.HTTP.Admin
 import LeanNet.HTTP.TraceContext
+import LeanNet.WebSocket.Server
 
 namespace LeanNet.HTTP
 
@@ -51,6 +52,9 @@ structure ReactorServerConfig where
   /-- Accept HTTP/1.1 `Upgrade: h2c` on cleartext connections (RFC 7540
       §3.2). Never offered over TLS, where ALPN selects h2. -/
   h2cUpgrade : Bool := true
+  /-- Demo WebSocket echo route `/ws`; the exact allowed browser Origin must
+      be configured explicitly. Applications can use their own policy. -/
+  websocketOrigin : Option ByteArray := none
 
 namespace ReactorServer
 
@@ -145,6 +149,10 @@ private structure Client where
   queuedFileBytes : Nat := 0
   inFlight : Nat := 0
   pipe : Option RawPipe := none
+  h2Pipes : Std.HashMap UInt32 RawPipe := {}
+  h2Inputs : Std.HashMap UInt32 (ByteArray × Bool) := {}
+  h2Writes : Std.HashMap UInt32 (Nat × ByteArray) := {}
+  h2CloseDeadlines : Std.HashMap UInt32 UInt64 := {}
   peerEOF : Bool := false
   finishSent : Bool := false
   kick : Bool := true
@@ -162,7 +170,7 @@ private structure Client where
   /-- Peer IP text, captured once at admission when observability is on. -/
   remote : ByteArray := ByteArray.empty
   /-- Accepted h2c upgrade awaiting its 101 write barrier. -/
-  h2cUpgrade : Option (ByteArray × HTTP2.RequestHead × RequestHead) := none
+  h2cUpgrade : Option (ByteArray × HTTP2.RequestHead × RequestHead × Nat) := none
 
 private structure WorkerState where
   clients : Std.HashMap Reactor.SocketId Client := {}
@@ -338,7 +346,9 @@ private def Driver.forget (driver : Driver) (id : Reactor.SocketId) : IO Unit :=
     driver.closeObservations id (client.retirementOutcome.getD .error),
     driver.state.modify fun state => { state with clients := state.clients.erase id },
     releaseInput client,
-    (do if let some pipe := client.pipe then try pipe.onClose catch _ => pure ())]
+    (do
+      if let some pipe := client.pipe then try pipe.onClose catch _ => pure ()
+      for (_, pipe) in client.h2Pipes.toArray do try pipe.onClose catch _ => pure ())]
 
 /-- Stop protocol work and return input loans immediately. An asynchronous
     provider may still deliver already-satisfied write fences before CLOSED;
@@ -350,11 +360,14 @@ private def Driver.retire (driver : Driver) (id : Reactor.SocketId)
   driver.put id { client with
     retired := true, retirementOutcome := some outcome, closing := true, reading := false,
     protocol := .raw, pipe := none, inputFront := [], inputBack := [], inputBytes := 0,
+    h2Pipes := {}, h2Inputs := {}, h2Writes := {}, h2CloseDeadlines := {},
     outputs := [], outputBytes := 0, queuedFileBytes := 0,
     idleDeadline := none, requestDeadline := none, writeDeadline := none, pingDeadline := none }
   cleanupActions #[
     releaseInput client,
-    (do if let some pipe := client.pipe then try pipe.onClose catch _ => pure ())]
+    (do
+      if let some pipe := client.pipe then try pipe.onClose catch _ => pure ()
+      for (_, pipe) in client.h2Pipes.toArray do try pipe.onClose catch _ => pure ())]
 
 private def Driver.nativeGone (driver : Driver) (id : Reactor.SocketId) : IO Unit :=
   if driver.transport.deferClosed then driver.retire id else driver.forget id
@@ -473,7 +486,10 @@ private def Driver.appendObserved (driver : Driver) (id : Reactor.SocketId)
   let some client ← driver.client? id | return
   let observation := if client.requests.contains output.requestId then
     some { requestId := output.requestId, payloadRanges := output.payloadRanges,
-           finalResponse := output.finalResponse : OutputObservation } else none
+           -- An h2c 101 is a transport barrier within the original request.
+           -- Its final response is emitted on HTTP/2 stream 1 after the switch.
+           finalResponse := output.finalResponse &&
+             !(output.status == 101 && client.h2cUpgrade.isSome) : OutputObservation } else none
   if output.status >= 200 || output.status == 101 then
     let requests := client.requests.modify output.requestId fun request =>
       { request with
@@ -533,7 +549,7 @@ private def Driver.reply (driver : Driver) (id : Reactor.SocketId) (requestId : 
     let snapshot ← observer.hub.snapshot
     return { response := {
       headers := #[{ name := "Content-Type", value := Observability.metricsContentType }]
-      body := snapshot.renderPrometheus ++ (← Admin.processPrometheus) ++ (← driver.transport.metrics) } }
+      body := snapshot.renderPrometheus ++ (← observer.hub.processMetrics) ++ (← driver.transport.metrics) } }
   driver.handlers.onRequest (← driver.traced id requestId request)
 
 private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (step : Machine.Step) : IO Unit := do
@@ -561,11 +577,12 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
           HTTP2.Upgrade.candidate head framing driver.config.http2.maxRequestBodyBytes
         else none
       if let some (settings, h2head) := h2c then
-        -- Observe the request once, as HTTP/2 stream 1, after the switch.
+        -- Preserve this observation through the 101 barrier, then transfer it
+        -- to HTTP/2 stream 1 without starting or finishing a second request.
         driver.cancelRequest id
         let some client ← driver.client? id | return
         if client.retired then return
-        driver.put id { client with h2cUpgrade := some (settings, h2head, head) }
+        driver.put id { client with h2cUpgrade := some (settings, h2head, head, requestId) }
         let reply : Reply := { response := { status := 101, headers := #[{ name := "upgrade", value := "h2c".toUTF8 }] } }
         driver.applyStep id (machine.decideHead requestId (.upgrade reply))
         return
@@ -744,12 +761,158 @@ private def Driver.syncPingTimer (driver : Driver) (id : Reactor.SocketId) : IO 
   | some value => client.socket.armTimer 3 value
   driver.put id { client with pingDeadline := wanted }
 
+private def tunnelTicket (streamId : UInt32) (ticket : Nat) : Nat :=
+  streamId.toNat * 18446744073709551616 + ticket
+
+private def Driver.syncTunnelTimer (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
+  let some client ← driver.client? id | return
+  let wanted := client.h2CloseDeadlines.toArray.foldl
+    (fun (prior : Option UInt64) (_, value) => some (min (prior.getD value) value)) none
+  match wanted with
+  | none => client.socket.cancelTimer 4
+  | some value => client.socket.armTimer 4 value
+
+private def Driver.dropTunnel (driver : Driver) (id : Reactor.SocketId)
+    (streamId : UInt32) : IO Unit := do
+  let some client ← driver.client? id | return
+  if let some pipe := client.h2Pipes[streamId]? then
+    try pipe.onClose catch _ => pure ()
+  driver.put id { client with
+    h2Pipes := client.h2Pipes.erase streamId,
+    h2Inputs := client.h2Inputs.erase streamId,
+    h2Writes := client.h2Writes.erase streamId,
+    h2CloseDeadlines := client.h2CloseDeadlines.erase streamId }
+  driver.syncTunnelTimer id
+
+/-- Translate one bounded WebSocket codec step into H2 stream actions. The
+    codec's physical ticket remains live when peer flow control blocks DATA. -/
+private def Driver.h2RawResult (driver : Driver) (id : Reactor.SocketId)
+    (streamId : UInt32) (result : RawResult) : IO (List HTTP2.Machine.Action) := do
+  let some client ← driver.client? id | return []
+  let .http2 machine := client.protocol | return []
+  if result.abortNow then
+    let step := machine.cancelTunnel streamId
+    driver.put id { client with protocol := .http2 step.state }
+    driver.dropTunnel id streamId
+    return step.actions
+  let mut actions := []
+  if result.closeStarted then
+    let value ← deadline (← driver.now) 5000
+    driver.put id { client with h2CloseDeadlines := client.h2CloseDeadlines.insert streamId value }
+    driver.syncTunnelTimer id
+  if !result.output.isEmpty then
+    if result.output.size != 1 || result.ticket.isNone then
+      throw (IO.userError "H2 WebSocket output requires one physical ticket")
+    let some view := result.output[0]? | throw (IO.userError "missing H2 WebSocket output")
+    let bytes := view.copy
+    let ticket := result.ticket.getD 0
+    let some current ← driver.client? id | return actions
+    let .http2 machine := current.protocol | return actions
+    match machine.trySendTunnel streamId ticket bytes with
+    | .error _ =>
+      let step := machine.cancelTunnel streamId
+      driver.put id { current with protocol := .http2 step.state }
+      driver.dropTunnel id streamId
+      actions := actions ++ step.actions
+    | .ok none =>
+      if current.h2Writes.contains streamId then throw (IO.userError "duplicate blocked H2 tunnel output")
+      driver.put id { current with h2Writes := current.h2Writes.insert streamId (ticket, bytes) }
+    | .ok (some step) =>
+      driver.put id { current with protocol := .http2 step.state }
+      actions := actions ++ step.actions
+  if result.closeAfterWrites then
+    let some current ← driver.client? id | return actions
+    let .http2 machine := current.protocol | return actions
+    if current.h2Writes.contains streamId then throw (IO.userError "WebSocket closed with blocked output")
+    let step := machine.endTunnel streamId
+    let peerEnded := current.h2Inputs[streamId]?.any (·.2)
+    driver.put id { current with protocol := .http2 step.state, h2CloseDeadlines := current.h2CloseDeadlines.erase streamId, h2Pipes := if peerEnded then current.h2Pipes.erase streamId else current.h2Pipes, h2Inputs := if peerEnded then current.h2Inputs.erase streamId else current.h2Inputs }
+    driver.syncTunnelTimer id
+    actions := actions ++ step.actions
+  return actions
+
+/-- Retain at most one receive window of unconsumed RFC6455 bytes per stream.
+    Other H2 streams keep progressing while this stream is backpressured. -/
+private def Driver.h2FeedPipe (driver : Driver) (id : Reactor.SocketId)
+    (streamId : UInt32) (data : ByteArray) (endStream : Bool) : IO (List HTTP2.Machine.Action) := do
+  let some client ← driver.client? id | return []
+  let some pipe := client.h2Pipes[streamId]? | return []
+  let (prior, priorEnd) := client.h2Inputs[streamId]?.getD (ByteArray.empty, false)
+  if priorEnd && !data.isEmpty then throw (IO.userError "H2 tunnel DATA after END_STREAM")
+  let combined := prior.append data
+  if combined.size > 65536 then
+    let .http2 machine := client.protocol | return []
+    let step := machine.cancelTunnel streamId
+    driver.put id { client with protocol := .http2 step.state }
+    driver.dropTunnel id streamId
+    return step.actions
+  let ended := priorEnd || endStream
+  if combined.isEmpty && !ended then return []
+  let result ← if combined.isEmpty then pure ({ consumed := some 0 } : RawResult)
+    else try pipe.onBytes (ByteSlice.full combined) catch _ => pure { abortNow := true, consumed := some 0 }
+  let used := result.consumed.getD combined.size
+  if used > combined.size then throw (IO.userError "H2 tunnel consumed beyond DATA")
+  let remaining := combined.extract used combined.size
+  if let some current ← driver.client? id then
+    let inputs := if remaining.isEmpty && !ended then current.h2Inputs.erase streamId
+      else current.h2Inputs.insert streamId (remaining, ended)
+    driver.put id { current with h2Inputs := inputs }
+  let mut actions := []
+  if used > 0 then
+    if let some current ← driver.client? id then
+      if let .http2 machine := current.protocol then
+        let step := machine.consumeTunnel streamId used
+        driver.put id { current with protocol := .http2 step.state }
+        actions := actions ++ step.actions
+  actions := actions ++ (← driver.h2RawResult id streamId result)
+  if remaining.isEmpty && ended && !result.abortNow then
+    actions := actions ++ (← driver.h2RawResult id streamId (← pipe.onEOF))
+    if let some current ← driver.client? id then
+      if let .http2 machine := current.protocol then
+        if !machine.canRespond streamId then
+          driver.put id { current with h2Pipes := current.h2Pipes.erase streamId, h2Inputs := current.h2Inputs.erase streamId, h2CloseDeadlines := current.h2CloseDeadlines.erase streamId }
+          driver.syncTunnelTimer id
+  return actions
+
+private def Driver.retryTunnelWrites (driver : Driver) (id : Reactor.SocketId) :
+    IO (List HTTP2.Machine.Action) := do
+  let some client ← driver.client? id | return []
+  let mut actions := []
+  for (streamId, (ticket, bytes)) in client.h2Writes.toArray do
+    let some current ← driver.client? id | break
+    let .http2 machine := current.protocol | break
+    match machine.trySendTunnel streamId ticket bytes with
+    | .error _ =>
+      let step := machine.cancelTunnel streamId
+      driver.put id { current with protocol := .http2 step.state }
+      driver.dropTunnel id streamId
+      actions := actions ++ step.actions
+    | .ok none => pure ()
+    | .ok (some step) =>
+      driver.put id { current with protocol := .http2 step.state, h2Writes := current.h2Writes.erase streamId }
+      actions := actions ++ step.actions
+  return actions
+
+private def tunnelPayloadRanges (bytes : ByteArray) : IO (Array (Nat × Nat)) := do
+  let mut ranges := #[]
+  let mut cursor := 0
+  for _ in [:bytes.size / 9 + 1] do
+    if cursor == bytes.size then break
+    if bytes.size - cursor < 9 || bytes[cursor + 3]! != 0 then
+      throw (IO.userError "invalid emitted tunnel DATA frame")
+    let count := bytes[cursor]!.toNat * 65536 + bytes[cursor + 1]!.toNat * 256 + bytes[cursor + 2]!.toNat
+    if count > bytes.size - cursor - 9 then throw (IO.userError "truncated emitted tunnel DATA frame")
+    ranges := ranges.push (cursor + 9, count)
+    cursor := cursor + 9 + count
+  if cursor != bytes.size then throw (IO.userError "tunnel DATA frame budget exhausted")
+  return ranges
+
 private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
     (step : HTTP2.Machine.Step) : IO Unit := do
   let some client ← driver.client? id | return
   if client.retired then return
   driver.put id { client with protocol := .http2 step.state, kick := true }
-  let mut actions := step.actions
+  let mut actions := step.actions ++ (← driver.retryTunnelWrites id)
   let mut output := #[]
   let mut bytes := 0
   let mut fileBytes := 0
@@ -778,6 +941,20 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
       continue
     match action with
     | .write _ | .writeParts _ => pure ()
+    | .writeTunnel streamId ticket wire =>
+      driver.appendH2Output id output
+      output := #[]
+      bytes := 0
+      fileBytes := 0
+      let ranges ← tunnelPayloadRanges wire
+      let observation : Option OutputObservation := if driver.observer.isSome then
+        some { requestId := streamId.toNat, payloadRanges := ranges, finalResponse := false } else none
+      driver.appendParts id #[.bytes (ByteSlice.full wire)]
+        (some (tunnelTicket streamId ticket)) true observation
+    | .tunnelData event =>
+      actions := (← driver.h2FeedPipe id event.streamId event.data event.endStream) ++ actions
+    | .tunnelReset streamId =>
+      driver.dropTunnel id streamId
     | .writePing nonce pingBytes =>
       driver.appendH2Output id output
       output := #[]
@@ -802,6 +979,38 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
     | .request event =>
       let .http2 machine := client.protocol | return
       if !machine.canRespond event.streamId then continue
+      if let some tunnelHead := event.tunnelHead then
+        let expectedScheme := if driver.transport.secure then "https".toUTF8 else "http".toUTF8
+        if tunnelHead.scheme != expectedScheme then
+          let response := machine.rejectTunnel event.streamId { status := 400 }
+          driver.put id { client with protocol := .http2 response.state, kick := true }
+          actions := response.actions ++ actions
+          continue
+        let selection ← try driver.handlers.onWebSocket tunnelHead catch _ => pure none
+        let accepted := if tunnelHead.protocol == some "websocket".toUTF8 then
+          selection.map fun (policy, callbacks) =>
+            (WebSocket.Handshake.acceptHTTP2 tunnelHead tunnelHead.protocol policy, callbacks)
+          else none
+        match accepted with
+        | some (outcome, callbacks) =>
+          match outcome with
+          | .ok handshake =>
+            let pipe ← WebSocket.Server.rawPipe callbacks
+            driver.put id { client with h2Pipes := client.h2Pipes.insert event.streamId pipe }
+            let response := machine.acceptTunnel event.streamId handshake.response
+            if let some current ← driver.client? id then
+              driver.put id { current with protocol := .http2 response.state, kick := true }
+            actions := response.actions ++ actions
+          | .error rejection =>
+            let response := machine.rejectTunnel event.streamId
+              { status := rejection.status, headers := rejection.headers }
+            driver.put id { client with protocol := .http2 response.state, kick := true }
+            actions := response.actions ++ actions
+        | none =>
+          let response := machine.rejectTunnel event.streamId { status := 501 }
+          driver.put id { client with protocol := .http2 response.state, kick := true }
+          actions := response.actions ++ actions
+        continue
       let reply ← try driver.reply id event.streamId.toNat event.request
         catch _ => pure { response := { status := 500 } }
       let pushes ← if machine.canPush && !metricTarget driver event.request.target then
@@ -823,6 +1032,20 @@ private def Driver.failH2 (driver : Driver) (id : Reactor.SocketId)
     (machine : HTTP2.Machine.State) (error : HTTP2.ProtocolError) : IO Unit :=
   driver.applyH2Step id (machine.fail error)
 
+private def Driver.rawResult (driver : Driver) (id : Reactor.SocketId) (result : RawResult) : IO Unit := do
+  if result.abortNow then driver.closeNow id; return
+  if result.ticket.isSome && result.output.isEmpty then
+    throw (IO.userError "raw output ticket has no bytes")
+  driver.appendOutput id result.output result.ticket result.ticket.isSome
+  if let some enabled := result.readEnabled then driver.setReading id enabled
+  if result.closeStarted then
+    if let some client ← driver.client? id then
+      client.socket.armTimer 4 (← deadline (← driver.now) 5000)
+  if result.closeAfterWrites then
+    if let some client ← driver.client? id then
+      driver.put id { client with closeWhenQueued := true }
+      driver.setReading id false
+
 /-- A TLS handshake accepted before admission stopped may publish READY during
     draining. Give it the same shutdown policy as the initial client snapshot. -/
 private def Driver.shutdownClient (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
@@ -830,8 +1053,17 @@ private def Driver.shutdownClient (driver : Driver) (id : Reactor.SocketId) : IO
   if client.retired || client.closing then return
   match client.protocol with
   | .http1 machine => driver.applyStep id machine.shutdown
-  | .http2 machine => driver.applyH2Step id machine.goAway
-  | .detect _ | .raw =>
+  | .http2 machine =>
+    driver.applyH2Step id machine.goAway
+    for (streamId, pipe) in client.h2Pipes.toArray do
+      let more ← driver.h2RawResult id streamId (← pipe.onShutdown)
+      if let some current ← driver.client? id then
+        if let .http2 next := current.protocol then
+          driver.applyH2Step id { state := next, actions := more }
+  | .raw =>
+    if let some pipe := client.pipe then driver.rawResult id (← pipe.onShutdown)
+    else driver.beginDrain id
+  | .detect _ =>
     driver.setReading id false
     driver.beginDrain id
 
@@ -917,13 +1149,6 @@ private def Driver.detectProtocol (driver : Driver) (id : Reactor.SocketId)
       if let .http2 machine := client.protocol then
         driver.applyH2Step id (machine.feedSlice preface 0 preface.size)
 
-private def Driver.rawResult (driver : Driver) (id : Reactor.SocketId) (result : RawResult) : IO Unit := do
-  driver.appendOutput id result.output
-  if result.closeAfterWrites then
-    if let some client ← driver.client? id then
-      driver.put id { client with closeWhenQueued := true }
-      driver.setReading id false
-
 private def Driver.finishInput (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
   let some client ← driver.client? id | return
   if !client.peerEOF || client.finishSent || client.inputBytes != 0 || client.closing then return
@@ -953,8 +1178,16 @@ private def Driver.pump (driver : Driver) (id : Reactor.SocketId) : IO Unit := d
     driver.nativeGone id
     return
   if let some client ← driver.client? id then
-    if let (some (settings, h2head, head), .http2 machine) := (client.h2cUpgrade, client.protocol) then
-      driver.put id { client with h2cUpgrade := none }
+    if let (some (settings, h2head, head, requestId), .http2 machine) := (client.h2cUpgrade, client.protocol) then
+      let mut requests := client.requests
+      if let some request := requests[requestId]? then
+        if request.pendingOutputs != 0 then
+          throw (IO.userError "h2c observation crossed an incomplete 101 write barrier")
+        requests := requests.erase requestId
+        if requests.contains 1 then
+          throw (IO.userError "h2c stream observation collides with an unfinished request")
+        requests := requests.insert 1 { request with protocol := .http2 }
+      driver.put id { client with h2cUpgrade := none, requests }
       driver.applyH2Step id (machine.upgrade settings h2head head)
   for _ in [:driver.config.workPerClient] do
     let some current ← driver.client? id | return
@@ -989,9 +1222,11 @@ private def Driver.pump (driver : Driver) (id : Reactor.SocketId) : IO Unit := d
       | none => driver.closeNow id
       | some pipe =>
         let result ← try pipe.onBytes chunk.view catch _ => pure { closeAfterWrites := true }
-        driver.consume id chunk.view.length
+        let consumed := result.consumed.getD chunk.view.length
+        if consumed > chunk.view.length then throw (IO.userError "raw pipe consumed beyond input view")
+        driver.consume id consumed
         driver.rawResult id result
-      advanced := true
+        advanced := consumed != 0 || !result.output.isEmpty || result.closeAfterWrites
     | none, .http1 machine =>
       if client.kick && machine.wantsInput then
         driver.put id { client with kick := false }
@@ -1121,6 +1356,17 @@ private def Driver.written (driver : Driver) (id : Reactor.SocketId)
       if let some client ← driver.client? id then
         if let .http1 machine := client.protocol then
           driver.applyStep id (machine.outputAccepted outputId)
+        else if let .http2 _ := client.protocol then
+          let streamId := UInt32.ofNat (outputId / 18446744073709551616)
+          let ticket := outputId % 18446744073709551616
+          if let some pipe := client.h2Pipes[streamId]? then
+            let more ← driver.h2RawResult id streamId (← pipe.onWritten ticket)
+            let more := more ++ (← driver.h2FeedPipe id streamId ByteArray.empty false)
+            if let some current ← driver.client? id then
+              if let .http2 machine := current.protocol then
+                driver.applyH2Step id { state := machine, actions := more }
+        else if let some pipe := client.pipe then
+          driver.rawResult id (← pipe.onWritten outputId)
   driver.syncWriteTimer id
 
 private def Driver.timer (driver : Driver) (id : Reactor.SocketId) (kind : UInt32) : IO Unit := do
@@ -1135,6 +1381,20 @@ private def Driver.timer (driver : Driver) (id : Reactor.SocketId) (kind : UInt3
     driver.put id { client with pingDeadline := none }
     if let .http2 machine := client.protocol then
       driver.applyH2Step id (machine.pingTimer state.now.toNat)
+    return
+  if kind == 4 then
+    if !client.closing then
+      if let some pipe := client.pipe then driver.rawResult id (← pipe.onTimeout)
+      else
+        for (streamId, due) in client.h2CloseDeadlines.toArray do
+          if due <= state.now then
+            if let some current ← driver.client? id then
+              if let some pipe := current.h2Pipes[streamId]? then
+                let more ← driver.h2RawResult id streamId (← pipe.onTimeout)
+                if let some latest ← driver.client? id then
+                  if let .http2 machine := latest.protocol then
+                    driver.applyH2Step id { state := machine, actions := more }
+        driver.syncTunnelTimer id
     return
   if kind == 2 then
     if client.writeDeadline.any (· <= state.now) then driver.closeNow id .timeout
@@ -1380,16 +1640,20 @@ private def withAdmin (config : ReactorServerConfig) (workers : Nat)
     snapshot := match hub with
       | some hub => do return some (← hub.snapshot)
       | none => pure none
+    processMetrics := match hub with
+      | some hub => hub.processMetrics
+      | none => pure ByteArray.empty
     -- Draining begins when the pool stops; readiness then reports 503.
     draining := do return (← finished.get) || (← Reactor.processStopping) }
-  let task ← IO.asTask (Admin.serve port source stop) Task.Priority.dedicated
-  try serve
-  finally
-    finished.set true
-    stop.set true
-    match ← IO.wait task with
-    | .ok _ => pure ()
-    | .error error => IO.eprintln s!"lean-net: admin port stopped: {error}"
+  Admin.withServer port source stop fun run => do
+    let task ← IO.asTask run Task.Priority.dedicated
+    try serve
+    finally
+      finished.set true
+      stop.set true
+      match ← IO.wait task with
+      | .ok _ => pure ()
+      | .error error => throw error
 
 /-- Construct independent callbacks and state inside each dedicated worker.
     The global client limit is partitioned, rather than multiplied by workers. -/
@@ -1416,7 +1680,9 @@ def serveWorkerFactory (resources : WithWorkerResources) (config : ReactorServer
     machine := { config.machine with trackOutput := observing || config.machine.trackOutput }
     http2 := { config.http2 with trackOutput := observing || config.http2.trackOutput } }
   if observing then
-    Observability.withHub workers config.accessLog fun hub =>
+    Observability.withHub (sampleProcessMetrics :=
+        if config.metricsPath.isSome || config.adminPort.isSome then some Admin.processPrometheus else none)
+      workers config.accessLog fun hub =>
       withAdmin config workers (some hub) <|
         withWorkerPool host port workers config.server.maxClients config.native
           (runWorker resources config (some hub))

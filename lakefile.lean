@@ -105,6 +105,12 @@ lean_exe «lean-net-observability-fixture» where
   root := `test.ObservabilityReactorFixture
   needs := #[`@/«lean-net-access-log-helper»]
 
+lean_exe «lean-net-process-metrics-test» where
+  root := `test.ObservabilityProcessSamplerTest
+
+lean_exe «lean-net-platform-info» where
+  root := `test.PlatformInfo
+
 lean_exe «lean-net-deferred-transport-fixture» where
   root := `test.DeferredTransportFixture
   needs := #[`@/«lean-net-access-log-helper»]
@@ -136,6 +142,8 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   let fileInternal ← inputTextFile (pkg.dir / "c" / "reactor_file_internal.h")
   let fileImpl ← inputTextFile (pkg.dir / "c" / "reactor_file_impl.h")
   let groupHeader ← inputTextFile (pkg.dir / "c" / "reactor_group.h")
+  let cpuHeader ← inputTextFile (pkg.dir / "c" / "reactor_cpu.h")
+  let affinityHeader ← inputTextFile (pkg.dir / "c" / "reactor_affinity.h")
   let groupFFI ← inputTextFile (pkg.dir / "c" / "reactor_group_ffi.h")
   let mut src ← inputTextFile (pkg.dir / "c" / "socket_shim.c")
   src := src.zipWith (fun source _ => source) header
@@ -173,7 +181,9 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   let nativeObj ← buildO (pkg.buildDir / "c" / "reactor.o") native
     includes options compiler
   let group ← inputTextFile (pkg.dir / "c" / "reactor_group.c")
-  let group := (group.zipWith (fun source _ => source) groupHeader).zipWith (fun source _ => source) reactorHeader
+  let group := (((group.zipWith (fun source _ => source) groupHeader).zipWith
+    (fun source _ => source) reactorHeader).zipWith (fun source _ => source) cpuHeader).zipWith
+    (fun source _ => source) affinityHeader
   let groupObj ← buildO (pkg.buildDir / "c" / "reactor_group.o") group
     includes options compiler
   let catalog ← inputTextFile (pkg.dir / "c" / "static_catalog.c")

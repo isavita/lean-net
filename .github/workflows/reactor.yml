@@ -60,7 +60,7 @@ jobs:
           test: false
           lint: false
       - name: Build reactor and echo
-        run: lake build lean-net-echo lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-protocol-fuzz
+        run: lake build lean-net-echo lean-net-http1 lean-net-platform-info lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-protocol-fuzz
       - name: Pure HTTP/1 protocol machines
         run: |
           lake env lean --run test/HTTP1ParserV2Test.lean
@@ -71,6 +71,8 @@ jobs:
           lake env lean --run test/ResponseOutputTest.lean
           lake env lean --run test/HTTP2KeepaliveTest.lean
           lake env lean --run test/ObservabilityMetricsTest.lean
+          lake env lean --run test/HTTP2UpgradeTest.lean
+          lake env lean --run test/WebSocketTest.lean
       - name: Pure HTTP/2 protocol machines
         run: |
           lake env lean --run test/HTTP2FrameTest.lean
@@ -118,6 +120,7 @@ jobs:
           python3 test/test_http1_reactor.py -v
           python3 test/test_graceful_shutdown.py -v
           python3 test/test_resilience.py -v
+          python3 test/test_admin.py -v
       - name: Worker echo and FFI setup ownership (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -131,7 +134,9 @@ jobs:
         run: python3 test/test_echo.py -v
       - name: Native signal and endpoint ownership
         if: runner.os != 'Windows'
-        run: python3 test/test_reactor_group.py -v
+        run: |
+          python3 test/test_reactor_group.py -v
+          python3 test/test_reactor_cpu.py -v
       - name: Pooled I/O allocation and lifecycle sanitizers
         if: runner.os != 'Windows'
         run: |

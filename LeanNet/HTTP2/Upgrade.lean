@@ -1,8 +1,11 @@
 import LeanNet.HTTP2.Request
+import LeanNet.HTTP2.Frame
 
 namespace LeanNet.HTTP2.Upgrade
 
-/-- Decode base64url (RFC 4648 §5), tolerating omitted or present padding. -/
+/-- Decode canonical, unpadded base64url (RFC 4648 §§3.5, 5 and RFC 7540
+    §3.2.1). Empty bytes decode normally; the header's token68 syntax is
+    checked separately by `candidate`. -/
 def base64url (input : ByteArray) : Option ByteArray := Id.run do
   let value := fun (c : UInt8) =>
     if c >= 65 && c <= 90 then some (c - 65)
@@ -11,19 +14,18 @@ def base64url (input : ByteArray) : Option ByteArray := Id.run do
     else if c == 45 then some 62
     else if c == 95 then some 63
     else none
-  let mut data := input.data
-  while data.size > 0 && data.back! == 61 do data := data.pop
-  if data.size % 4 == 1 then return none
+  if input.size % 4 == 1 then return none
   let mut out := ByteArray.empty
   let mut buffer : Nat := 0
   let mut bits := 0
-  for c in data do
+  for c in input do
     let some digit := value c | return none
     buffer := (buffer * 64 + digit.toNat) % 65536
     bits := bits + 6
     if bits >= 8 then
       bits := bits - 8
       out := out.push (UInt8.ofNat (buffer / 2 ^ bits % 256))
+  if buffer % 2 ^ bits != 0 then return none
   return some out
 
 private def lower (bytes : ByteArray) : String :=
@@ -41,16 +43,10 @@ private def tokens (headers : Array HTTP1.Header) (name : String) : Array String
 
 /-- Validate a SETTINGS payload carried by HTTP2-Settings (RFC 9113 §6.5.2). -/
 def validSettings (payload : ByteArray) : Bool := Id.run do
-  if payload.size % 6 != 0 then return false
-  for i in [:payload.size / 6] do
-    let p := i * 6
-    let id := payload[p]!.toNat * 256 + payload[p + 1]!.toNat
-    let value := (payload[p + 2]!.toNat <<< 24) + (payload[p + 3]!.toNat <<< 16) +
-      (payload[p + 4]!.toNat <<< 8) + payload[p + 5]!.toNat
-    if id == 2 && value > 1 then return false
-    if id == 4 && value > 2147483647 then return false
-    if id == 5 && (value < 16384 || value > 16777215) then return false
-  return true
+  -- A header payload is not limited by the peer's negotiated wire-frame size,
+  -- but every SETTINGS value has the same meaning on both input paths.
+  let frame : Frame := { kind := 4, flags := 0, streamId := 0, payload }
+  return (frame.validate 16777215).isOk
 
 private def hopByHop : List String :=
   ["connection", "upgrade", "http2-settings", "keep-alive", "proxy-connection", "transfer-encoding", "host"]
@@ -71,6 +67,9 @@ def candidate (head : HTTP1.RequestHead) (framing : HTTP1.BodyFraming) (maxBodyB
   if !connection.contains "upgrade" || !connection.contains "http2-settings" then none
   let fields := head.headers.filter (·.name == "http2-settings")
   if fields.size != 1 then none
+  -- RFC 7540's token68 grammar is nonempty. Erratum 5249 proposed allowing
+  -- an empty value and was rejected; an empty wire SETTINGS remains valid.
+  if fields[0]!.value.isEmpty then none
   let settings ← base64url fields[0]!.value
   if !validSettings settings then none
   if head.target.size == 0 || (head.target[0]! != 47 && head.target != "*".toUTF8) then none
@@ -81,7 +80,7 @@ def candidate (head : HTTP1.RequestHead) (framing : HTTP1.BodyFraming) (maxBodyB
     { name := ":authority".toUTF8, value := host },
     { name := ":path".toUTF8, value := head.target }]
   for header in head.headers do
-    if hopByHop.contains header.name then continue
+    if hopByHop.contains header.name || connection.contains header.name then continue
     if header.name == "te" && lower header.value != "trailers" then continue
     hpack := hpack.push { name := header.name.toUTF8, value := header.value }
   match validateRequestHead hpack maxBodyBytes with

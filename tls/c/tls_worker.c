@@ -120,12 +120,16 @@ typedef struct tw_session {
   uint32_t plain_offset, file_chunk_length, file_chunk_offset, bio_count;
   int write_complete, read_want_write, eof_applied, handshake_complete,
       fatal, shutdown_sent, file_failed, terminal_write;
-  int error, protocol;
+  int error, protocol, setup_error;
   char diagnostic[256];
   /* Verified client certificate, captured by the TLS thread before READY is
    * published (release) and read by the reactor owner after READY (acquire). */
   int peer_verified;
-  char peer_subject[512], peer_sans[1024];
+  /* Published before READY and retained until this session is recycled.
+   * Identity values are complete, separate entries; no lossy separator or
+   * fixed-buffer truncation may turn one verified name into another. */
+  char *peer_subject, **peer_sans;
+  uint32_t peer_sans_count;
   uint32_t seen_cipher, seen_plain, seen_cipher_tail, seen_plain_tail,
       seen_fence_tail, seen_notifications;
   int more;
@@ -297,26 +301,38 @@ static int tw_ocsp_status(SSL *ssl, void *argument) {
   }
   return SSL_TLSEXT_ERR_OK;
 }
-static void tw_append(char *out, size_t capacity, size_t *used, const char *text, size_t length) {
-  if (*used >= capacity - 1) return;
-  if (length > capacity - 1 - *used) length = capacity - 1 - *used;
-  memcpy(out + *used, text, length); *used += length; out[*used] = 0;
+enum { TW_PEER_TEXT_MAX = 65536, TW_PEER_SAN_MAX = 256 };
+static void tw_clear_peer(tw_session *session) {
+  free(session->peer_subject); session->peer_subject = NULL;
+  for (uint32_t i = 0; i < session->peer_sans_count; ++i) free(session->peer_sans[i]);
+  free(session->peer_sans); session->peer_sans = NULL;
+  session->peer_sans_count = 0; session->peer_verified = 0;
 }
-/* Subject DN (RFC 2253) and comma-separated SANs ("DNS:x", "URI:y",
- * "email:z", "IP:a"). Truncated at fixed bounds; control bytes are dropped. */
-static void tw_capture_peer(tw_session *session) {
-  session->peer_verified = 0; session->peer_subject[0] = 0; session->peer_sans[0] = 0;
+/* Capture complete RFC 2253 subject and individually typed, exact SAN values.
+ * Fail the connection if an identity cannot be represented within explicit
+ * limits; an authenticated but altered name must never reach the application. */
+static int tw_capture_peer(tw_session *session) {
+  tw_clear_peer(session);
   X509 *certificate = SSL_get1_peer_certificate(session->ssl);
-  if (!certificate) return;
-  session->peer_verified = SSL_get_verify_result(session->ssl) == X509_V_OK;
+  if (!certificate) return 0;
+  if (SSL_get_verify_result(session->ssl) != X509_V_OK) { X509_free(certificate); return 0; }
+  int result = 0;
   BIO *bio = BIO_new(BIO_s_mem());
-  if (bio && X509_NAME_print_ex(bio, X509_get_subject_name(certificate), 0, XN_FLAG_RFC2253) >= 0) {
-    int n = BIO_read(bio, session->peer_subject, (int)sizeof(session->peer_subject) - 1);
-    session->peer_subject[n > 0 ? n : 0] = 0;
+  if (!bio || X509_NAME_print_ex(bio, X509_get_subject_name(certificate), 0, XN_FLAG_RFC2253) < 0) {
+    result = -EIO; goto done;
   }
-  BIO_free(bio);
+  char *subject = NULL;
+  long subject_length = BIO_get_mem_data(bio, &subject);
+  if (subject_length < 0 || subject_length > TW_PEER_TEXT_MAX) { result = -EOVERFLOW; goto done; }
+  session->peer_subject = malloc((size_t)subject_length + 1);
+  if (!session->peer_subject) { result = -ENOMEM; goto done; }
+  memcpy(session->peer_subject, subject, (size_t)subject_length);
+  session->peer_subject[subject_length] = 0;
   GENERAL_NAMES *names = X509_get_ext_d2i(certificate, NID_subject_alt_name, NULL, NULL);
-  size_t used = 0;
+  if (!names && X509_get_ext_by_NID(certificate, NID_subject_alt_name, -1) >= 0) {
+    result = -EINVAL; goto done;
+  }
+  size_t used = (size_t)subject_length;
   for (int i = 0; names && i < sk_GENERAL_NAME_num(names); ++i) {
     const GENERAL_NAME *name = sk_GENERAL_NAME_value(names, i);
     const char *prefix = NULL; const unsigned char *value = NULL; int length = 0; char ip[64];
@@ -332,18 +348,34 @@ static void tw_capture_peer(tw_session *session) {
         for (int k = 0; k < 16; k += 2)
           length += snprintf(ip + length, sizeof(ip) - (size_t)length, k ? ":%x" : "%x", (unsigned)(raw[k] << 8 | raw[k + 1]));
       }
+      else { result = -EINVAL; break; }
       prefix = "IP:"; value = (const unsigned char *)ip;
     }
-    if (!prefix || !value || length <= 0) continue;
-    if (used) tw_append(session->peer_sans, sizeof(session->peer_sans), &used, ",", 1);
-    tw_append(session->peer_sans, sizeof(session->peer_sans), &used, prefix, strlen(prefix));
+    if (!prefix) continue; /* Other SAN types are not part of this API. */
+    if (!value || length <= 0) { result = -EINVAL; break; }
     for (int k = 0; k < length; ++k)
-      if (value[k] >= 32 && value[k] < 127 && value[k] != ',')
-        tw_append(session->peer_sans, sizeof(session->peer_sans), &used, (const char *)value + k, 1);
+      if (value[k] < 32 || value[k] > 126) { result = -EINVAL; break; }
+    if (result) break;
+    size_t prefix_length = strlen(prefix), item_length = prefix_length + (size_t)length;
+    if (session->peer_sans_count == TW_PEER_SAN_MAX ||
+        item_length > TW_PEER_TEXT_MAX - used) { result = -EOVERFLOW; break; }
+    char *item = malloc(item_length + 1);
+    if (!item) { result = -ENOMEM; break; }
+    memcpy(item, prefix, prefix_length); memcpy(item + prefix_length, value, (size_t)length);
+    item[item_length] = 0;
+    char **entries = realloc(session->peer_sans, (session->peer_sans_count + 1) * sizeof(*entries));
+    if (!entries) { free(item); result = -ENOMEM; break; }
+    session->peer_sans = entries; session->peer_sans[session->peer_sans_count++] = item;
+    used += item_length;
   }
   GENERAL_NAMES_free(names);
+done:
+  BIO_free(bio);
   X509_free(certificate);
+  if (result) { tw_clear_peer(session); return result; }
+  session->peer_verified = 1;
   atomic_fetch_add(&tw_client_certificates, 1);
+  return 0;
 }
 #include "tls_reload.h"
 
@@ -496,7 +528,9 @@ static void tw_fail(tw_engine *engine, tw_session *session, int error, const cha
 }
 static int tw_open_session(tw_engine *engine, tw_session *session) {
   tw_note_ssl(engine);
+  tw_clear_peer(session);
   session->ssl = NULL; session->network = NULL; session->bio_count = 0;
+  session->setup_error = 1;
   session->fatal = session->error = 0; session->diagnostic[0] = 0;
   ERR_clear_error(); session->bundle = tw_provider_snapshot(engine->bundle);
   if (!session->bundle) {
@@ -513,6 +547,7 @@ static int tw_open_session(tw_engine *engine, tw_session *session) {
   session->bio_count = 2; atomic_fetch_add(&engine->live_bios, 2);
   SSL_set_bio(session->ssl, internal, internal); SSL_set_accept_state(session->ssl);
   session->started = rn_now_ms(); session->produced = session->close_fence = session->handshake_fence = session->fatal_deadline = 0;
+  session->setup_error = 0;
   session->plain_offset = 0; session->write_complete = session->read_want_write = session->eof_applied = 0;
   session->file_chunk_length = session->file_chunk_offset = 0;
   session->handshake_complete = session->fatal = session->shutdown_sent = 0;
@@ -576,7 +611,8 @@ static void tw_drive(tw_engine *engine, tw_session *session) {
         const unsigned char *protocol = NULL; unsigned int n = 0;
         SSL_get0_alpn_selected(session->ssl, &protocol, &n);
         session->protocol = n == 2 && memcmp(protocol, "h2", 2) == 0 ? 2 : 1;
-        tw_capture_peer(session);
+        int identity = tw_capture_peer(session);
+        if (identity) { tw_fail(engine, session, identity, "invalid or oversized verified client identity"); return; }
         atomic_fetch_add(&tw_handshakes_total, 1);
         if (SSL_session_reused(session->ssl)) atomic_fetch_add(&tw_handshakes_resumed, 1);
         session->handshake_complete = 1; session->more = 1; continue;
@@ -723,6 +759,7 @@ static int tw_engine_delete(tw_engine *engine) {
     released = tw_release_file_lane(&session->fences); if (released && !error) error = released;
     free(session->cipher_in.cells); free(session->plain_in.cells); free(session->cipher_out.cells);
     free(session->plain_out.cells); free(session->fences.cells);
+    tw_clear_peer(session);
   }
 #ifdef _WIN32
   if (engine->thread && !CloseHandle(engine->thread)) error = -ln_windows_errno(GetLastError());
@@ -1096,7 +1133,7 @@ lean_object *lean_tlsw_pump(uint64_t handle) {
     if (state == TW_DONE) {
       if (session->error && !owner->error_sent &&
           (owner->cipher_ack >= session->close_fence || rn_now_ms() >= session->fatal_deadline)) {
-        uint32_t flags = !session->file_failed &&
+        uint32_t flags = session->setup_error &&
             (session->error == -ENOMEM || session->error == -EIO || session->error == -EOVERFLOW) ? RN_SETUP_ERROR : 0;
         if (tw_emit(bridge, i, TLSW_ERROR, 0, 0, session->error, flags, 0)) owner->error_sent = 1;
       }
@@ -1185,14 +1222,17 @@ lean_object *lean_tlsw_stats(uint64_t handle) {
   return lean_io_result_mk_ok(result);
 }
 
-/* Verified client certificate of a READY session: (verified, subject, SANs). */
+/* Verified client certificate of a READY session: (verified, subject, SAN array). */
 lean_object *lean_tlsw_peer(uint64_t handle, uint64_t token) {
   tw_session *session = NULL;
   tw_bridge_session *owner = handle ? tw_find((tw_bridge *)(uintptr_t)handle, token, &session) : NULL;
   int ready = owner && atomic_load_explicit(&session->ready, memory_order_acquire);
   lean_object *tuple = lean_alloc_ctor(0, 2, 0), *inner = lean_alloc_ctor(0, 2, 0);
-  lean_ctor_set(inner, 0, lean_mk_string(ready ? session->peer_subject : ""));
-  lean_ctor_set(inner, 1, lean_mk_string(ready ? session->peer_sans : ""));
+  lean_ctor_set(inner, 0, lean_mk_string(ready && session->peer_subject ? session->peer_subject : ""));
+  uint32_t count = ready && session->peer_verified ? session->peer_sans_count : 0;
+  lean_object *sans = lean_mk_empty_array_with_capacity(lean_box(count));
+  for (uint32_t i = 0; i < count; ++i) sans = lean_array_push(sans, lean_mk_string(session->peer_sans[i]));
+  lean_ctor_set(inner, 1, sans);
   lean_ctor_set(tuple, 0, lean_box(ready && session->peer_verified ? 1 : 0));
   lean_ctor_set(tuple, 1, inner);
   return lean_io_result_mk_ok(tuple);

@@ -58,6 +58,8 @@ private def checkSettings (payload : ByteArray) : Except ProtocolError Unit := d
       throw (connError .protocolError "invalid SETTINGS_MAX_FRAME_SIZE")
     if id == 9 && value > 1 then
       throw (connError .protocolError "invalid SETTINGS_NO_RFC7540_PRIORITIES")
+    if id == 8 && value > 1 then
+      throw (connError .protocolError "invalid SETTINGS_ENABLE_CONNECT_PROTOCOL")
 
 /-- Validate wire-level frame constraints; stream sequencing and peer-specific
     semantics (such as client PUSH_PROMISE) belong to the connection layer. -/

@@ -22,6 +22,6 @@ def serve (options : LeanNet.HTTP.CLI.Options) (certificate privateKey : String)
     ReactorServer.serveStaticRoot root tls
       { builder := { maxFileBytes := bytes, maxPackBytes := bytes }, residentBytes := bytes }
       http host port
-  else ReactorServer.serveFactory (fun _ => pure LeanNet.HTTP2.demoHandlers) tls http host port
+  else ReactorServer.serveFactory (fun _ => pure (LeanNet.HTTP2.demoHandlersWith http.websocketOrigin)) tls http host port
 
 end LeanNetTLS.CLI

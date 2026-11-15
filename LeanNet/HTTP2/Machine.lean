@@ -14,6 +14,10 @@ inductive Action where
   | requestStarted (streamId : UInt32) (head : HTTP1.RequestHead) (startedAt : Nat)
   | responseAborted (streamId : UInt32) (reason : HTTP.ResponseAbortReason)
   | request (event : RequestEvent)
+  | tunnelData (event : TunnelDataEvent)
+  | tunnelReset (streamId : UInt32)
+  /-- One complete bounded WebSocket frame, acknowledged at its wire fence. -/
+  | writeTunnel (streamId : UInt32) (ticket : Nat) (bytes : ByteArray)
   | drainClose
 
 private structure PingProbe where
@@ -201,6 +205,8 @@ private def outputStep (state : State) (connection : Connection) (output : Array
 private def connectionStep (state : State) (result : Connection.Step)
     (reason : HTTP.ResponseAbortReason := .error) : Step := Id.run do
   let state := state.acknowledgePings result.pingAcks
+  let tunnelActions : List Action := result.tunnelData.toList.map Action.tunnelData ++
+    result.tunnelResets.toList.map Action.tunnelReset
   let mut actions := writes result.output
   if state.config.trackOutput then
     match observedParts state.connection result.connection (result.output.map WirePart.bytes) 100 reason with
@@ -214,9 +220,43 @@ private def connectionStep (state : State) (result : Connection.Step)
     return {
       state := { state.clearKeepalive with connection := result.connection, closing := true }
       consumed := result.consumed
-      actions := actions ++ [.drainClose] }
-  return progress state result.connection result.output result.requests result.consumed
+      actions := actions ++ tunnelActions ++ [.drainClose] }
+  let step := progress state result.connection result.output result.requests result.consumed
     (if state.config.trackOutput then some actions else none)
+  return { step with actions := step.actions ++ tunnelActions }
+
+/-- Application response to a validated RFC8441 opening handshake. -/
+def State.acceptTunnel (state : State) (id : UInt32) (response : HTTP1.Response) : Step :=
+  match state.connection.acceptTunnel id response with
+  | .ok (connection, bytes) => outputStep state connection #[bytes] 200
+  | .error error => fatal state error
+
+def State.rejectTunnel (state : State) (id : UInt32) (response : HTTP1.Response) : Step :=
+  match state.connection.rejectTunnel id response with
+  | .ok (connection, bytes) => outputStep state connection #[bytes] response.status
+  | .error error => fatal state error
+
+def State.consumeTunnel (state : State) (id : UInt32) (count : Nat) : Step :=
+  match state.connection.consumeTunnel id count with
+  | .ok (connection, bytes) => outputStep state connection #[bytes]
+  | .error error => fatal state error
+
+def State.trySendTunnel (state : State) (id : UInt32) (ticket : Nat) (bytes : ByteArray) :
+    Except ProtocolError (Option Step) := do
+  match ← state.connection.trySendTunnel id bytes with
+  | none => return none
+  | some (connection, wire) =>
+    return some { state := { state with connection }, actions := [.writeTunnel id ticket wire] }
+
+def State.endTunnel (state : State) (id : UInt32) : Step :=
+  match state.connection.endTunnel id with
+  | .ok (connection, bytes) => outputStep state connection #[bytes]
+  | .error error => fatal state error
+
+def State.cancelTunnel (state : State) (id : UInt32) : Step :=
+  match state.connection.cancel id with
+  | .ok (connection, bytes) => outputStep state connection #[bytes] 0 .cancelled
+  | .error error => fatal state error
 
 def State.start (state : State) : Step :=
   if state.started || state.closing then { state }

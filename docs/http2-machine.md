@@ -2,7 +2,7 @@
 
 The native HTTP controller runs the pure `LeanNet.HTTP2.Machine` for both
 prior-knowledge cleartext HTTP/2 and TLS connections negotiated with ALPN `h2`.
-HTTP/1.1 Upgrade to h2c is not implemented. The machine owns protocol state,
+HTTP/1.1 Upgrade to h2c is available for bodyless cleartext requests. The machine owns protocol state,
 not sockets or timers; the reactor driver owns transport I/O and executes the
 application callbacks on its worker. Callbacks must not block. Each worker can
 construct its own handlers with `LeanNet.HTTP.ReactorServer.serveFactory`;
@@ -41,6 +41,17 @@ connection. Stream errors emit RST_STREAM; fatal connection errors emit GOAWAY.
 Requests are delivered after their bodies have been collected, so the request
 body and aggregate buffering limits matter even for applications that promptly
 respond. Outbound DATA waits for both peer flow-control windows.
+
+When `enableConnectProtocol` is set, SETTINGS advertises RFC 8441 extended
+CONNECT. A validated `:protocol = websocket` header is delivered before peer
+END_STREAM. `HTTP1.Handlers.onWebSocket` selects the application and its Origin
+policy. An accepted tunnel uses DATA for masked client WebSocket frames and
+unmasked server frames; the request `:scheme` must match the transport (`http`
+for cleartext, `https` for TLS). It retains per-stream receive credit until the codec
+consumes bytes. Outbound frames wait for both HTTP/2 flow-control windows and
+their physical completion before the codec advances. RST_STREAM and peer EOF
+release the tunnel. The public demo enables `/ws` only with
+`--websocket-origin ORIGIN`.
 
 ## Limits and scheduling
 

@@ -23,6 +23,7 @@ structure Options where
   health : Bool := false
   adminPort : Option Nat := none
   pinWorkers : Bool := false
+  websocketOrigin : Option String := none
   /-- TLS only: PEM CA bundle used to verify client certificates (mTLS). -/
   clientCA : Option System.FilePath := none
   requireClientCert : Bool := false
@@ -39,6 +40,12 @@ private def collect (args : List String) (options : Options) : Except String Opt
   | "--health" :: rest => collect rest { options with health := true }
   | "--pin-workers" :: rest => collect rest { options with pinWorkers := true }
   | "--require-client-cert" :: rest => collect rest { options with requireClientCert := true }
+  | "--websocket-origin" :: value :: rest =>
+    if options.websocketOrigin.isSome then .error "--websocket-origin may be supplied once"
+    else if value.isEmpty || value.startsWith "--" || value.any (fun c => c == '\x00' || c == '\r' || c == '\n') then
+      .error "--websocket-origin requires one exact Origin"
+    else collect rest { options with websocketOrigin := some value }
+  | "--websocket-origin" :: [] => .error "--websocket-origin requires one exact Origin"
   | "--host" :: address :: rest =>
     if options.host.isSome then .error "--host may be supplied once"
     else if address.isEmpty || address.startsWith "--" || address.any (· == '\x00') then .error "--host requires an address"
@@ -180,6 +187,7 @@ def Options.httpConfig (options : Options) : IO ReactorServerConfig := do
     server := { maxClients := options.maxClients }
     http2 := {
       enablePush := options.enablePush
+      enableConnectProtocol := options.websocketOrigin.isSome
       pingIntervalMs := options.pingIntervalMs.getD 0
       pingTimeoutMs := options.pingTimeoutMs.getD 10000 }
     metricsPath := if options.metrics then some "/metrics".toUTF8 else none
@@ -187,7 +195,8 @@ def Options.httpConfig (options : Options) : IO ReactorServerConfig := do
     securityHeaders := { enabled := options.securityHeaders }
     healthPaths := options.health
     adminPort := options.adminPort.map (·.toUInt16)
-    pinWorkers := options.pinWorkers }
+    pinWorkers := options.pinWorkers
+    websocketOrigin := options.websocketOrigin.map (·.toUTF8) }
 
 def Options.serve (options : Options) (host : String := "127.0.0.1")
     (port : UInt16 := 8080) : IO Unit := do

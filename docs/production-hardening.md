@@ -199,6 +199,17 @@ bundle. Add `--require-client-cert` to reject handshakes without one. The
 verified identity reaches handlers as `Request.clientCertificate`, with an
 RFC 2253 `subject` and typed `subjectAltNames` such as
 `URI:spiffe://...`. Unverified or absent certificates leave it `none`.
+The entries remain separate, including URI values containing commas. The
+verified subject and supported SAN text have a 64 KiB combined limit and at
+most 256 SAN entries. A certificate whose identity cannot be represented
+within these limits fails the handshake; applications never receive a
+truncated name. Authorize on the typed SAN entries, with an explicit policy
+for which types and trust anchors are accepted.
+`--websocket-origin ORIGIN` enables the demo `/ws` echo endpoint for exactly
+that Origin over HTTP/1.1 Upgrade and HTTP/2 extended CONNECT. Applications
+register their own WebSocket callbacks through `HTTP1.Handlers` and must choose
+their own Origin and authentication policy. Messages and frames have bounded
+input/output budgets; extension compression is not negotiated.
 `--ocsp-response DER` staples a pre-fetched OCSP response. It must be
 successful, GOOD and currently valid for the leaf, or startup and reload
 reject it. Refresh it by replacing the file and sending SIGHUP. TLS 1.2 is

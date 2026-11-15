@@ -5,6 +5,7 @@ error statuses, request-smuggling probes, health endpoints, secure default
 headers, access-log fields and W3C trace propagation.
 """
 import json
+import base64
 import os
 import re
 import resource
@@ -407,6 +408,38 @@ class H2CUpgrade(ServerCase):
                     sock.sendall(raw)
                     status, _, _ = read_response(sock)
                     self.assertIn(status, (200, 404))
+
+    def test_invalid_settings_values_do_not_switch_protocols(self):
+        # These values must have the same validation as a wire SETTINGS frame.
+        # In particular, setting 9 was previously omitted from the upgrade path.
+        for identifier, value in ((9, 2), (2, 2), (4, 0x80000000),
+                                  (5, 16383), (5, 16777216)):
+            with self.subTest(identifier=identifier, value=value):
+                payload = identifier.to_bytes(2, "big") + value.to_bytes(4, "big")
+                settings = base64.urlsafe_b64encode(payload).rstrip(b"=")
+                raw = (b"GET / HTTP/1.1\r\nHost: x\r\n"
+                       b"Connection: Upgrade, HTTP2-Settings\r\n"
+                       b"Upgrade: h2c\r\nHTTP2-Settings: " + settings + b"\r\n\r\n")
+                with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+                    sock.sendall(raw)
+                    status, _, body = read_response(sock)
+                    self.assertEqual(status, 200, "invalid settings must not produce 101")
+                    self.assertEqual(body, b"Hello from lean-net!\n")
+
+    def test_noncanonical_settings_header_does_not_switch_protocols(self):
+        # Empty SETTINGS frames remain valid HTTP/2, but the HTTP2-Settings
+        # header is a nonempty token68 and RFC 7540 omits all '=' padding.
+        for settings in (b"", b"====", self.SETTINGS + b"=", b"AAkAAAAB==",
+                         b"AB", b"AAB", b"!!!", b"AA+_"):
+            with self.subTest(settings=settings):
+                raw = (b"GET / HTTP/1.1\r\nHost: x\r\n"
+                       b"Connection: Upgrade, HTTP2-Settings\r\n"
+                       b"Upgrade: h2c\r\nHTTP2-Settings: " + settings + b"\r\n\r\n")
+                with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+                    sock.sendall(raw)
+                    status, _, body = read_response(sock)
+                    self.assertEqual(status, 200, "malformed header must not produce 101")
+                    self.assertEqual(body, b"Hello from lean-net!\n")
 
 
 @unittest.skipIf(sys.platform == "win32", "POSIX signals")

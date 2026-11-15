@@ -83,10 +83,12 @@ jobs:
           echo "PYTHONPATH=$RUNNER_TEMP/lean-net-http2-test-deps" >> "$GITHUB_ENV"
       - name: Build public TLS APIs and native fixtures
         run: |
-          lake build lean-net-http1 lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-observability-fixture lean-net-deferred-transport-fixture lean-net-keepalive-transport-fixture
+          lake build lean-net-http1 lean-net-platform-info lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-observability-fixture lean-net-process-metrics-test lean-net-deferred-transport-fixture lean-net-keepalive-transport-fixture
           lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture lean-net-tls-static-fixture lean-net-tls-reload-fixture lean-net-tls-worker-lifetime-test
       - name: Public CLI queue configuration
         run: lake env lean --run test/HTTPCLIOptionsTest.lean
+      - name: WebSocket HTTP/1 and HTTP/2 wire acceptance
+        run: lake env ${{ matrix.python }} test/test_websocket.py -v
       - name: Context ownership and policy sanitizers
         if: runner.os != 'Windows'
         run: ${{ matrix.python }} tls/test/test_tls_context_native.py -v
@@ -114,6 +116,8 @@ jobs:
       - name: Static files, validators, compression and file lifetimes
         run: lake env ${{ matrix.python }} test/test_static_files.py -v
       - name: Actual completion metrics and private access logs
-        run: lake env ${{ matrix.python }} test/test_observability.py -v
+        run: |
+          .lake/build/bin/lean-net-process-metrics-test
+          lake env ${{ matrix.python }} test/test_observability.py -v
       - name: Historical async completion before provider retirement
         run: lake env ${{ matrix.python }} test/test_deferred_transport.py -v

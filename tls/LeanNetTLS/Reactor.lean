@@ -334,7 +334,7 @@ private def Driver.poll (driver : Driver) : IO (Array HTTP.Transport.Event) := d
           | _ => throw (IO.userError "TLS negotiated an unknown application protocol")
         let (verified, subject, sans) ← FFI.Worker.peer driver.handle session.native
         let certificate : Option HTTP1.ClientCertificate := if verified == 1 then
-            some { subject, subjectAltNames := if sans.isEmpty then #[] else (sans.splitOn ",").toArray }
+            some { subject, subjectAltNames := sans }
           else none
         events := events.push (.ready { driver.endpoint id ready with clientCertificate := certificate } protocol)
       | 3 => events := events.push (.written id raw.operation (Errno.decode raw.result).toNat)

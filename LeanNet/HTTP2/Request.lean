@@ -11,6 +11,7 @@ structure RequestHead where
   target : ByteArray
   headers : Array HTTP1.Header
   contentLength : Option Nat
+  protocol : Option ByteArray := none
 
 private def tokenByte (b : UInt8) : Bool :=
   let n := b.toNat
@@ -66,11 +67,13 @@ private def decimal (value : ByteArray) (bound : Nat) : Except String Nat := do
   return n
 
 /-- Validate HTTP/2 request pseudo-fields and connection-specific restrictions. -/
-def validateRequestHead (fields : Array HPACK.Header) (maxBodyBytes : Nat := 1048576) : Except String RequestHead := do
+def validateRequestHead (fields : Array HPACK.Header) (maxBodyBytes : Nat := 1048576)
+    (enableConnectProtocol : Bool := false) : Except String RequestHead := do
   let mut method : Option ByteArray := none
   let mut scheme : Option ByteArray := none
   let mut path : Option ByteArray := none
   let mut authority : Option ByteArray := none
+  let mut protocol : Option ByteArray := none
   let mut regular := false
   let mut headers : Array HTTP1.Header := #[]
   let mut host : Option ByteArray := none
@@ -93,6 +96,11 @@ def validateRequestHead (fields : Array HPACK.Header) (maxBodyBytes : Nat := 104
       else if field.name == ":authority".toUTF8 then
         if authority.isSome then throw "duplicate :authority"
         authority := some field.value
+      else if field.name == ":protocol".toUTF8 then
+        if protocol.isSome then throw "duplicate :protocol"
+        if !enableConnectProtocol || field.value.isEmpty || !field.value.toList.all tokenByte then
+          throw "invalid or unadvertised :protocol"
+        protocol := some field.value
       else throw "unsupported request pseudo-field"
     else
       regular := true
@@ -134,8 +142,11 @@ def validateRequestHead (fields : Array HPACK.Header) (maxBodyBytes : Nat := 104
     else if !authorityBytes.isEmpty then
       headers := headers.push { name := "host", value := authorityBytes }
   if methodText == "CONNECT" then
-    if !validConnectAuthority authorityBytes || scheme.isSome || path.isSome then throw "invalid CONNECT pseudo-fields"
-    return { method := methodText, scheme := ByteArray.empty, authority := authorityBytes, target := authorityBytes, headers := headers, contentLength := length }
+    if protocol.isNone then
+      if !validConnectAuthority authorityBytes || scheme.isSome || path.isSome then throw "invalid CONNECT pseudo-fields"
+      return { method := methodText, scheme := ByteArray.empty, authority := authorityBytes, target := authorityBytes, headers := headers, contentLength := length }
+    if length.isSome then throw "extended CONNECT cannot declare content length"
+  else if protocol.isSome then throw ":protocol requires CONNECT"
   let some schemeBytes := scheme | throw "missing :scheme"
   let some pathBytes := path | throw "missing :path"
   if schemeBytes.isEmpty then throw "empty :scheme"
@@ -155,7 +166,7 @@ def validateRequestHead (fields : Array HPACK.Header) (maxBodyBytes : Nat := 104
   if !schemeBytes.toList.all (fun c => (c.toNat >= 97 && c.toNat <= 122) || (c.toNat >= 65 && c.toNat <= 90) ||
       (c.toNat >= 48 && c.toNat <= 57) || [43,45,46].contains c.toNat) then
     throw "invalid :scheme"
-  return { method := methodText, scheme := schemeBytes, authority := authorityBytes, target := pathBytes, headers := headers, contentLength := length }
+  return { method := methodText, scheme := schemeBytes, authority := authorityBytes, target := pathBytes, headers := headers, contentLength := length, protocol }
 
 /-- Validate trailing fields without merging them into the request headers. -/
 def validateTrailers (fields : Array HPACK.Header) : Except String (Array HTTP1.Header) := do

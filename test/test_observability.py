@@ -20,7 +20,7 @@ import tempfile
 import time
 import unittest
 
-from http2_test_support import H2Client, frame, window
+from http2_test_support import H2Client, PREFACE, frame, window
 from test_echo import unused_port
 from test_http1_reactor import Reader, resource_count
 
@@ -332,6 +332,38 @@ class ObservabilityWire(unittest.TestCase):
         _, records = server.wait(success=9, started=9, body_bytes=30, logs=9)
         self.assertTrue(all(r["protocol"] == "HTTP/2" for r in records))
         self.assertEqual(Counter(r["bytes_sent"] for r in records), {5: 6, 0: 3})
+
+    def test_h2c_upgrade_preserves_one_observation_after_prior_http11(self):
+        server = self.start(kind="plain")
+        with closing(server.connect()) as sock:
+            reader = Reader(sock)
+            sock.sendall(request(b"/binary.bin"))
+            self.assertEqual(reader.response().body, BINARY)
+            server.wait(success=1, started=1, logs=1)
+
+            sock.sendall(request(b"/binary.bin", headers=[
+                (b"Connection", b"Upgrade, HTTP2-Settings"),
+                (b"Upgrade", b"h2c"),
+                # Hold stream 1's DATA until the client advertises credit.
+                (b"HTTP2-Settings", b"AAQAAAAA")]))
+            self.assertEqual(reader.response().status, 101)
+            # The switching response has no final application result. Stream
+            # 1 can start immediately, but its zero peer window prevents its
+            # final DATA from completing this same request yet.
+            server.wait(success=1, started=2, active=1, logs=1)
+
+            client = H2Client(sock=sock, authority=b"alpha.test", handshake=False)
+            client.buffer.extend(reader.buffer)
+            reader.buffer.clear()
+            client.send(PREFACE + frame(4, 0, 0, struct.pack("!HI", 4, 65535)))
+            self.assertEqual(client.response(1), BINARY)
+            client.request(3, b"/binary.bin")
+            self.assertEqual(client.response(3), BINARY)
+            _, records = server.wait(success=3, started=3, body_bytes=15, logs=3)
+            self.assertEqual([r["status"] for r in records], [200, 200, 200])
+            self.assertEqual([r["protocol"] for r in records],
+                             ["HTTP/1.1", "HTTP/2", "HTTP/2"])
+            self.assertEqual([r["bytes_sent"] for r in records], [5, 5, 5])
 
     def test_http2_flow_blocked_response_is_not_completed_on_handler_return(self):
         server = self.start()
