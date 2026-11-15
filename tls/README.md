@@ -64,4 +64,4 @@ TLS-specific flags are `--client-ca PEM`, `--require-client-cert`, `--ocsp-respo
 
 ## License
 
-Apache-2.0. Copyright 2026 Aleksandar Dimov. See [LICENSE](../LICENSE) and [NOTICE](../NOTICE).
+[Apache-2.0](../LICENSE).

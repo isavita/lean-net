@@ -67,4 +67,4 @@ Run the focused suites in [test/README.md](test/README.md). The executable entry
 
 ## License
 
-Apache-2.0. Copyright 2026 Aleksandar Dimov. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+[Apache-2.0](LICENSE).
