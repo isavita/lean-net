@@ -26,7 +26,7 @@
       "body_hex": "48656c6c6f2066726f6d206c65616e2d6e6574210a",
       "metrics_path": "/metrics",
       "connections": 10,
-      "rps_per_client": 510,
+      "rps_per_client": 1020,
       "metrics": {
         "completed": {
           "name": "lean_net_successful_completed_requests_total"
@@ -66,7 +66,7 @@
       "body_hex": "48656c6c6f2066726f6d206c65616e2d6e6574210a",
       "metrics_path": "/metrics",
       "connections": 10,
-      "rps_per_client": 510,
+      "rps_per_client": 1020,
       "metrics": {
         "completed": {
           "name": "lean_net_successful_completed_requests_total"

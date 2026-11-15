@@ -6,18 +6,19 @@ import subprocess
 import sys
 import unittest
 
-from soak24 import ClockGuard, assess_sample, check_keepalive_progress, counter, loader_command, loader_completion_bounds, log_health, parse_load, sample_process_family, validate, DAY, LOG_HEALTH_METRICS, LOG_MAX_PENDING_RECORDS
+from soak24 import ClockGuard, assess_sample, assess_full_window, check_keepalive_progress, counter, loader_command, loader_completion_bounds, log_health, parse_load, sample_process_family, validate, DAY, LOG_HEALTH_METRICS, LOG_MAX_PENDING_RECORDS
 
 
 def config():
     return {'servers': [dict(name=name, scheme=scheme, binary='unused',
                             args=['{port}', '--http2-ping-ms', '10000', '--http2-ping-timeout-ms', '10000'], path='/', body_hex='00ff',
+                            connections=10, rps_per_client=1020,
                             metrics={key: {'name': key, 'labels': {'protocol': 'h2'}} for key in ('completed', 'errors', 'timeouts', 'resets')})
                         for name, scheme in [('plain', 'http'), ('tls', 'https')]]}
 
 
 def sample(time, completed, probes=0):
-    return {'monotonic': time, 'servers': [dict(name=name, counters={'completed': completed, 'errors': 0, 'timeouts': 0, 'resets': 0},
+    return {'monotonic': time, 'wall_epoch_seconds': time + 1000, 'servers': [dict(name=name, counters={'completed': completed, 'errors': 0, 'timeouts': 0, 'resets': 0},
                  log_health={'accepted': completed, 'written': completed - 1, 'dropped': 0, 'io_errors': 0, 'pending': 1},
                  keepalive={'received': int(time), 'acknowledged': int(time)},
                  probes_completed=probes, rss_bytes=10000, fds_or_handles=20,
@@ -66,10 +67,17 @@ class SoakAccounting(unittest.TestCase):
             with self.subTest(duration=duration), self.assertRaises(ValueError):
                 validate(value, None)
         self.assertEqual(validate(config(), 5)[0], 5)
-        for rate in [500, 510.1, True]:
+        for rate in [510, 1000, 1020.1, True]:
             value = config(); value['servers'][0]['rps_per_client'] = rate
             with self.subTest(rate=rate), self.assertRaises(ValueError):
                 validate(value, None)
+        # Keeping the aggregate offered rate20400 cannot excuse an underloaded
+        # instance. Each public server must independently offer10200.
+        asymmetric = config()
+        asymmetric['servers'][0]['rps_per_client'] = 1000
+        asymmetric['servers'][1]['rps_per_client'] = 1040
+        with self.assertRaisesRegex(ValueError, 'each server'):
+            validate(asymmetric, None)
         for argument in ('--reload-certs-ms', '--reload-certs-ms=25'):
             value = config(); value['servers'][1]['args'] += [argument, '25']
             with self.subTest(argument=argument), self.assertRaisesRegex(ValueError, 'certificate reload'):
@@ -90,8 +98,10 @@ class SoakAccounting(unittest.TestCase):
             with self.subTest(stalled=stalled), self.assertRaises(RuntimeError):
                 check_keepalive_progress(ready, stalled)
         before = sample(10, 1000)
-        after = sample(15, 26001, 1)
-        self.assertEqual(assess_sample(before, after, before)['successful_requests'], 50000)
+        after = sample(15, 51001, 1)
+        assessed = assess_sample(before, after, before)
+        self.assertEqual(assessed['aggregate_characterization']['successful_requests'], 100000)
+        self.assertEqual([row['achieved_rps'] for row in assessed['per_server_rates'].values()], [10000, 10000])
         after['servers'][0]['counters']['completed'] -= 1
         with self.assertRaisesRegex(RuntimeError, 'below 10,000'):
             assess_sample(before, after, before)
@@ -101,10 +111,68 @@ class SoakAccounting(unittest.TestCase):
         decreasing = sample(15, 999)
         with self.assertRaisesRegex(RuntimeError, 'decrease'):
             assess_sample(before, decreasing, before)
+        backwards = sample(15, 52000, -1)
+        with self.assertRaisesRegex(RuntimeError, 'conservation'):
+            assess_sample(before, backwards, before)
+
+    def test_one_slow_instance_cannot_hide_behind_aggregate(self):
+        before = sample(10, 1000)
+        after = sample(70, 1000)
+        after['servers'][0]['counters']['completed'] += 9900 * 60
+        after['servers'][1]['counters']['completed'] += 10500 * 60
+        self.assertGreater(sum(row['counters']['completed'] - 1000 for row in after['servers']) / 60, 20000)
+        with self.assertRaisesRegex(RuntimeError, 'below 10,000.*plain'):
+            assess_sample(before, after, before)
+        final = sample(10 + DAY, 1000)
+        final['servers'][0]['counters']['completed'] += 9900 * DAY
+        final['servers'][1]['counters']['completed'] += 10500 * DAY
+        characterized = assess_full_window(before, final, config()['servers'], False)
+        self.assertGreater(characterized['aggregate_characterization']['achieved_rps'], 20000)
+        self.assertFalse(characterized['all_server_rates_passed'])
+        self.assertFalse(characterized['per_server_throughput']['plain']['rate_passed'])
+        self.assertTrue(characterized['per_server_throughput']['tls']['rate_passed'])
+        with self.assertRaisesRegex(RuntimeError, 'below 10,000.*plain'):
+            assess_full_window(before, final, config()['servers'])
+
+    def test_full_window_uncertainty_and_probe_accounting_are_per_instance(self):
+        before = sample(10, 1000, 3)
+        final = sample(10 + DAY, 1000 + 10000 * DAY + 21400 + 120, 123)
+        rates = assess_full_window(before, final, config()['servers'])
+        self.assertTrue(rates['all_server_rates_passed'])
+        for row in rates['per_server_throughput'].values():
+            self.assertEqual(row['boundary_uncertainty_request_budget'], 21400)
+            self.assertEqual(row['achieved_rps'], 10000)
+        below = deepcopy(final); below['servers'][1]['counters']['completed'] -= 1
+        with self.assertRaisesRegex(RuntimeError, 'below 10,000.*tls'):
+            assess_full_window(before, below, config()['servers'])
+        slower_clock = deepcopy(final); slower_clock['wall_epoch_seconds'] += 1
+        with self.assertRaisesRegex(RuntimeError, 'below 10,000'):
+            assess_full_window(before, slower_clock, config()['servers'])
+        for field, value in [('wall_epoch_seconds', float('nan')), ('monotonic', float('inf')),
+                             ('wall_epoch_seconds', before['wall_epoch_seconds'])]:
+            invalid_clock = deepcopy(final); invalid_clock[field] = value
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(RuntimeError, 'nonpositive/nonfinite'):
+                assess_full_window(before, invalid_clock, config()['servers'])
+        # Different connection counts get their own in-flight budget; the
+        # faster companion's rate/credits never change another instance's gate.
+        servers = config()['servers']; servers[1].update(connections=20, rps_per_client=510)
+        characterized = assess_full_window(before, final, servers, False)
+        self.assertEqual(characterized['per_server_throughput']['plain']['boundary_uncertainty_request_budget'], 21400)
+        self.assertEqual(characterized['per_server_throughput']['tls']['boundary_uncertainty_request_budget'], 22400)
+        self.assertFalse(characterized['per_server_throughput']['tls']['rate_passed'])
+        smoke = assess_full_window(sample(10, 1000), sample(70, 1000 + 10200 * 60), config()['servers'], False)
+        self.assertLess(smoke['per_server_throughput']['plain']['achieved_rps'], 10000)
+        self.assertFalse(smoke['all_server_rates_passed'])
+        backwards = deepcopy(final); backwards['servers'][0]['probes_completed'] = 2
+        with self.assertRaisesRegex(RuntimeError, 'conservation'):
+            assess_full_window(before, backwards, config()['servers'])
+        missing = deepcopy(final); missing['servers'].pop()
+        with self.assertRaisesRegex(RuntimeError, 'identity/order'):
+            assess_full_window(before, missing, config()['servers'])
 
     def test_strict_rss_flat_descriptors_and_zero_resets(self):
         before = sample(10, 1000)
-        after = sample(15, 26500)
+        after = sample(15, 52000)
         for field, value, reason in [('rss_bytes', 10100, '1%'), ('fds_or_handles', 21, 'FD')]:
             bad = deepcopy(after); bad['servers'][1][field] = value
             with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, reason):
@@ -114,7 +182,7 @@ class SoakAccounting(unittest.TestCase):
             with self.subTest(kind=kind), self.assertRaisesRegex(RuntimeError, 'request error or connection reset'):
                 assess_sample(before, bad, before)
         after['servers'][1]['rss_bytes'] = 10099
-        self.assertGreater(assess_sample(before, after, before)['achieved_rps'], 10000)
+        self.assertGreater(assess_sample(before, after, before)['per_server_rates']['tls']['achieved_rps'], 10000)
         for key in ('dropped', 'io_errors'):
             for position in ('baseline', 'measured'):
                 first, last = deepcopy(before), deepcopy(after)
@@ -131,7 +199,7 @@ class SoakAccounting(unittest.TestCase):
 
     def test_process_family_identity_and_helper_descriptor_leak(self):
         before = sample(10, 1000)
-        after = sample(15, 26500)
+        after = sample(15, 52000)
         added = deepcopy(after)
         added['servers'][0]['family'].append({'pid': 999, 'parent_pid': 10, 'start_identity': 'new', 'rss_bytes': 1, 'fds_or_handles': 0})
         with self.assertRaisesRegex(RuntimeError, 'family identity'):
@@ -199,22 +267,22 @@ traffic: 1MB (1000000) total, 1KB (1000) headers, 20KB (20000) data
         self.assertTrue(parse_load(text, 2)['valid'])
         self.assertTrue(parse_load(text, 2, 10000)['valid'])
         self.assertFalse(parse_load(text, 2, 10001)['valid'])
-        server = dict(name='tls', scheme='https', authority='alpha.test', port=443, path='/binary', connections=10, rps_per_client=510)
+        server = dict(name='tls', scheme='https', authority='alpha.test', port=443, path='/binary', connections=10, rps_per_client=1020)
         command, plan = loader_command('/snapshot/h2load', server, 300, DAY, 30)
-        self.assertEqual(plan['planned_requests'], 442374000)
+        self.assertEqual(plan['planned_requests'], 884748000)
         self.assertEqual(command[command.index('-n') + 1], str(plan['planned_requests']))
-        self.assertIn('--rps=510', command)
+        self.assertIn('--rps=1020', command)
         self.assertNotIn('-D', command)
         self.assertNotIn('--duration', command)
         self.assertLess(plan['planned_requests'], 2**32)
         bound = loader_completion_bounds([dict(server, name='plain'), server], [plan, plan])
-        self.assertEqual(bound['loaders'][0]['minimum_feasible_rps'], 4900)
-        self.assertEqual(bound['deadline_seconds_from_load_start'], 442374000 / 4900 + 30)
-        self.assertAlmostEqual(bound['loaders'][0]['maximum_extra_seconds_over_nominal'], 3570.4081632653106)
-        asymmetric = loader_completion_bounds([dict(server, rps_per_client=500), dict(server, rps_per_client=520)], [plan, plan])
-        self.assertEqual([row['minimum_feasible_rps'] for row in asymmetric['loaders']], [4800, 5000])
+        self.assertEqual([row['minimum_feasible_rps'] for row in bound['loaders']], [10000, 10000])
+        self.assertAlmostEqual(bound['deadline_seconds_from_load_start'], 88504.8)
+        self.assertAlmostEqual(bound['loaders'][0]['maximum_extra_seconds_over_nominal'], 1764.8)
+        asymmetric = loader_completion_bounds([server, dict(server, rps_per_client=1040)], [plan, plan])
+        self.assertEqual([row['minimum_feasible_rps'] for row in asymmetric['loaders']], [10000, 10000])
         with self.assertRaisesRegex(ValueError, 'minimum feasible'):
-            loader_completion_bounds([dict(server, connections=1, rps_per_client=100), dict(server, connections=1, rps_per_client=10100)], [plan, plan])
+            loader_completion_bounds([dict(server, connections=1, rps_per_client=100), server], [plan, plan])
         with self.assertRaisesRegex(ValueError, '64-bit'):
             loader_command('/snapshot/h2load', server, 300, 2**64, 30)
         for bad in [text.replace('(20000) data', '(19999) data'), text.replace('0 failed', '1 failed'),

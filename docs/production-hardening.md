@@ -3,6 +3,8 @@
 The public plain and TLS servers share optional metrics, structured access
 logging, worker limits and graceful shutdown. Phase 6 acceptance, including
 the actual 24-hour soak, is tracked in the [acceptance ledger](production-roadmap.md).
+The soak requires each tested public server instance to sustain at least
+10,000 successful requests/s independently, with metrics and logging enabled.
 
 ```sh
 .lake/build/bin/lean-net-http1 8080 --workers 8 --max-clients 128 \

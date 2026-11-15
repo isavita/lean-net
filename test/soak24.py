@@ -31,8 +31,9 @@ sys.path.insert(0, str(ROOT / "tls/test"))
 from tls_test_support import create_certificates, NAMES, openssl_binary
 
 DAY = 86400
-FLOOR_RPS = 10000
-OFFERED_RPS = 10200
+# These are per public server instance, never a shared plain+TLS budget.
+FLOOR_RPS_PER_SERVER = 10000
+OFFERED_RPS_PER_SERVER = 10200
 LOG_HEALTH_METRICS = {
     'accepted': 'lean_net_access_log_accepted_total',
     'written': 'lean_net_access_log_written_total',
@@ -166,7 +167,7 @@ def parse_load(text, expected_size, planned_requests=None):
 def loader_command(binary, server, warmup, duration, tail):
     """Finite requests let final active streams finish instead of canceling."""
     pacing_seconds = math.ceil(warmup + duration + tail + 10)
-    connections, rps = server.get('connections', 10), server.get('rps_per_client', 510)
+    connections, rps = server.get('connections', 10), server.get('rps_per_client', 1020)
     requests = pacing_seconds * connections * rps
     if not 0 < requests <= 2**64 - 1:
         raise ValueError('planned h2load request count exceeds unsigned 64-bit range')
@@ -181,20 +182,19 @@ def loader_command(binary, server, warmup, duration, tail):
 def loader_completion_bounds(servers, plans):
     if len(servers) != len(plans):
         raise ValueError('loader completion plan count mismatch')
-    offered = [server.get('connections', 10) * server.get('rps_per_client', 510) for server in servers]
+    offered = [server.get('connections', 10) * server.get('rps_per_client', 1020) for server in servers]
     rows = []
     for server, plan, rate in zip(servers, plans, offered):
-        other_offered = sum(offered) - rate
-        minimum = FLOOR_RPS - other_offered
-        if minimum <= 0:
-            raise ValueError('offered split lacks a positive minimum feasible per-loader completion rate')
+        minimum = FLOOR_RPS_PER_SERVER
+        if rate < minimum:
+            raise ValueError('offered rate is below the per-instance minimum feasible completion rate')
         deadline = plan['planned_requests'] / minimum + 30
-        rows.append({'name': server['name'], 'offered_rps': rate, 'other_loaders_offered_rps': other_offered,
+        rows.append({'name': server['name'], 'offered_rps': rate,
                      'minimum_feasible_rps': minimum, 'planned_requests': plan['planned_requests'],
                      'nominal_pacing_seconds': plan['planned_pacing_seconds'],
                      'deadline_seconds_from_load_start': deadline,
                      'maximum_extra_seconds_over_nominal': deadline - plan['planned_pacing_seconds']})
-    return {'formula': 'minimum_feasible_rps = required aggregate floor - other loaders offered RPS; deadline = max(planned requests / minimum feasible RPS +30 seconds)',
+    return {'formula': 'each loader minimum_feasible_rps = own required 10000 RPS; deadline = max(each planned requests /10000 +30 seconds)',
             'measured_window_and_rate_gate_unchanged': True, 'loaders': rows,
             'deadline_seconds_from_load_start': max(row['deadline_seconds_from_load_start'] for row in rows)}
 
@@ -514,7 +514,6 @@ def validate(config, smoke):
     sample = float(config.get('sample_seconds', 60))
     if not all(math.isfinite(v) for v in (duration, warmup, tail, sample)) or duration <= 0 or (smoke is None and duration < DAY) or warmup < 1 or tail < 10 or not 60 <= sample <= 300:
         raise ValueError('invalid duration/warmup/tail/sample bounds; short runs require explicit --smoke-seconds')
-    aggregate = 0
     for server in servers:
         for field in ('name', 'binary', 'args', 'path', 'body_hex', 'metrics'):
             if field not in server:
@@ -526,7 +525,7 @@ def validate(config, smoke):
         for selector in server['metrics'].values():
             if not re.fullmatch(r'[a-zA-Z_:][a-zA-Z0-9_:]*', selector['name']):
                 raise ValueError('invalid metric selector')
-        connections = server.get('connections', 10); rps = server.get('rps_per_client', 510)
+        connections = server.get('connections', 10); rps = server.get('rps_per_client', 1020)
         if type(connections) is not int or type(rps) is not int:
             raise ValueError('loader rate and connection count must be exact integers')
         if not isinstance(server['args'], list) or not all(isinstance(value, str) for value in server['args']):
@@ -536,22 +535,19 @@ def validate(config, smoke):
             raise ValueError('periodic certificate reload must be disabled during the strict soak')
         if not 1 <= connections <= 1000 or not 1 <= rps <= 100000:
             raise ValueError('invalid loader request/connection rate')
-        aggregate += connections * rps
-    if aggregate != OFFERED_RPS:
-        raise ValueError('predeclared offered aggregate must be exactly 10,200 RPS')
-    for server in servers:
-        rate = server.get('connections', 10) * server.get('rps_per_client', 510)
-        if FLOOR_RPS - (aggregate - rate) <= 0:
-            raise ValueError('offered split lacks a positive minimum feasible per-loader completion rate')
+        if connections * rps != OFFERED_RPS_PER_SERVER:
+            raise ValueError('each server must offer exactly 10,200 RPS: ' + server['name'])
     return duration, warmup, tail, sample
 
 
 def assess_sample(previous, current, baseline, require_rate=True):
     completed = 0
+    per_server = {}
     elapsed = current['monotonic'] - previous['monotonic']
-    if elapsed <= 0:
+    if not math.isfinite(elapsed) or elapsed <= 0:
         raise RuntimeError('nonpositive sample duration')
-    if [row['name'] for row in previous['servers']] != [row['name'] for row in current['servers']]:
+    names = [row['name'] for row in current['servers']]
+    if not names or len(set(names)) != len(names) or names != [row['name'] for row in previous['servers']] or names != [row['name'] for row in baseline['servers']]:
         raise RuntimeError('resource sample server identity/order changed')
     for before, row, first in zip(previous['servers'], current['servers'], baseline['servers']):
         check_keepalive_progress(None, first['keepalive'])
@@ -575,17 +571,70 @@ def assess_sample(previous, current, baseline, require_rate=True):
                 raise RuntimeError('counter reset/decrease during measurement')
         if row['counters']['errors'] != first['counters']['errors'] or row['counters']['timeouts'] != first['counters']['timeouts'] or row['counters']['resets'] != first['counters']['resets']:
             raise RuntimeError('request error or connection reset during measured window')
-        count = row['counters']['completed'] - before['counters']['completed'] - (row['probes_completed'] - before['probes_completed'])
-        if count < 0:
+        probes = row['probes_completed'] - before['probes_completed']
+        count = row['counters']['completed'] - before['counters']['completed'] - probes
+        if count < 0 or probes < 0:
             raise RuntimeError('completion/probe counters violate conservation')
+        rate = count / elapsed
+        if require_rate and rate < FLOOR_RPS_PER_SERVER:
+            raise RuntimeError('achieved successful request rate fell below 10,000 RPS for server ' + row['name'])
+        per_server[row['name']] = {'successful_requests': count, 'achieved_rps': rate,
+                                   'required_achieved_rps': FLOOR_RPS_PER_SERVER}
         completed += count
         if first['rss_bytes'] <= 0 or row['rss_bytes'] * 100 >= first['rss_bytes'] * 101:
             raise RuntimeError('RSS growth reached/exceeded strict 1% limit')
         if row['fds_or_handles'] > first['fds_or_handles']:
             raise RuntimeError('FD/handle count increased during steady persistent load')
-    if require_rate and completed / elapsed < FLOOR_RPS:
-        raise RuntimeError('achieved successful request rate fell below 10,000 RPS in sample interval')
-    return {'successful_requests': completed, 'seconds': elapsed, 'achieved_rps': completed / elapsed}
+    return {'per_server_rates': per_server, 'seconds': elapsed,
+            'aggregate_characterization': {'successful_requests': completed, 'achieved_rps': completed / elapsed,
+                                           'derived_floor_rps': len(per_server) * FLOOR_RPS_PER_SERVER}}
+
+
+def assess_full_window(baseline, final, servers, require_rate=True):
+    """Charge publication/in-flight uncertainty once per instance, not per sample."""
+    names = [server['name'] for server in servers]
+    if not names or len(set(names)) != len(names) or names != [row['name'] for row in baseline['servers']] or names != [row['name'] for row in final['servers']]:
+        raise RuntimeError('full-window server identity/order changed')
+    measured = final['monotonic'] - baseline['monotonic']
+    wall = final['wall_epoch_seconds'] - baseline['wall_epoch_seconds']
+    if not all(math.isfinite(value) and value > 0 for value in (measured, wall)):
+        raise RuntimeError('nonpositive/nonfinite full-window duration')
+    seconds = max(measured, wall)
+    per_server = {}
+    for server, first, row in zip(servers, baseline['servers'], final['servers']):
+        probes = row['probes_completed'] - first['probes_completed']
+        delta = row['counters']['completed'] - first['counters']['completed']
+        if probes < 0 or delta < 0 or delta < probes:
+            raise RuntimeError('full-window completion/probe counters violate conservation')
+        successful = delta - probes
+        connections = int(server.get('connections', 10))
+        offered = connections * int(server.get('rps_per_client', 1020))
+        uncertainty = 2 * offered + connections * 100
+        conservative = max(0, successful - uncertainty)
+        per_server[server['name']] = {
+            'successful_load_requests_counter_delta_minus_probes': successful,
+            'achieved_rps_from_counter_delta': successful / seconds,
+            'offered_rps': offered, 'required_achieved_rps': FLOOR_RPS_PER_SERVER,
+            'boundary_uncertainty_request_budget': uncertainty,
+            'successful_load_requests_conservative': conservative,
+            'achieved_rps': conservative / seconds,
+            'rate_passed': conservative >= FLOOR_RPS_PER_SERVER * seconds}
+    passed = all(row['rate_passed'] for row in per_server.values())
+    if require_rate and not passed:
+        failed = ', '.join(name for name, row in per_server.items() if not row['rate_passed'])
+        raise RuntimeError('conservative successful request rate fell below 10,000 RPS for server ' + failed)
+    successful = sum(row['successful_load_requests_counter_delta_minus_probes'] for row in per_server.values())
+    conservative = sum(row['successful_load_requests_conservative'] for row in per_server.values())
+    return {'measured_seconds': measured, 'wall_measured_seconds': wall,
+            'rate_denominator_seconds': seconds, 'per_server_throughput': per_server,
+            'all_server_rates_passed': passed,
+            'aggregate_characterization': {
+                'successful_load_requests_counter_delta_minus_probes': successful,
+                'achieved_rps_from_counter_delta': successful / seconds,
+                'successful_load_requests_conservative': conservative,
+                'achieved_rps': conservative / seconds,
+                'derived_floor_rps': len(per_server) * FLOOR_RPS_PER_SERVER,
+                'acceptance_scope': 'characterization only; each instance must pass independently'}}
 
 
 def run(args):
@@ -609,7 +658,11 @@ def run(args):
     report = {'started_utc': utc(), 'source_sha': source_sha, 'source_dirty': dirty,
               'profile': 'smoke' if args.smoke_seconds is not None else 'full24h',
               'measured_duration_required': duration, 'warmup_seconds': warmup, 'tail_seconds': tail,
-              'offered_aggregate_rps': OFFERED_RPS, 'required_achieved_rps': FLOOR_RPS,
+              'sample_interval_seconds': interval,
+              'offered_rps_per_server': OFFERED_RPS_PER_SERVER, 'required_achieved_rps_per_server': FLOOR_RPS_PER_SERVER,
+              'offered_aggregate_rps': len(config['servers']) * OFFERED_RPS_PER_SERVER,
+              'derived_aggregate_floor_rps': len(config['servers']) * FLOOR_RPS_PER_SERVER,
+              'throughput_acceptance_scope': 'each public server instance independently; aggregate is characterization only',
               'rss_growth_must_be_less_than_percent': 1, 'fd_growth_allowed': 0,
               'resource_scope': 'whole server process family; root and every descendant, including log-writer helper; RSS sums intentionally retain shared-map double charges',
               'certificate_reload_during_measurement': False,
@@ -617,7 +670,7 @@ def run(args):
               'counter_publication_max_lag_seconds': 1,
               'access_log_health_metrics': LOG_HEALTH_METRICS,
               'access_log_health_policy': 'Dropped and I/O-error counters must be zero, including baseline. Accepted/written counters cannot decrease. Transient pending records are allowed within native queue bounds; no equality or zero-pending assertion is made while traffic is active or after metrics shutdown. Helper draining/join is covered by bounded shutdown and separate native tests.',
-              'measurement_boundary_note': 'Published counter snapshots are at most1s old. Raw counter differences are exact; their alignment with monotonic measurement boundaries has up to1s publication uncertainty. The final conservative rate subtracts two full offered-rate seconds plus all possible in-flight requests.',
+              'measurement_boundary_note': 'Each sample independently requires 10000 completed-minus-probes RPS per server. Published snapshots may lag 1s; each final full-window conservative rate deducts two own offered-rate seconds plus own possible in-flight requests ONCE (21400 for 10 connections at 1020 RPS/client). No aggregate can compensate for an instance shortfall.',
               'passed': False, 'smoke_completed': False, 'servers': [], 'loaders': [],
               'h2load_binary_sha256': digest(h2load),
               'helper_source_sha256': {name: digest(ROOT / name) for name in ('c/access_log.c', 'c/access_log_helper.c')},
@@ -782,21 +835,10 @@ def run(args):
         guard = sample('publication_guard')
         assess_sample(current, guard, baseline, False)
         report['counter_publication_guard'] = guard
-        measured_seconds = current['monotonic'] - baseline['monotonic']
-        wall_measured_seconds = current['wall_epoch_seconds'] - baseline['wall_epoch_seconds']
-        rate_seconds = max(measured_seconds, wall_measured_seconds)
-        successful = sum(row['counters']['completed'] - first['counters']['completed'] - (row['probes_completed'] - first['probes_completed'])
-                         for first, row in zip(baseline['servers'], current['servers']))
-        uncertainty = 2 * OFFERED_RPS + sum(int(server.get('connections', 10)) * 100 for server in report['servers'])
-        conservative_successful = max(0, successful - uncertainty)
-        report.update({'measured_seconds': measured_seconds, 'successful_load_requests_counter_delta_minus_probes': successful,
-                       'wall_measured_seconds': wall_measured_seconds,
-                       'rate_denominator_seconds': rate_seconds,
-                       'achieved_rps_from_counter_delta': successful / rate_seconds,
-                       'boundary_uncertainty_request_budget': uncertainty,
-                       'successful_load_requests_conservative': conservative_successful,
-                       'achieved_rps': conservative_successful / rate_seconds})
+        report.update(assess_full_window(baseline, current, report['servers'], False))
         persist()
+        if args.smoke_seconds is None and not report['all_server_rates_passed']:
+            raise RuntimeError('full-window conservative per-instance 10,000 RPS floor failed')
         wait_deadline = load_start + report['loader_completion_bound']['deadline_seconds_from_load_start']
         while any(p.poll() is None for p in loaders):
             clock_guard.check(time.time(), time.monotonic())
@@ -817,7 +859,7 @@ def run(args):
             if digest(server['binary']) != server['binary_sha256']:
                 raise RuntimeError('immutable binary snapshot changed')
         report['smoke_completed'] = args.smoke_seconds is not None
-        report['passed'] = args.smoke_seconds is None and measured_seconds >= DAY and report['achieved_rps'] >= FLOOR_RPS
+        report['passed'] = args.smoke_seconds is None and report['measured_seconds'] >= DAY and report['all_server_rates_passed']
     except BaseException as error:
         failure = error; report['failure'] = repr(error)
     finally:

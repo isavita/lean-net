@@ -114,25 +114,28 @@ tests do not establish full-duration soak acceptance.
 The installed `h2load nghttp2/1.71.0 --help` was inspected before selecting the
 workload: `--rate` creates connections, while `--rps` specifies requests per
 second **per client**. Defaults are two loaders (plain h2c and TLS h2), each with
-10 persistent connections and 510 RPS per connection: **10,200 offered aggregate
-RPS**, with an unchanged **10,000 achieved-successful-RPS floor**.
+10 persistent connections and 1,020 RPS per connection: **10,200 offered RPS
+per server instance**. Each instance must independently achieve **10,000
+successful RPS**. Both transports are exercised at this server-level workload;
+their 20,400 offered aggregate RPS is a host characterization figure. Adding
+two lower-rate instances cannot satisfy either instance's acceptance gate.
 
 Each loader uses finite count mode: `-n` is
 `ceil(warmup + measured duration + tail + 10) * connections * RPS per client`,
-or **442,374,000 requests per server** for the default full profile. The report
-records this exact plan and command. Rate control stays `--rps=510`; after the
+or **884,748,000 requests per server** for the default full profile. The report
+records this exact plan and command. Rate control stays `--rps=1020`; after the
 measured window, all planned requests must finish naturally. Duration mode
 `-D` is excluded because it can cancel active streams at its cutoff. Summary
 validation requires `total == started == done == succeeded == planned` with
 zero failed/errored/timed-out requests; canceled requests receive no tolerance.
 
 The bounded completion phase allows pacing asymmetry without changing the
-24-hour measured window or its 10,000 RPS floor. For each loader, the minimum
-feasible rate is `10,000 - sum(other loaders' offered RPS)`, which must be
-positive. Its deadline from common load start is `planned requests / minimum
-feasible rate + 30 seconds`; the controller uses the maximum of those bounds.
-The symmetric default gives 4,900 RPS, a 90,310.408-second deadline and at most
-3,570.408 seconds beyond nominal pacing. The report records the formula,
+24-hour measured window or either instance's 10,000 RPS floor. Each loader's
+deadline from common load start is `its planned requests / 10,000 + 30 seconds`;
+one server's spare throughput gives another no extra allowance. The controller
+uses the maximum of these independently derived bounds. The default gives an
+88,504.8-second deadline and at most 1,764.8 seconds beyond nominal pacing
+(86,740 seconds). The report records the formula,
 rates, nominal spans and extra allowances. Persistent probes, clock-gap checks
 and log-health checks continue while loaders drain. All measured resource,
 reset, throughput and exact-summary gates remain unchanged.
@@ -144,7 +147,7 @@ caps request statistics at 1,000,000 samples for the single loader thread.
 The [request counters](https://github.com/nghttp2/nghttp2/blob/v1.71.0/src/h2load.h#L250-L269)
 use `size_t`; the default planned count fits even 32 bits, and the controller
 rejects plans beyond unsigned 64-bit range. No per-request array proportional
-to the 442 million requests is allocated. The harness disables per-request log files
+to the 884 million requests is allocated. The harness disables per-request log files
 and raw-sample JSON dumps. Each loader emits only its normal bounded summary.
 Access logs should target `{null}` during this performance observation; separate
 real-file acceptance tests must establish structured-log content and lifetime.
@@ -223,10 +226,14 @@ subtracted from measured completion deltas. Error, timeout or reset increases
 fail immediately. Counter decreases or missing/noninteger samples fail.
 
 Published metrics may be up to one second old. The harness records this
-boundary uncertainty; it evaluates rate in 60-second intervals, then computes
-a conservative full-window rate after subtracting two entire offered-rate
-seconds plus the maximum outstanding load streams. The strict achieved floor
-remains 10,000 RPS. A two-second publication guard while load continues catches
+boundary uncertainty. Every 60-second interval independently requires at least
+10,000 successful RPS from each server, using completed-request deltas after
+subtracting that server's body probes. The final full-window assessment then
+subtracts each instance's own boundary uncertainty once: two entire offered-rate
+seconds plus its maximum outstanding load streams, or **21,400 requests per
+instance**. Each conservative full-window rate must still reach 10,000 RPS;
+an aggregate rate cannot mask a slow server. This full-window deduction is not
+repeated in every 60-second interval. A two-second publication guard while load continues catches
 late-published errors/resets from the final measured second. Loader summaries
 independently require every started request to succeed, all statuses to be
 2xx, zero errors/timeouts, and exactly the expected aggregate body bytes.
@@ -246,7 +253,7 @@ after metrics shutdown. Separate native tests verify helper draining and join.
 
 Every measured whole-family RSS sample must stay **strictly below 1% growth** from the
 post-warmup baseline; numeric descriptors/handles may not exceed baseline.
-Early exits, log overflow, rate shortfall, body mismatches and bounded-shutdown
+Early exits, log overflow, either instance's rate shortfall, body mismatches and bounded-shutdown
 failures produce failed reports. Successful server shutdown consumes GOAWAY
 and TLS close_notify on the independent sessions before releasing them.
 

@@ -31,8 +31,10 @@ coverage, not evidence that the new architecture or performance gates pass.
 - One route served by curl --http1.0, --http1.1,
   --http2-prior-knowledge, and --http2 over verified TLS/ALPN.
 - testssl.sh/sslyze security assessment meeting the requested A-grade gate.
-- Actual 24-hour soak at 10k requests/s: under 1% RSS growth, flat descriptor
-  count, zero connection resets. A short run cannot satisfy this gate.
+- Actual 24-hour soak at 10k successful requests/s from a server instance:
+  under 1% RSS growth, flat descriptor count, zero connection resets. The
+  acceptance profile exercises plain and TLS instances at that rate
+  independently. A short run cannot satisfy this gate.
 - Random-input parser fuzzing without panic, unbounded memory, or nontermination.
 - Server push behind --enable-push and off by default; RFC 9218 priorities honored.
 - No Std.Async in accept/read/write and no undeclared native FFI symbols.
