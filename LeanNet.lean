@@ -36,6 +36,7 @@ import LeanNet.WebSocket.Connection
 import LeanNet.WebSocket.Handshake
 import LeanNet.WebSocket.Application
 import LeanNet.WebSocket.Server
+import LeanNet.Proxy.Admission
 import LeanNet.HTTP.Static
 import LeanNet.HTTP.Observability
 
