@@ -15,8 +15,11 @@ tls/.lake/build/bin/lean-net-tls chain.pem key.pem 8443 \
   --reload-certs-ms 1000 --http2-ping-ms 10000 --http2-ping-timeout-ms 10000
 ```
 
-Both commands also accept `--static DIRECTORY`, `--static-memory MIB` and
-`--enable-push`. `--workers 0` selects the active CPU count; the global client
+Both commands also accept `--static DIRECTORY`, `--static-memory MIB`,
+`--enable-push`, `--host ADDR` (default `127.0.0.1`; use `0.0.0.0` or `::`
+to serve external clients), `--health`, `--admin-port PORT`,
+`--pin-workers` and `--no-security-headers`. The TLS server adds
+`--client-ca PEM`, `--require-client-cert` and `--ocsp-response DER`. `--workers 0` selects the active CPU count; the global client
 limit is divided across workers. Keep `lean-net-access-log-helper` (with `.exe`
 on Windows) beside each installed server, or pass its absolute path with
 `--log-helper`. Lake builds the helper with the public executable.
@@ -134,3 +137,77 @@ requests, status, SNI bundles and certificate-storage assumptions.
 Build and run the focused tests listed in
 [production validation](../test/production-hardening.md). Short wire, fuzz and
 resource tests have separate evidence from the required full-duration soak.
+
+## Signals
+
+SIGINT and SIGTERM both start the graceful drain described above, so
+orchestrators that send SIGTERM (Kubernetes, systemd) drain instead of
+killing in-flight requests. SIGHUP never terminates the server. It runs
+`ReactorServerConfig.onReload` on worker 0's loop. The TLS server uses it to
+request a certificate reload, so a SIGHUP republishes the certificates, keys,
+OCSP responses and client CA, with or without `--reload-certs-ms`.
+Applications can use the hook to swap routing tables or rate limits held in
+thread-safe references. It must not block. Windows has no SIGHUP; use
+`--reload-certs-ms` or `Bundle.requestReload` there.
+
+## Descriptor exhaustion
+
+When `accept` fails with `EMFILE`, `ENFILE`, `ENOBUFS` or `ENOMEM`, the
+listener pauses for 100 ms instead of failing the worker. Queued
+connections wait in the kernel backlog. Size `ulimit -n` to cover
+`--max-clients` plus listeners, static files and the log helper.
+
+## Health, admin and process metrics
+
+`--health` serves `/healthz` (liveness, always 200) and `/readyz`
+(readiness, 503 once draining starts) on the public listener. Like
+`/metrics`, these bypass application callbacks and are excluded from
+request metrics and access logs. `--admin-port PORT` binds a separate
+loopback-only listener on a dedicated control thread. It serves `/stats`
+(JSON: workers, uptime, draining, resident memory, open descriptors,
+connection and request totals), `/metrics`, `/healthz` and `/readyz`. Both
+metrics endpoints include `lean_net_process_resident_memory_bytes`,
+`lean_net_process_open_fds` and, on TLS, `lean_net_tls_handshakes_total`,
+`lean_net_tls_resumed_handshakes_total` and
+`lean_net_tls_client_certificates_total`.
+
+## Security headers
+
+Application responses without these headers get secure defaults:
+`x-content-type-options: nosniff`, `x-frame-options: SAMEORIGIN`,
+`content-security-policy: default-src 'self'; frame-ancestors 'self';
+object-src 'none'; base-uri 'self'` and
+`referrer-policy: strict-origin-when-cross-origin`. TLS responses also get
+`strict-transport-security: max-age=31536000; includeSubDomains`. An
+application-supplied header always wins. Configure
+`ReactorServerConfig.securityHeaders` or disable the defaults with
+`--no-security-headers`.
+
+## Tracing and access-log fields
+
+Every application request carries a W3C `traceparent`. A valid incoming
+value is kept. Otherwise a new trace is generated and injected into the
+request headers, so handlers can forward it to downstream calls
+(`ReactorServerConfig.tracing`). Access records add `timestamp` (RFC 3339
+UTC), `remote_ip`, `path` (sanitized, no query), `duration_ms` and
+`trace_id` to the existing fields.
+
+## Mutual TLS and OCSP stapling
+
+`--client-ca PEM` asks clients for a certificate and verifies it against the
+bundle. Add `--require-client-cert` to reject handshakes without one. The
+verified identity reaches handlers as `Request.clientCertificate`, with an
+RFC 2253 `subject` and typed `subjectAltNames` such as
+`URI:spiffe://...`. Unverified or absent certificates leave it `none`.
+`--ocsp-response DER` staples a pre-fetched OCSP response. It must be
+successful, GOOD and currently valid for the leaf, or startup and reload
+reject it. Refresh it by replacing the file and sending SIGHUP. TLS 1.2 is
+limited to ECDHE with AES-GCM or ChaCha20-Poly1305. TLS 1.3 0-RTT stays
+disabled because early data could be replayed.
+
+## CPU pinning
+
+`--pin-workers` pins worker *n* to the *n*-th CPU (modulo) of the process's
+allowed set: `sched_setaffinity` on Linux, `SetThreadAffinityMask` on
+Windows, affinity tags on macOS (unsupported on Apple silicon). Automatic
+worker counts on Linux honour the cpuset, for example in containers.

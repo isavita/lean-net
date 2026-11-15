@@ -39,6 +39,17 @@ coverage, not evidence that the new architecture or performance gates pass.
 - Server push behind --enable-push and off by default; RFC 9218 priorities honored.
 - No Std.Async in accept/read/write and no undeclared native FFI symbols.
 
+## Production checklist audit (2026-11-15)
+
+The full production-readiness checklist was audited item by item; see
+[production-checklist.md](production-checklist.md). That audit fixed accept
+crashes on descriptor exhaustion, SIGTERM terminating without a drain,
+SIGHUP killing the process, unrestricted TLS 1.2 cipher suites and
+undifferentiated HTTP/1 error statuses. It added mTLS, OCSP stapling, h2c
+Upgrade, health and admin endpoints, secure default headers, W3C tracing,
+structured log fields and CPU pinning. RFC 8441 extended CONNECT, TLS 1.3
+0-RTT and the actual 24-hour soak remain open.
+
 ## Current phase status
 
 Phase 1 reactor acceptance passed at d3ccc2e. Phase 2 HTTP/1 protocol-machine

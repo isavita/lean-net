@@ -20,7 +20,9 @@ for immutable static catalogs, file transports and resource limits. Phases 1–5
 passed acceptance; production hardening and the actual 24-hour soak remain open
 in Phase 6.
 The [production controls guide](docs/production-hardening.md) covers metrics,
-access logs, graceful shutdown and opt-in certificate reload.
+access logs, graceful shutdown and opt-in certificate reload. The
+[production checklist status](docs/production-checklist.md) maps every
+production-readiness requirement to its implementation, tests and open gaps.
 
 ## Build and test
 
@@ -65,6 +67,7 @@ python3 test/test_http1_event.py -v
 python3 test/test_transport_scheduler.py -v
 python3 test/test_http1_faults.py -v
 python3 test/test_http2_e2e.py -v
+python3 test/test_resilience.py -v
 ```
 
 The native build uses `-Wall -Wextra -Wpedantic -Werror`. Windows native builds
@@ -158,7 +161,8 @@ Date header. The default router serves `/`.
 
 HTTP/2 supports request multiplexing, HPACK with static and dynamic tables
 and Huffman coding, stream and connection flow control, RFC 9218 priorities,
-and optional push. It does not
-implement HTTP/1.1 Upgrade to h2c; use prior knowledge for cleartext. For
+and optional push. Cleartext HTTP/2 works with prior knowledge or with
+an HTTP/1.1 `Upgrade: h2c` (bodyless requests). RFC 8441 extended CONNECT
+is not implemented yet. For
 TLS setup, certificate requirements, and verified-client tests, see
 [tls/README.md](tls/README.md).
