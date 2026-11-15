@@ -28,6 +28,7 @@ import LeanNet.HTTP2.Machine
 import LeanNet.HTTP2.Connection
 import LeanNet.HTTP2.Server
 import LeanNet.HTTP.Static
+import LeanNet.HTTP.Observability
 
 import LeanNet.Socket.State
 import LeanNet.Reactor.Basic

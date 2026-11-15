@@ -38,6 +38,11 @@ structure Worker where
   event : Reactor.Event → IO (Array Event)
   poll : IO (Array Event)
   hasWork : IO Bool
+  /-- Physical socket death can precede satisfied asynchronous write fences.
+      Retain controller metadata until the provider's authoritative CLOSED. -/
+  deferClosed : Bool := false
+  /-- Bound provider teardown by the controller's shared drain deadline. -/
+  shutdownBefore : UInt64 → IO Unit := fun _ => pure ()
   reservedBuffers : Nat := 0
 
 private def plainEndpoint (socket : Reactor.Socket .connected) : Endpoint := {

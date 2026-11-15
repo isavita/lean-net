@@ -40,7 +40,7 @@ package «lean-net» where
       unless ← path.pathExists do throw <| IO.userError s!"missing codec library: {path}"
       libraries := libraries.push path.toString
     return libraries ++ flags.filter (fun flag =>
-      flag != "-lz" && flag != "-lbrotlienc" && flag != "-lbrotlicommon") ++ #["-lm"]
+      flag != "-lz" && flag != "-lbrotlienc" && flag != "-lbrotlicommon") ++ #["-lm", "-lrt"]
 
 @[default_target]
 lean_lib LeanNet
@@ -61,6 +61,7 @@ lean_exe «lean-net-pool-lifetime-test» where
 @[default_target]
 lean_exe «lean-net-http1» where
   root := `HTTPMain
+  needs := #[`@/«lean-net-access-log-helper»]
 
 lean_exe «lean-net-http1-fixture» where
   root := `test.HTTP1Fixture
@@ -85,6 +86,30 @@ lean_exe «lean-net-http2-reactor-fixture» where
 
 lean_exe «lean-net-static-fixture» where
   root := `test.StaticReactorFixture
+
+lean_exe «lean-net-protocol-fuzz» where
+  root := `test.ProtocolFuzz
+
+lean_exe «lean-net-observability-fixture» where
+  root := `test.ObservabilityReactorFixture
+  needs := #[`@/«lean-net-access-log-helper»]
+
+lean_exe «lean-net-deferred-transport-fixture» where
+  root := `test.DeferredTransportFixture
+  needs := #[`@/«lean-net-access-log-helper»]
+
+@[default_target]
+target «lean-net-access-log-helper» pkg : System.FilePath := do
+  let source ← inputTextFile (pkg.dir / "c" / "access_log_helper.c")
+  let native ← inputTextFile (pkg.dir / "c" / "access_log.c")
+  let header ← inputTextFile (pkg.dir / "c" / "access_log.h")
+  let dependency := (source.zipWith (fun source _ => source) native).zipWith (fun source _ => source) header
+  let output := pkg.buildDir / "bin" / (if System.Platform.isWindows then "lean-net-access-log-helper.exe" else "lean-net-access-log-helper")
+  let compiler := if System.Platform.isWindows then "gcc" else "cc"
+  buildFileAfterDep output dependency fun _ => do
+    compileExe output (#["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-O2", "-DOB_NO_LEAN_FFI",
+      (pkg.dir / "c" / "access_log_helper.c").toString, (pkg.dir / "c" / "access_log.c").toString] ++
+      (if System.Platform.isWindows || System.Platform.isOSX then #[] else #["-lrt"])) compiler
 
 extern_lib socket_shim (pkg : NPackage __name__) := do
   let header ← inputTextFile (pkg.dir / "c" / "socket_shim.h")
@@ -145,4 +170,8 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   let codecIncludes := (codecFlags.stdout.trimAscii.toString.splitOn " ").filter (· != "") |>.toArray
   let catalogObj ← buildO (pkg.buildDir / "c" / "static_catalog.o") catalog
     (includes ++ codecIncludes) options compiler
-  buildStaticLib (pkg.staticLibDir / nameToStaticLib "socket_shim") #[obj, nativeObj, groupObj, catalogObj]
+  let logger ← inputTextFile (pkg.dir / "c" / "access_log.c")
+  let loggerHeader ← inputTextFile (pkg.dir / "c" / "access_log.h")
+  let logger := logger.zipWith (fun source _ => source) loggerHeader
+  let loggerObj ← buildO (pkg.buildDir / "c" / "access_log.o") logger includes options compiler
+  buildStaticLib (pkg.staticLibDir / nameToStaticLib "socket_shim") #[obj, nativeObj, groupObj, catalogObj, loggerObj]

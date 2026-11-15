@@ -1,4 +1,5 @@
 import LeanNet.FileRegion
+import LeanNet.HTTP.ResponseOutput
 import LeanNet.HTTP2.Frame
 import LeanNet.HTTP2.Stream
 import LeanNet.HTTP2.HPACK
@@ -12,6 +13,13 @@ namespace LeanNet.HTTP2
 structure RequestEvent where
   streamId : UInt32
   request : HTTP1.Request
+  startedAt : Nat := 0
+
+/-- Opt-in metadata at validated header completion, before an upload body. -/
+structure RequestStarted where
+  streamId : UInt32
+  head : HTTP1.RequestHead
+  startedAt : Nat := 0
 
 private inductive ResponseBody where
   | bytes (data : ByteArray)
@@ -84,6 +92,7 @@ structure Config where
   maxResetHistory : Nat := 256
   maxPushes : Nat := 128
   enablePush : Bool := false
+  trackOutput : Bool := false
   deriving Repr
 
 def Config.validate (config : Config) : Except String Unit := do
@@ -155,6 +164,8 @@ structure Step where
   output : Array ByteArray := #[]
   requests : Array RequestEvent := #[]
   error : Option ProtocolError := none
+  peerResets : Array UInt32 := #[]
+  started : Array RequestStarted := #[]
 
 end Connection
 
@@ -195,6 +206,13 @@ def Connection.goAway (connection : Connection) (error : ProtocolError) : ByteAr
 
 private def findStream (connection : Connection) (id : UInt32) : Option Exchange :=
   connection.streams.find? (fun entry => entry.stream.id == id)
+/-- Metadata is borrowed from the bounded active exchange table. Callers capture
+    it before queue/drain transitions can close and remove the exchange. -/
+def Connection.outputMetadata (connection : Connection) (id : UInt32) : Option (HTTP1.RequestHead × Nat) := do
+  let entry ← findStream connection id
+  let head ← entry.head
+  return ({ method := head.method, version := "HTTP/2", target := head.target, headers := head.headers }, entry.startedAt)
+
 private def putStream (connection : Connection) (entry : Exchange) : Connection :=
   { connection with streams := connection.streams.map (fun previous => if previous.stream.id == entry.stream.id then entry else previous) }
 private def removeStream (connection : Connection) (id : UInt32) : Connection :=
@@ -251,7 +269,7 @@ private def finishRequest (connection : Connection) (entry : Exchange) : Except 
   | .error message => throw (streamError entry.stream.id .protocolError message)
   | .ok request =>
     let connection := putStream connection { entry with delivered := true, bodyBlocks := [], body := ByteArray.empty, bodySize := 0 }
-    return ({ connection with processedStream := max connection.processedStream entry.stream.id }, #[⟨entry.stream.id, request⟩])
+    return ({ connection with processedStream := max connection.processedStream entry.stream.id }, #[⟨entry.stream.id, request, entry.startedAt⟩])
 
 private def headerFragment (frame : Frame) : ByteArray := Id.run do
   let mut offset := 0
@@ -915,8 +933,9 @@ def Connection.isClosed (connection : Connection) : Bool :=
   connection.failure.isSome || connection.drainComplete
 
 private def failedStep (connection : Connection) (error : ProtocolError) (consumed : Nat)
-    (output : Array ByteArray := #[]) (requests : Array RequestEvent := #[]) : Connection.Step :=
-  { connection := { connection with failure := some error }, consumed, output := output.push (connection.goAway error), requests, error := some error }
+    (output : Array ByteArray := #[]) (requests : Array RequestEvent := #[])
+    (peerResets : Array UInt32 := #[]) (started : Array RequestStarted := #[]) : Connection.Step :=
+  { connection := { connection with failure := some error }, consumed, output := output.push (connection.goAway error), requests, error := some error, peerResets, started }
 
 /-- Parse at most the configured frame/request budget from a borrowed range.
     State and earlier output survive errors; stream failures emit RST_STREAM. -/
@@ -931,6 +950,8 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
   let mut output := #[]
   let mut outputSize := 0
   let mut requests := #[]
+  let mut peerResets := #[]
+  let mut started := #[]
   for _ in [:min length 24] do
     if connection.prefaceRead == 24 then break
     if input[offset + consumed]! != preface[connection.prefaceRead]! then
@@ -947,34 +968,41 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
     | .error error used =>
       consumed := consumed + used
       connection := { connection with parser := FrameParser.new connection.config.maxFrameSize }
-      if error.scope == .connection then return failedStep connection error consumed output requests
+      if error.scope == .connection then return failedStep connection error consumed output requests peerResets started
       if connection.assembly.isSome || !connection.peerSettings then
-        return failedStep connection (connError .protocolError "invalid frame during mandatory SETTINGS or CONTINUATION sequence") consumed output requests
+        return failedStep connection (connError .protocolError "invalid frame during mandatory SETTINGS or CONTINUATION sequence") consumed output requests peerResets started
       match error.scope with
-      | .connection => return failedStep connection error consumed output requests
+      | .connection => return failedStep connection error consumed output requests peerResets started
       | .stream id =>
         match resetStream connection id error.code with
-        | .error fatal => return failedStep connection fatal consumed output requests
+        | .error fatal => return failedStep connection fatal consumed output requests peerResets started
         | .ok (next, bytes, _) => connection := next; output := output.push bytes; outputSize := outputSize + bytes.size
     | .complete frame used =>
       consumed := consumed + used
       connection := { connection with parser := FrameParser.new connection.config.maxFrameSize }
+      let previousMetadata := if connection.config.trackOutput && (frame.kind == 1 || frame.kind == 9) then
+        connection.outputMetadata frame.streamId else none
       match handleFrame connection frame with
       | .error error =>
         match error.scope with
-        | .connection => return failedStep connection error consumed output requests
+        | .connection => return failedStep connection error consumed output requests peerResets started
         | .stream id =>
           match resetStream connection id error.code with
-          | .error fatal => return failedStep connection fatal consumed output requests
+          | .error fatal => return failedStep connection fatal consumed output requests peerResets started
           | .ok (next, bytes, _) => connection := next; output := output.push bytes; outputSize := outputSize + bytes.size
       | .ok (next, bytes, events) =>
         connection := next
+        if connection.config.trackOutput then
+          if frame.kind == 3 then peerResets := peerResets.push frame.streamId
+          if (frame.kind == 1 || frame.kind == 9) && previousMetadata.isNone then
+            if let some (head, startedAt) := connection.outputMetadata frame.streamId then
+              started := started.push { streamId := frame.streamId, head, startedAt }
         if !bytes.isEmpty then output := output.push bytes
         outputSize := outputSize + bytes.size
         requests := requests ++ events
     if outputSize > connection.config.maxOutputBatchBytes then
-      return failedStep connection (connError .enhanceYourCalm "connection output batch exceeded") consumed output requests
-  return { connection, consumed, output, requests := requests.filter (fun event => connection.canRespond event.streamId) }
+      return failedStep connection (connError .enhanceYourCalm "connection output batch exceeded") consumed output requests peerResets started
+  return { connection, consumed, output, requests := requests.filter (fun event => connection.canRespond event.streamId), peerResets, started }
 
 /-- Mark peer EOF. Partial framing is fatal; incomplete requests are canceled, while accepted requests and queued responses can finish draining. -/
 def Connection.finish (connection : Connection) : Connection.Step := Id.run do

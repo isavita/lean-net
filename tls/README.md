@@ -56,6 +56,36 @@ caches and tickets; TLS 1.2 cache-only and TLS 1.2/1.3 ticket resumption are tes
 across actual workers. Private keys are loaded at startup; encrypted PEM keys
 are rejected without an interactive password prompt.
 
+Certificate reload is opt-in:
+
+```sh
+./tls/.lake/build/bin/lean-net-tls ./chain.pem ./key.pem 8443 --reload-certs-ms 1000
+```
+
+The CLI interval accepts 1–3,600,000 milliseconds.
+Library callers set `Reactor.Config.reload := some { intervalMs := 1000 }`.
+`none` keeps one startup snapshot; `some { intervalMs := 0 }` enables explicit
+requests through `Bundle.requestReload` without periodic checks. Requests return
+tickets; `Bundle.reloadStatus.completed` acknowledges processing, while
+`lastError` reports zero or negative errno. Status also exposes generation,
+attempt/publication/failure counts, live snapshots and loader threads.
+
+One dedicated loader reads the configured regular files off the reactor,
+validates PEM, matching keys, leaf validity times and explicit SNI identities,
+then publishes the complete immutable snapshot. Inputs are capped at 1 MiB per
+file and 16 MiB across the configured table, with at most 32 certificates per
+chain. Failed or partial replacements retain the last good snapshot. New
+connections use the new certificates; existing handshakes and connections pin
+their original snapshot. Retired snapshots disappear after their final session
+releases them. SNI names and paths remain fixed for the bundle lifetime.
+
+Unchanged bytes preserve session caches and tickets. A changed snapshot starts
+a fresh resumption namespace, so an old ticket falls back to a full handshake
+and new-generation tickets resume normally. Shutdown joins TLS workers and the
+loader before final provider cleanup. Certificate storage
+must respond: bounded regular-file reads still depend on the filesystem and do
+not provide a hard wall-clock shutdown bound under stalled kernel I/O.
+
 The transport claims a connected socket into a private handshaking capability,
 then transitions its embedded socket to `tls_ready`. Native guards reject raw
 writes and other plain operations through old connected aliases. HTTP sees

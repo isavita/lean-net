@@ -1,10 +1,17 @@
 /* Optional OpenSSL transport. All SSL/BIO operations run on one dedicated
  * native thread. Only the bridge below may touch Lean and the reactor. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE 1
 #endif
 #if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
 #define _POSIX_C_SOURCE 200809L
+#endif
+/* Keep the public 1.1.1 API contract on newer OpenSSL releases too. */
+#ifndef OPENSSL_API_COMPAT
+#define OPENSSL_API_COMPAT 0x10101000L
 #endif
 #include "tls_worker.h"
 #include "../../c/reactor.h"
@@ -12,6 +19,8 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/sha.h>
+#include <openssl/pem.h>
+#include <openssl/x509v3.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdatomic.h>
@@ -19,10 +28,12 @@
 #include <string.h>
 #ifdef _WIN32
 #include <windows.h>
+#include "../../c/windows_error.h"
 #else
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -38,11 +49,38 @@ typedef struct tw_context {
   char *name;
   unsigned char identity[SHA256_DIGEST_LENGTH];
 } tw_context;
+typedef struct tw_provider tw_provider;
 typedef struct tw_bundle {
   atomic_uint references;
   uint32_t count;
   tw_context *contexts;
+  tw_provider *owner;
+  unsigned char fingerprint[SHA256_DIGEST_LENGTH];
 } tw_bundle;
+typedef struct tw_path {
+  char *name, *certificate, *private_key;
+} tw_path;
+struct tw_provider {
+  atomic_uint references;
+  CRYPTO_RWLOCK *lock;
+  tw_bundle *current;
+  tw_path *paths;
+  uint32_t count;
+  uint8_t tickets;
+  atomic_int stop, closed, control_error, snapshot_error;
+  atomic_uint live_versions, loader_threads;
+  atomic_uint_fast64_t generation, attempts, publications, failures, requested, completed;
+  atomic_int last_error;
+  uint64_t interval_ms;
+#ifdef _WIN32
+  HANDLE loader, wake;
+#else
+  pthread_t loader;
+  pthread_mutex_t reload_mutex;
+  pthread_cond_t reload_condition;
+  int loader_started, control_initialized;
+#endif
+};
 typedef struct tw_cell {
   uint64_t operation, fence;
   rn_file_source *source;
@@ -68,10 +106,12 @@ typedef struct tw_session {
   tw_lane cipher_in, plain_in, cipher_out, plain_out, fences;
   SSL *ssl;
   BIO *network;
-  uint64_t started, produced, close_fence, handshake_fence, fatal_deadline, file_error_operation;
+  tw_bundle *bundle;
+  uint64_t started, produced, close_fence, handshake_fence, fatal_deadline, file_error_operation,
+      terminal_write_fence;
   uint32_t plain_offset, file_chunk_length, file_chunk_offset, bio_count;
   int write_complete, read_want_write, eof_applied, handshake_complete,
-      fatal, shutdown_sent, file_failed;
+      fatal, shutdown_sent, file_failed, terminal_write;
   int error, protocol;
   char diagnostic[256];
   uint32_t seen_cipher, seen_plain, seen_cipher_tail, seen_plain_tail,
@@ -79,7 +119,7 @@ typedef struct tw_session {
   int more;
 } tw_session;
 typedef struct tw_engine {
-  tw_bundle *bundle;
+  tw_provider *bundle;
   rn_waker *reactor_waker;
   uint32_t count, queue_capacity;
   uint64_t handshake_ms, shutdown_ms;
@@ -104,7 +144,7 @@ typedef struct tw_bridge_session {
   uint64_t cipher_ack;
   uint32_t generation, cipher_length;
   int used, ready_sent, eof_sent, error_sent, aborted, reading,
-      native_closed, drain_sent, plain_borrowed, file_error_sent;
+      native_closed, drain_sent, plain_borrowed, file_error_sent, closed_sent;
 } tw_bridge_session;
 typedef struct tw_bridge {
   tw_engine *engine;
@@ -168,10 +208,12 @@ static void tw_lane_reset(tw_lane *lane) {
   atomic_store(&lane->head, 0); atomic_store(&lane->tail, 0);
 }
 static void tw_bundle_release(tw_bundle *bundle) {
+  if (!bundle) return;
   if (atomic_fetch_sub(&bundle->references, 1) != 1) return;
   for (uint32_t i = 0; bundle->contexts && i < bundle->count; ++i) {
     SSL_CTX_free(bundle->contexts[i].ssl); free(bundle->contexts[i].name);
   }
+  if (bundle->owner) atomic_fetch_sub(&bundle->owner->live_versions, 1);
   free(bundle->contexts); free(bundle);
 }
 static int tw_password(char *buffer, int size, int writing, void *argument) {
@@ -229,71 +271,7 @@ static int tw_alpn(SSL *ssl, const unsigned char **out, unsigned char *outlen,
   if (http1) { *out = http1; *outlen = 8; return SSL_TLSEXT_ERR_OK; }
   return SSL_TLSEXT_ERR_ALERT_FATAL;
 }
-lean_object *lean_tlsw_bundle_new(b_lean_obj_arg cert, b_lean_obj_arg key,
-    b_lean_obj_arg names, b_lean_obj_arg certs, b_lean_obj_arg keys, uint8_t tickets) {
-  size_t extra = lean_array_size(names);
-  if (extra >= TW_MAX_CERTS || extra != lean_array_size(certs) || extra != lean_array_size(keys) || tickets > 1)
-    return tw_handle(-EINVAL, "invalid TLS certificate table");
-  tw_bundle *bundle = calloc(1, sizeof(*bundle));
-  if (!bundle) return tw_handle(-ENOMEM, "allocating TLS contexts");
-  atomic_init(&bundle->references, 1); bundle->count = (uint32_t)extra + 1;
-  bundle->contexts = calloc(bundle->count, sizeof(*bundle->contexts));
-  if (!bundle->contexts) { free(bundle); return tw_handle(-ENOMEM, "allocating TLS contexts"); }
-  char message[256] = "TLS context setup failed"; int error = EINVAL;
-  ERR_clear_error();
-  for (uint32_t i = 0; i < bundle->count; ++i) {
-    tw_context *context = &bundle->contexts[i];
-    lean_object *certificate = i ? lean_array_uget_borrowed(certs, i - 1) : (lean_object *)cert;
-    lean_object *private_key = i ? lean_array_uget_borrowed(keys, i - 1) : (lean_object *)key;
-    if (i) {
-      lean_object *name = lean_array_uget_borrowed(names, i - 1); char hostname[254];
-      size_t n = lean_string_size(name) - 1;
-      if (!tw_hostname((const unsigned char *)lean_string_cstr(name), n, hostname)) goto failure;
-      context->name = malloc(n + 1); if (!context->name) { error = ENOMEM; goto failure; }
-      memcpy(context->name, hostname, n + 1);
-      for (uint32_t previous = 1; previous < i; ++previous)
-        if (strcmp(bundle->contexts[previous].name, context->name) == 0) goto failure;
-    }
-    if (strlen(lean_string_cstr(certificate)) + 1 != lean_string_size(certificate) ||
-        strlen(lean_string_cstr(private_key)) + 1 != lean_string_size(private_key)) goto failure;
-    context->ssl = SSL_CTX_new(TLS_server_method());
-    if (!context->ssl) { error = ENOMEM; goto failure; }
-    SSL_CTX_set_default_passwd_cb(context->ssl, tw_password);
-    if (SSL_CTX_set_min_proto_version(context->ssl, TLS1_2_VERSION) != 1 ||
-        SSL_CTX_use_certificate_chain_file(context->ssl, lean_string_cstr(certificate)) != 1 ||
-        SSL_CTX_use_PrivateKey_file(context->ssl, lean_string_cstr(private_key), SSL_FILETYPE_PEM) != 1 ||
-        SSL_CTX_check_private_key(context->ssl) != 1) goto failure;
-    unsigned int digest_length = 0;
-    if (X509_digest(SSL_CTX_get0_certificate(context->ssl), EVP_sha256(), context->identity, &digest_length) != 1 || digest_length != sizeof(context->identity)) goto failure;
-    uint64_t options = SSL_OP_NO_COMPRESSION | SSL_OP_NO_RENEGOTIATION;
-#ifdef SSL_OP_SERVER_PREFERENCE
-    options |= SSL_OP_SERVER_PREFERENCE;
-#else
-    options |= SSL_OP_CIPHER_SERVER_PREFERENCE;
-#endif
-    if (!tickets) options |= SSL_OP_NO_TICKET;
-    SSL_CTX_set_options(context->ssl, options);
-    SSL_CTX_set_mode(context->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
-    SSL_CTX_set_session_cache_mode(context->ssl, SSL_SESS_CACHE_SERVER);
-    SSL_CTX_sess_set_cache_size(context->ssl, 4096);
-    SSL_CTX_set_timeout(context->ssl, 300);
-    if (SSL_CTX_set_session_id_context(context->ssl, context->identity, sizeof(context->identity)) != 1 ||
-        SSL_CTX_set_num_tickets(context->ssl, tickets ? 2 : 0) != 1) goto failure;
-    SSL_CTX_set_alpn_select_cb(context->ssl, tw_alpn, bundle);
-    SSL_CTX_set_client_hello_cb(context->ssl, tw_client_hello, bundle);
-    SSL_CTX_set_tlsext_servername_callback(context->ssl, tw_servername);
-    SSL_CTX_set_tlsext_servername_arg(context->ssl, bundle);
-  }
-  if ((uintptr_t)bundle > INT64_MAX) { error = EOVERFLOW; goto failure; }
-  return tw_handle((int64_t)(uintptr_t)bundle, "");
-failure:
-  tw_diagnostic(message, "invalid TLS certificate, key or server name");
-  tw_bundle_release(bundle); return tw_handle(-error, message);
-}
-lean_object *lean_tlsw_bundle_free(uint64_t handle) {
-  if (!handle) return tw_result(-EINVAL);
-  tw_bundle_release((tw_bundle *)(uintptr_t)handle); return tw_result(0);
-}
+#include "tls_reload.h"
 
 static void tw_notify_thread(tw_engine *engine) {
   atomic_fetch_add_explicit(&engine->notifications, 1, memory_order_release);
@@ -316,11 +294,18 @@ static void tw_notify_reactor(tw_engine *engine) {
 }
 static void tw_finish(tw_engine *engine, tw_session *session, int error, const char *reason) {
   tw_note_ssl(engine);
+  /* The last SSL_write can be complete while a full fence lane delays its
+   * publication. Preserve it only if all of its ciphertext left the BIO;
+   * the owning loop still requires its physical acknowledgement. */
+  session->terminal_write = session->write_complete && session->network &&
+      BIO_ctrl_pending(session->network) == 0;
+  session->terminal_write_fence = session->produced;
   session->error = error;
   if (error && !session->fatal) tw_diagnostic(session->diagnostic, reason);
   if (session->ssl) atomic_fetch_sub(&engine->live_ssl, 1);
   SSL_free(session->ssl); session->ssl = NULL;
   BIO_free(session->network); session->network = NULL;
+  tw_bundle_release(session->bundle); session->bundle = NULL;
   if (session->bio_count) atomic_fetch_sub(&engine->live_bios, session->bio_count);
   session->bio_count = 0;
   atomic_store_explicit(&session->state, TW_DONE, memory_order_release);
@@ -427,7 +412,13 @@ static int tw_open_session(tw_engine *engine, tw_session *session) {
   tw_note_ssl(engine);
   session->ssl = NULL; session->network = NULL; session->bio_count = 0;
   session->fatal = session->error = 0; session->diagnostic[0] = 0;
-  ERR_clear_error(); session->ssl = SSL_new(engine->bundle->contexts[0].ssl);
+  ERR_clear_error(); session->bundle = tw_provider_snapshot(engine->bundle);
+  if (!session->bundle) {
+    int error = atomic_load(&engine->bundle->snapshot_error);
+    if (!error) error = atomic_load(&engine->bundle->closed) ? -ECANCELED : -EOVERFLOW;
+    tw_finish(engine, session, error, "TLS certificate snapshot acquisition failed"); return 0;
+  }
+  session->ssl = SSL_new(session->bundle->contexts[0].ssl);
   if (session->ssl) atomic_fetch_add(&engine->live_ssl, 1);
   BIO *internal = NULL;
   if (!session->ssl || BIO_new_bio_pair(&internal, TW_BIO_CAPACITY, &session->network, TW_BIO_CAPACITY) != 1) {
@@ -616,7 +607,7 @@ static int tw_engine_delete(tw_engine *engine) {
 #endif
 #endif
   if (engine->reactor_waker) { int released = rn_waker_release(engine->reactor_waker); if (released && !error) error = released; }
-  if (engine->bundle) tw_bundle_release(engine->bundle);
+  if (engine->bundle) tw_provider_release(engine->bundle);
   free(engine->sessions); free(engine); return error;
 }
 static void tw_release_events(tw_bridge *bridge) {
@@ -675,7 +666,7 @@ lean_object *lean_tlsw_worker_new(uint64_t bundle_handle, b_lean_obj_arg reactor
 #endif
 #endif
   engine->count = count; engine->queue_capacity = capacity; engine->handshake_ms = handshake_ms; engine->shutdown_ms = shutdown_ms;
-  engine->bundle = (tw_bundle *)(uintptr_t)bundle_handle; atomic_fetch_add(&engine->bundle->references, 1);
+  engine->bundle = (tw_provider *)(uintptr_t)bundle_handle; atomic_fetch_add(&engine->bundle->references, 1);
   bridge->reactor_record = (lean_object *)reactor; lean_inc(bridge->reactor_record);
   engine->sessions = calloc(count, sizeof(*engine->sessions)); bridge->sessions = calloc(count, sizeof(*bridge->sessions));
   bridge->event_capacity = count > UINT32_MAX / 8 ? 0 : count * 8;
@@ -850,6 +841,18 @@ static int tw_emit(tw_bridge *bridge, uint32_t index, uint32_t kind, uint64_t op
   bridge->events[bridge->event_count++] = (rn_event){tw_token(index, owner->generation), operation, buffer, result, kind, flags, 0, length}; return 1;
 }
 static int tw_would_block(int error) { return error == -EAGAIN || error == -EWOULDBLOCK || error == -EBUSY; }
+static int tw_emit_written(tw_bridge *bridge, uint32_t index) {
+  tw_session *session = &bridge->engine->sessions[index];
+  tw_bridge_session *owner = &bridge->sessions[index];
+  tw_cell *cell;
+  while ((cell = tw_consumer(&session->fences)) != NULL && cell->fence <= owner->cipher_ack) {
+    if (!tw_emit(bridge, index, TLSW_WRITTEN, cell->operation, 0, cell->length, 0, cell->length)) break;
+    int released = cell->source ? rn_file_source_release(cell->source) : 0;
+    cell->source = NULL; tw_consume(&session->fences); tw_notify_session(bridge->engine, session);
+    if (released) return released;
+  }
+  return 0;
+}
 lean_object *lean_tlsw_pump(uint64_t handle) {
   if (!handle) return tw_result(-EINVAL);
   tw_bridge *bridge = (tw_bridge *)(uintptr_t)handle; tw_release_events(bridge); tw_engine *engine = bridge->engine;
@@ -860,11 +863,28 @@ lean_object *lean_tlsw_pump(uint64_t handle) {
     if (owner->aborted) {
       while (tw_consumer(&session->cipher_out)) tw_consume(&session->cipher_out);
       while (tw_consumer(&session->plain_out)) tw_consume(&session->plain_out);
-      int released = tw_release_file_lane(&session->fences); if (released) return tw_result(released);
-      if (state == TW_DONE) {
+      /* WRITTEN is historical: cancellation cannot undo an already completed
+       * wire operation. The producer may publish its final fence until DONE. */
+      int released = tw_emit_written(bridge, i); if (released) return tw_result(released);
+      if (state == TW_DONE && owner->native_closed) {
+        tw_cell *cell = tw_consumer(&session->fences);
+        if (cell && cell->fence <= owner->cipher_ack) continue; /* batch full */
+        if (session->terminal_write && session->terminal_write_fence <= owner->cipher_ack) {
+          cell = tw_consumer(&session->plain_in);
+          if (!cell) return tw_result(-EIO);
+          if (!tw_emit(bridge, i, TLSW_WRITTEN, cell->operation, 0, cell->length, 0, cell->length)) continue;
+          released = cell->source ? rn_file_source_release(cell->source) : 0;
+          cell->source = NULL; tw_consume(&session->plain_in); session->terminal_write = 0;
+          if (released) return tw_result(released);
+        }
+        released = tw_release_file_lane(&session->fences); if (released) return tw_result(released);
         released = tw_release_file_lane(&session->plain_in); if (released) return tw_result(released);
+        if (owner->native_closed && !owner->closed_sent &&
+            tw_emit(bridge, i, TLSW_CLOSED, 0, 0, 0, 0, 0)) owner->closed_sent = 1;
       }
-      if (state == TW_DONE && owner->native_closed && !owner->plain_borrowed) { owner->used = 0; atomic_store_explicit(&session->state, TW_FREE, memory_order_release); }
+      /* CLOSED releases application input loans. Keep their old generation
+       * alive until the explicit plaintext ACK, rather than delaying CLOSED. */
+      if (state == TW_DONE && owner->closed_sent && !owner->plain_borrowed) { owner->used = 0; atomic_store_explicit(&session->state, TW_FREE, memory_order_release); }
       continue;
     }
     int file_error = atomic_load_explicit(&session->file_error, memory_order_acquire);
@@ -909,14 +929,7 @@ lean_object *lean_tlsw_pump(uint64_t handle) {
       owner->plain_borrowed = 1;
       tw_consume(&session->plain_out); tw_notify_session(engine, session);
     }
-    while ((cell = tw_consumer(&session->fences)) != NULL && cell->fence <= owner->cipher_ack) {
-      if (!tw_emit(bridge, i, TLSW_WRITTEN, cell->operation, 0, cell->length, 0, cell->length)) break;
-      if (cell->source) {
-        int released = rn_file_source_release(cell->source); cell->source = NULL;
-        if (released) return tw_result(released);
-      }
-      tw_consume(&session->fences); tw_notify_session(engine, session);
-    }
+    int released = tw_emit_written(bridge, i); if (released) return tw_result(released);
     if (atomic_load(&session->eof) && !owner->eof_sent && !tw_consumer(&session->plain_out)) {
       if (tw_emit(bridge, i, TLSW_EOF, 0, 0, 0, 0, 0)) owner->eof_sent = 1;
     }
@@ -962,7 +975,7 @@ lean_object *lean_tlsw_on_written(uint64_t handle, uint64_t operation, uint64_t 
   tw_bridge *bridge = (tw_bridge *)(uintptr_t)handle; uint32_t i = (uint32_t)(operation & ((UINT64_C(1) << 20) - 1)) - 1;
   if (i >= bridge->engine->count) return tw_result(-EINVAL);
   tw_bridge_session *owner = &bridge->sessions[i];
-  if (!owner->used || owner->aborted || owner->cipher_operation != operation) return tw_result(0);
+  if (!owner->used || owner->cipher_operation != operation) return tw_result(0);
   if (count != owner->cipher_length) return tw_result(-EIO);
   owner->cipher_ack += count; owner->cipher_operation = 0; owner->cipher_length = 0;
   tw_notify_session(bridge->engine, &bridge->engine->sessions[i]); return tw_result(0);
@@ -973,6 +986,14 @@ lean_object *lean_tlsw_has_work(uint64_t handle) {
   if (atomic_load(&bridge->engine->wake_error)) return tw_result(1);
   for (uint32_t i = 0; i < bridge->engine->count; ++i) {
     tw_bridge_session *owner = &bridge->sessions[i]; tw_session *session = &bridge->engine->sessions[i]; if (!owner->used) continue;
+    if (owner->aborted) {
+      tw_cell *fence = tw_consumer(&session->fences);
+      if ((fence && fence->fence <= owner->cipher_ack) ||
+          (atomic_load_explicit(&session->state, memory_order_acquire) == TW_DONE &&
+           ((!owner->closed_sent && owner->native_closed) ||
+            (owner->closed_sent && !owner->plain_borrowed)))) return tw_result(1);
+      continue;
+    }
     if (atomic_load_explicit(&session->file_error, memory_order_acquire) && !owner->file_error_sent) return tw_result(1);
     if (!owner->plain_borrowed && owner->reading && tw_consumer(&session->plain_out)) {
       lean_object *bytes = NULL;

@@ -53,7 +53,7 @@ package «lean-net-tls» where
       libraries := libraries.push path.toString
     return libraries ++ flags.filter (fun flag =>
       flag != "-lz" &&
-      flag != "-lbrotlienc" && flag != "-lbrotlicommon") ++ #["-lm"]
+      flag != "-lbrotlienc" && flag != "-lbrotlicommon") ++ #["-lm", "-lrt"]
 
 require «lean-net» from "../"
 
@@ -74,7 +74,7 @@ extern_lib tls_shim (pkg : NPackage __name__) := do
   let obj ← buildO (pkg.buildDir / "c" / "tls_shim.o") src
     (#["-isystem", includeDir.toString] ++ flags) #["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"] compiler
   let mut worker ← inputTextFile (pkg.dir / "c" / "tls_worker.c")
-  for path in #[pkg.dir / "c" / "tls_worker.h", pkg.dir / ".." / "c" / "reactor.h",
+  for path in #[pkg.dir / "c" / "tls_worker.h", pkg.dir / "c" / "tls_reload.h", pkg.dir / ".." / "c" / "reactor.h",
       pkg.dir / ".." / "c" / "reactor_lean.h", pkg.dir / ".." / "c" / "reactor_file.h",
       pkg.dir / ".." / "c" / "reactor_file_internal.h", pkg.dir / ".." / "c" / "reactor_file_impl.h"] do
     let header ← inputTextFile path
@@ -87,6 +87,20 @@ extern_lib tls_shim (pkg : NPackage __name__) := do
 
 lean_exe «lean-net-tls» where
   root := `Main
+  needs := #[`@/«lean-net-access-log-helper»]
+
+target «lean-net-access-log-helper» pkg : System.FilePath := do
+  let directory := pkg.dir / ".." / "c"
+  let source ← inputTextFile (directory / "access_log_helper.c")
+  let native ← inputTextFile (directory / "access_log.c")
+  let header ← inputTextFile (directory / "access_log.h")
+  let dependency := (source.zipWith (fun source _ => source) native).zipWith (fun source _ => source) header
+  let output := pkg.buildDir / "bin" / (if System.Platform.isWindows then "lean-net-access-log-helper.exe" else "lean-net-access-log-helper")
+  let compiler := if System.Platform.isWindows then "gcc" else "cc"
+  buildFileAfterDep output dependency fun _ => do
+    compileExe output (#["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-O2", "-DOB_NO_LEAN_FFI",
+      (directory / "access_log_helper.c").toString, (directory / "access_log.c").toString] ++
+      (if System.Platform.isWindows || System.Platform.isOSX then #[] else #["-lrt"])) compiler
 
 lean_exe «lean-net-tls-fixture» where
   root := `test.TLSFixture
@@ -99,3 +113,6 @@ lean_exe «lean-net-tls-reactor-fixture» where
 
 lean_exe «lean-net-tls-static-fixture» where
   root := `test.TLSStaticFixture
+
+lean_exe «lean-net-tls-reload-fixture» where
+  root := `test.TLSReloadFixture

@@ -26,6 +26,9 @@ jobs:
           lake env lean --run test/HTTP1EncodingTest.lean
           lake env lean --run test/HTTP1MachineTest.lean
           lake env lean --run test/HTTP1FileTest.lean
+          lake env lean --run test/HTTP1ShutdownTest.lean
+          lake env lean --run test/ResponseOutputTest.lean
+          lake env lean --run test/ObservabilityMetricsTest.lean
           lake env lean --run test/HTTP2PrefaceTest.lean
           lake env lean --run test/HTTP2FrameTest.lean
           lake env lean --run test/HTTP2FrameV2Test.lean
@@ -47,6 +50,20 @@ jobs:
           python3 test/test_transport_scheduler.py -v
           python3 test/test_http1_faults.py -v
           python3 test/test_http2_e2e.py -v
+      - name: Short deterministic protocol fuzz and controller invariants
+        run: |
+          lake build lean-net-protocol-fuzz
+          python3 test/fuzz_protocols.py --profile short --output "$RUNNER_TEMP/phase6-fuzz-linux-full"
+          python3 test/test_production_harness.py -v
+          python3 test/test_access_log.py -v
+      - name: Preserve protocol fuzz seeds and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-fuzz-linux-full
+          path: ${{ runner.temp }}/phase6-fuzz-linux-full
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Build and test TLS package
         run: |
           lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test

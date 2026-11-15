@@ -25,7 +25,8 @@ class TLSContextNative(unittest.TestCase):
             directory = Path(temporary)
             cert, key = directory / "cert.pem", directory / "key.pem"
             subprocess.run([openssl, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
-                            "-nodes", "-keyout", str(key), "-out", str(cert), "-days", "1", "-subj", "/CN=alpha.test"],
+                            "-nodes", "-keyout", str(key), "-out", str(cert), "-days", "1", "-subj", "/CN=alpha.test",
+                            "-addext", "subjectAltName=DNS:alpha.test,DNS:beta.test"],
                            check=True, capture_output=True, text=True)
             binary = directory / "context-native"
             flags = ["-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-pthread",

@@ -7,8 +7,12 @@ body bytes before and after load. The first round warms caches for the separate
 RSS comparison: post-final-round RSS may grow at most1% over post-round1 RSS,
 with at least3 rounds required. All rounds still count for correctness/RPS.
 This short observation does not establish the final24-hour soak.
+Use --observe for the identical fixture workload with metrics and structured
+logs to the null sink. It retains the server/helper copies beside the report.
+--family-resources adds separate, ungated whole-family characterization.
 """
 import argparse
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import hashlib
 from importlib.metadata import version
@@ -37,6 +41,45 @@ def output(command):
 
 def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def snapshot_binaries(directory, binary, helper=None):
+    """Place the helper beside the immutable server, as the fixture resolves it."""
+    directory = Path(directory)
+    snapshot = directory / (Path(binary).name if helper else "server")
+    shutil.copy2(binary, snapshot)
+    records = {"server": {"source": str(Path(binary).resolve()), "snapshot": str(snapshot.resolve()),
+                          "sha256": sha256(binary)}}
+    if helper:
+        destination = directory / ("lean-net-access-log-helper.exe" if sys.platform == "win32" else "lean-net-access-log-helper")
+        shutil.copy2(helper, destination)
+        records["log_helper"] = {"source": str(Path(helper).resolve()), "snapshot": str(destination.resolve()),
+                                 "sha256": sha256(helper)}
+    if not all(sha256(row["snapshot"]) == row["sha256"] for row in records.values()):
+        raise RuntimeError("immutable benchmark executable copy changed")
+    return snapshot, records
+
+
+def family_sample(pid):
+    # Expensive census is deliberately outside each h2load timing interval.
+    from soak24 import sample_process_family
+    return sample_process_family(pid)
+
+
+def family_assessment(workers, runs):
+    first, last = runs[0].get("family_after"), runs[-1].get("family_after")
+    result = {"workers": workers, "scope": "server_and_all_descendants", "gate_applied": False,
+              "purpose": "Short whole-family characterization; the existing parent-only RSS gate is unchanged.",
+              "assessed": first is not None and last is not None}
+    if first is not None and last is not None:
+        identity = lambda value: [(row["pid"], row["parent_pid"], row["start_identity"]) for row in value["family"]]
+        result.update({"post_round1_rss_bytes": first["rss_bytes"], "post_final_round_rss_bytes": last["rss_bytes"],
+                       "rss_growth_percent": 100 * (last["rss_bytes"] - first["rss_bytes"]) / first["rss_bytes"],
+                       "post_round1_fds_or_handles": first["fds_or_handles"],
+                       "post_final_round_fds_or_handles": last["fds_or_handles"],
+                       "stable_member_identities": all(identity(run["family_after"]) == identity(first) for run in runs),
+                       "shared_mapping_rss_deduction": False})
+    return result
 
 
 def parse_result(text, requests, body_bytes):
@@ -89,6 +132,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=ROOT / ".lake/build/bin/lean-net-http2-reactor-fixture")
     parser.add_argument("--server-arg", action="append", default=[])
+    parser.add_argument("--observe", action="store_true", help="Explicit bench-observe mode: same workload, metrics and structured access logs to the null sink")
+    parser.add_argument("--log-helper", type=Path, help="Observe-mode helper to snapshot beside the server; defaults to the input binary's sibling")
+    parser.add_argument("--family-resources", action="store_true", help="Characterize per-PID and summed server/helper RSS and FDs outside load timing; does not alter the parent-only RSS gate")
     parser.add_argument("--workers", type=int, nargs="+", default=[1, 8])
     parser.add_argument("--requests", type=int, default=100000)
     parser.add_argument("--connections", type=int, default=10)
@@ -111,6 +157,19 @@ def main():
         parser.error("throughput gate workers must be included in --workers")
     if args.output.exists():
         parser.error("choose a new output file; benchmark evidence is never overwritten")
+    if args.observe and args.server_arg:
+        parser.error("--observe selects bench-observe; do not combine it with --server-arg")
+    if args.log_helper and not args.observe:
+        parser.error("--log-helper requires --observe")
+    helper = None
+    if args.observe:
+        helper = args.log_helper or args.binary.parent / ("lean-net-access-log-helper.exe" if sys.platform == "win32" else "lean-net-access-log-helper")
+    if helper is not None and not helper.is_file():
+        parser.error("observe mode requires an existing native log helper")
+    artifact_directory = Path(str(args.output) + ".artifacts") if args.observe else None
+    if artifact_directory is not None and artifact_directory.exists():
+        parser.error("choose a new artifact directory; benchmark executable evidence is never overwritten")
+    server_arguments = args.server_arg or ["bench-observe" if args.observe else "bench"]
     expected = bytes.fromhex(args.body_hex)
     if not expected:
         parser.error("expected body cannot be empty")
@@ -122,19 +181,25 @@ def main():
                               "hpack": version("hpack"),
                               "cpu": output(["sysctl", "-n", "machdep.cpu.brand_string"]), "h2load": output([args.h2load, "--version"]),
                               "lean": output(["lean", "--version"])},
-              "configuration": {"server_arguments_after_port": args.server_arg or ["bench"], "workers": args.workers,
+              "configuration": {"server_arguments_after_port": server_arguments, "workers": args.workers,
+                                "observability_enabled": args.observe, "metrics_enabled": args.observe,
+                                "access_log_sink": os.devnull if args.observe else None,
                                 "max_clients": 128, "requested_output_buffers": 512, "http_output_flights_per_client": 4},
               "workload": {"requests": args.requests, "connections": args.connections, "max_streams_per_connection": args.streams,
                            "client_threads": args.threads, "rounds": args.rounds, "path": args.path, "expected_body_hex": expected.hex()},
               "throughput_gate": {"workers": gate_workers, "require_rps_strictly_greater_than": args.require_rps},
-              "rss_gate": {"max_growth_percent": 1.0, "minimum_rounds": 3,
+              "rss_gate": {"scope": "server_process_only", "includes_log_helper": False,
+                           "max_growth_percent": 1.0, "minimum_rounds": 3,
                            "method": "Round1 warms caches. Compare the same persistent server's RSS immediately after the final round against immediately after round1; all rounds remain correctness/throughput samples. This is a short phase4 observation, not the final24-hour soak."},
               "verification_scope": "Exact binary-body samples before/after fixed-count h2load; every h2load request/status and aggregate data count checked. h2load does not validate each body's contents. Short RSS samples are not the final soak.",
               "source_sha256": {str(p.relative_to(ROOT)): sha256(p) for directory in [ROOT / "LeanNet/HTTP2", ROOT / "LeanNet/HTTP"] for p in directory.rglob("*.lean")},
-              "runs": [], "rss_assessments": [], "passed": False}
+              "family_resource_characterization": {"enabled": args.family_resources, "gate_applied": False,
+                  "sampling": "Before and after each round, outside the h2load run; shared mappings remain included per PID."},
+              "runs": [], "rss_assessments": [], "family_assessments": [], "passed": False}
     for name in ["test/bench_http2.py", "test/http2_test_support.py", "test/HTTP2ReactorFixture.lean",
                  "test/HTTP1ReactorFixture.lean", "test/requirements-http2.txt", "LeanNet/HTTP1/Handlers.lean",
-                 "c/reactor_posix.c", "c/reactor_windows.c", "c/reactor_group.c", "lakefile.lean"]:
+                 "c/reactor_posix.c", "c/reactor_windows.c", "c/reactor_group.c", "c/access_log.c", "c/access_log.h",
+                 "c/access_log_helper.c", "test/soak24.py", "lakefile.lean"]:
         if (ROOT / name).is_file(): report["source_sha256"][name] = sha256(ROOT / name)
     if args.base_commit:
         report["base_commit_source_sha256"] = {}
@@ -144,15 +209,23 @@ def main():
                 report["base_commit_source_sha256"][name] = hashlib.sha256(old.stdout).hexdigest()
         report["source_scope"] = "source_sha256 records the current working tree/tooling; base_commit_source_sha256 records the immutable historical source for the pre-change binary."
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="lean-net-h2-bench-") as temporary:
-        snapshot = Path(temporary) / "server"; shutil.copy2(args.binary, snapshot)
+    if artifact_directory is not None:
+        artifact_directory.mkdir()
+    context = nullcontext(artifact_directory) if artifact_directory is not None else tempfile.TemporaryDirectory(prefix="lean-net-h2-bench-")
+    with context as temporary:
+        snapshot, executable_records = snapshot_binaries(temporary, args.binary, helper)
+        report["executable_snapshots"] = executable_records
+        report["executable_snapshots_retained"] = artifact_directory is not None
         assert sha256(snapshot) == original_hash
+        if artifact_directory is not None:
+            (artifact_directory / "manifest.json").write_text(json.dumps(executable_records, indent=2) + "\n")
+        args.output.write_text(json.dumps(report, indent=2) + "\n")
         for workers in args.workers:
             with socket.socket() as probe:
                 probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
             flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
             with tempfile.TemporaryFile(mode="w+") as log:
-                server = subprocess.Popen([str(snapshot), str(port), *(args.server_arg or ["bench"]), str(workers)],
+                server = subprocess.Popen([str(snapshot), str(port), *server_arguments, str(workers)],
                                           stdout=log, stderr=log, creationflags=flags)
                 try:
                     deadline = time.monotonic() + 10
@@ -166,6 +239,7 @@ def main():
                             if time.monotonic() >= deadline: raise
                             time.sleep(.02)
                     for index in range(args.rounds):
+                        family_before = family_sample(server.pid) if args.family_resources else None
                         command = [args.h2load, "-n", str(args.requests), "-c", str(args.connections),
                                    "-m", str(args.streams), "-t", str(args.threads), "-N", "10s", "-T", "120s",
                                    f"http://127.0.0.1:{port}{args.path}"]
@@ -192,9 +266,11 @@ def main():
                         verify_body(port, args.path, expected)
                         after = process_sample(server.pid, started)
                         if after: samples.append(after)
+                        family_after = family_sample(server.pid) if args.family_resources else None
                         run.update({"workers": workers, "round": index + 1, "command": command,
                                     "observed_wall_seconds": time.monotonic() - started, "raw_stderr": stderr,
                                     "server_settings": advertised, "resource_samples": samples,
+                                    "family_before": family_before, "family_after": family_after,
                                     "client_resource_samples": client_samples,
                                     "rss_before_kib": before["rss_kib"] if before else None,
                                     "rss_after_kib": after["rss_kib"] if after else None,
@@ -213,6 +289,8 @@ def main():
                                   "growth_kib": last_rss - first_rss if enough else None,
                                   "growth_percent": growth, "passed": enough and growth <= 1.0}
                     report["rss_assessments"].append(assessment)
+                    if args.family_resources:
+                        report["family_assessments"].append(family_assessment(workers, worker_runs))
                     args.output.write_text(json.dumps(report, indent=2) + "\n")
                     print(json.dumps({"rss_assessment": assessment}), flush=True)
                 finally:
@@ -224,9 +302,13 @@ def main():
                         raise RuntimeError("server failed bounded shutdown")
                     if code:
                         log.seek(0); raise RuntimeError(f"server exit{code}: {log.read()}")
+        report["snapshot_hashes_unchanged"] = all(sha256(row["snapshot"]) == row["sha256"] for row in executable_records.values())
     report["passed"] = (all(run["valid"] and run["throughput_gate_passed"] for run in report["runs"])
                         and all(item["passed"] for item in report["rss_assessments"]))
     report["original_binary_unchanged"] = sha256(args.binary) == original_hash
+    if helper is not None:
+        report["original_log_helper_unchanged"] = sha256(helper) == executable_records["log_helper"]["sha256"]
+        report["passed"] = report["passed"] and report["snapshot_hashes_unchanged"] and report["original_log_helper_unchanged"]
     report["finished_utc"] = datetime.now(timezone.utc).isoformat()
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     return 0 if report["passed"] else 1

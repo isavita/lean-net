@@ -83,14 +83,18 @@ jobs:
           echo "PYTHONPATH=$RUNNER_TEMP/lean-net-http2-test-deps" >> "$GITHUB_ENV"
       - name: Build public TLS APIs and native fixtures
         run: |
-          lake build lean-net-http1 lean-net-http2-reactor-fixture lean-net-static-fixture
-          lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture lean-net-tls-static-fixture
+          lake build lean-net-http1 lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-observability-fixture lean-net-deferred-transport-fixture
+          lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture lean-net-tls-static-fixture lean-net-tls-reload-fixture
       - name: Context ownership and policy sanitizers
         if: runner.os != 'Windows'
         run: ${{ matrix.python }} tls/test/test_tls_context_native.py -v
       - name: TLS byte lanes, wire fences and worker lifetime sanitizers
         if: runner.os != 'Windows'
         run: ${{ matrix.python }} tls/test/test_tls_worker_native.py -v
+      - name: Certificate loader snapshots and thousand-generation retirement
+        run: lake env ${{ matrix.python }} tls/test/test_tls_reload_native.py -v
+      - name: Verified certificate reload, failure retention and public CLI
+        run: lake env ${{ matrix.python }} tls/test/test_tls_reload.py -v
       - name: Verified native TLS, SNI, ALPN and resumption acceptance
         env:
           LEAN_NET_TLS_CYCLES: '1000'
@@ -101,3 +105,7 @@ jobs:
         run: lake env ${{ matrix.python }} test/test_http2_cli.py -v
       - name: Static files, validators, compression and file lifetimes
         run: lake env ${{ matrix.python }} test/test_static_files.py -v
+      - name: Actual completion metrics and private access logs
+        run: lake env ${{ matrix.python }} test/test_observability.py -v
+      - name: Historical async completion before provider retirement
+        run: lake env ${{ matrix.python }} test/test_deferred_transport.py -v

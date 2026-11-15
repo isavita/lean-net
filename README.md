@@ -19,6 +19,8 @@ priority scheduling, push and draining, and [docs/static-files.md](docs/static-f
 for immutable static catalogs, file transports and resource limits. Phases 1–5
 passed acceptance; production hardening and the actual 24-hour soak remain open
 in Phase 6.
+The [production controls guide](docs/production-hardening.md) covers metrics,
+access logs, graceful shutdown and opt-in certificate reload.
 
 ## Build and test
 

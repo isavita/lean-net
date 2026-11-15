@@ -95,6 +95,120 @@ static void queue_wrap(void) {
   }
   free(lane.cells);
 }
+static void historical_written_batch(void) {
+  /* Keep a real native ciphertext completion, then dispatch it with an injected
+   * peer reset and its physical CLOSED before pumping the TLS provider. */
+  for (unsigned mode = 0; mode < 4; ++mode) {
+    rn_config config = {1, 8, 1, 2, 0, 0, 1}; rn_reactor *reactor = NULL;
+    check(rn_new(&config, &reactor) == 0, "create historical-fence reactor");
+    int peers[2];
+    check(socketpair(AF_UNIX, SOCK_STREAM, 0, peers) == 0 &&
+        rn_nonblocking(peers[0]) == 0 && rn_nonblocking(peers[1]) == 0, "historical-fence native socketpair");
+    uint64_t connection = 0, capability = 0, buffer = 0;
+    check(rn_socket_new(reactor, &connection) == 0, "historical-fence connection token");
+    reactor->connections[rn_index(connection)].fd = peers[0]; reactor->connections[rn_index(connection)].state = 4;
+    check(rn_interest(reactor, rn_index(connection), 1) == 0 &&
+        rn_transport_claim(reactor, connection, &capability) == 0 &&
+        rn_acquire_buffer(reactor, 3, &buffer) == 0 &&
+        rn_buffer_copy(reactor, buffer, (const uint8_t *)"abc", 3) == 0, "prepare physical cipher completion");
+    uint64_t operation = TLSW_CIPHER_OPERATION | (UINT64_C(1) << 20) | 1;
+    check(rn_transport_write(reactor, connection, capability, buffer, 0, 3, operation) == 0,
+        "queue actual historical ciphertext");
+    rn_event batch[3] = {{0}}; int found = 0;
+    for (unsigned turn = 0; !found && turn < 100; ++turn) {
+      int count = rn_step(reactor, 0); check(count >= 0, "poll actual historical ciphertext");
+      for (int i = 0; i < count; ++i) {
+        const rn_event *event = rn_event_at(reactor, (uint32_t)i);
+        if (event->kind == RN_WRITTEN) { batch[0] = *event; found = 1; }
+        else check(event->kind == RN_WAKE, "historical write has no unexpected native event");
+      }
+    }
+    check(found && batch[0].operation == operation && batch[0].result == 3,
+        "native completion acknowledges three physical cipher bytes");
+    tw_engine engine = {0}; tw_session session = {0}; tw_bridge_session owner = {0};
+    rn_event events[1]; unsigned char claimed[1];
+    tw_bridge bridge = {0}; bridge.engine = &engine; bridge.reactor = reactor;
+    bridge.sessions = &owner; bridge.events = events; bridge.event_claimed = claimed; bridge.event_capacity = 1;
+    engine.count = 1; engine.sessions = &session;
+    atomic_init(&engine.notifications, 0); atomic_init(&engine.wake_error, 0);
+    atomic_init(&engine.ssl_calls, 0); atomic_init(&engine.owner_violations, 0);
+    atomic_init(&engine.live_ssl, 0); atomic_init(&engine.live_bios, 0);
+    int wake[2]; check(pipe(wake) == 0 && rn_nonblocking(wake[0]) == 0 && rn_nonblocking(wake[1]) == 0,
+        "historical-fence worker notification pipe");
+    engine.wake_read = wake[0]; engine.wake_write = wake[1];
+    check(rn_waker_acquire(reactor, &engine.reactor_waker) == 0, "historical-fence retained waker");
+    atomic_init(&session.state, TW_ACTIVE); atomic_init(&session.notifications, 0);
+    atomic_init(&session.cancel, 0);
+    check(tw_lane_new(&session.fences, 3) == 0 && tw_lane_new(&session.plain_in, 3) == 0 &&
+        tw_lane_new(&session.cipher_out, 1) == 0 && tw_lane_new(&session.plain_out, 1) == 0,
+        "historical-fence bounded lanes");
+    owner.used = owner.plain_borrowed = 1; owner.generation = 1;
+    owner.connection = connection; owner.capability = capability;
+    owner.cipher_operation = operation; owner.cipher_length = 3;
+    uint64_t token = tw_token(0, 1), worker = (uint64_t)(uintptr_t)&bridge;
+    if (mode < 2) {
+      for (unsigned i = 0; i < 3; ++i) {
+        tw_cell *cell = tw_producer(&session.fences); check(cell != NULL, "historical-fence publication credit");
+        cell->operation = 101 + i; cell->length = 1; cell->fence = i == 2 ? 4 : i + 1;
+        tw_publish(&session.fences);
+      }
+    } else {
+      tw_cell *cell = tw_producer(&session.plain_in); check(cell != NULL, "late final-write input credit");
+      cell->operation = 201; cell->length = 3; tw_publish(&session.plain_in);
+      session.write_complete = 1; session.produced = 3;
+      session.network = BIO_new(BIO_s_mem()); check(session.network != NULL, "late final-write memory BIO");
+      if (mode == 3) check(BIO_write(session.network, "x", 1) == 1, "retain unflushed final ciphertext");
+    }
+    batch[1] = (rn_event){connection, 0, 0, -ECONNRESET, RN_ERROR, 0, 0, 0};
+    if (mode == 1) {
+      check(result(lean_tlsw_abort(worker, token)) == 0, "reset may precede historical native WRITTEN");
+      tw_current_engine = &engine; tw_finish(&engine, &session, 0, ""); tw_current_engine = NULL;
+      check(result(lean_tlsw_pump(worker)) == 0 && tw_consumer(&session.fences) != NULL,
+          "thread cancellation retains unacknowledged fences until physical CLOSED");
+      check(result(lean_tlsw_has_work(worker)) == 0, "waiting native cancellation does not busy-poll an idle TLS session");
+    }
+    check(result(lean_tlsw_on_written(worker, batch[0].operation, (uint64_t)batch[0].result)) == 0,
+        "same-batch physical WRITTEN survives a preceding abort");
+    check(batch[1].result == -ECONNRESET && result(lean_tlsw_abort(worker, token)) == 0,
+        "same-batch reset cancels future TLS work");
+    found = 0;
+    for (unsigned turn = 0; !found && turn < 100; ++turn) {
+      int count = rn_step(reactor, 0); check(count >= 0, "poll reset physical CLOSED");
+      for (int i = 0; i < count; ++i) {
+        const rn_event *event = rn_event_at(reactor, (uint32_t)i);
+        if (event->kind == RN_CLOSED) { batch[2] = *event; found = 1; }
+        else check(event->kind == RN_WAKE, "reset closure has no unexpected native event");
+      }
+    }
+    check(found && result(lean_tlsw_native_closed(worker, token)) == 0,
+        "same-batch physical CLOSED retains TLS completion identity");
+    if (atomic_load(&session.state) != TW_DONE) {
+      tw_current_engine = &engine; tw_finish(&engine, &session, 0, ""); tw_current_engine = NULL;
+    }
+    unsigned written = 0, closed = 0;
+    for (unsigned turn = 0; turn < 6; ++turn) {
+      int64_t count = result(lean_tlsw_pump(worker)); check(count >= 0 && count <= 1, "historical single-event pump budget");
+      if (!count) continue;
+      const rn_event *event = &bridge.events[0]; check(event->connection == token, "historical generation is preserved");
+      if (event->kind == TLSW_WRITTEN) {
+        check(!closed && mode != 3 && event->operation == (mode < 2 ? 101 + written : 201) &&
+            event->length == (mode < 2 ? 1u : 3u), "only fully acknowledged plaintext operations survive reset");
+        ++written;
+      } else { check(event->kind == TLSW_CLOSED && !closed, "one CLOSED follows historical completions"); ++closed; }
+    }
+    check(written == (mode < 2 ? 2u : mode == 2 ? 1u : 0u) && closed == 1,
+        "reset preserves completed prefix and cancels unacknowledged or unflushed suffix");
+    check(owner.used && atomic_load(&session.state) == TW_DONE && tw_consumer(&session.fences) == NULL &&
+        tw_consumer(&session.plain_in) == NULL, "CLOSED returns before borrowed plaintext slot can be recycled");
+    check(result(lean_tlsw_release_plain(worker, token)) == 0 && result(lean_tlsw_pump(worker)) == 0 &&
+        !owner.used && atomic_load(&session.state) == TW_FREE, "late plaintext ACK permits safe generation retirement");
+    free(session.fences.cells); free(session.plain_in.cells); free(session.cipher_out.cells); free(session.plain_out.cells);
+    check(close(wake[0]) == 0 && close(wake[1]) == 0 && close(peers[1]) == 0,
+        "close historical-fence fixture descriptors");
+    check(rn_waker_release(engine.reactor_waker) == 0 && rn_buffer_release(reactor, buffer) == 0 && rn_free(reactor) == 0,
+        "historical-fence fixture releases native resources");
+  }
+}
 static tw_engine *wrap_engine;
 static tw_session *wrap_session;
 static unsigned char wrap_cipher[TLSW_CELL_SIZE];
@@ -131,7 +245,7 @@ static void drive_notification_wrap(const char *certificate, const char *key) {
   atomic_init(&engine.notifications, 0); atomic_init(&engine.running, 0);
   atomic_init(&engine.ssl_calls, 0); atomic_init(&engine.owner_violations, 0);
   atomic_init(&engine.live_ssl, 0); atomic_init(&engine.live_bios, 0);
-  engine.bundle = (tw_bundle *)(uintptr_t)bundle; engine.sessions = &session; engine.count = engine.queue_capacity = 1;
+  engine.bundle = (tw_provider *)(uintptr_t)bundle; engine.sessions = &session; engine.count = engine.queue_capacity = 1;
   engine.handshake_ms = 5000; engine.shutdown_ms = 1000;
   check(rn_waker_acquire(reactor, &engine.reactor_waker) == 0, "forced-wrap reactor waker");
   int wake[2]; check(pipe(wake) == 0 && rn_nonblocking(wake[0]) == 0 && rn_nonblocking(wake[1]) == 0, "forced-wrap worker wake pipe");
@@ -390,7 +504,7 @@ int main(int argc, char **argv) {
 #if defined(__linux__)
   atomic_init(&splice_successful, 0);
 #endif
-  queue_wrap(); drive_notification_wrap(argv[1], argv[2]);
+  queue_wrap(); historical_written_batch(); drive_notification_wrap(argv[1], argv[2]);
   exercise(argv[1], argv[2], 1); exercise(argv[1], argv[2], 3);
   puts("TLS worker queue, wire fences and lifecycle tests passed"); return 0;
 }

@@ -82,6 +82,7 @@ private def applyActions (capture : Capture) (actions : List Machine.Action) : I
         let next := capture.state.outputAccepted id
         capture := { capture with state := next.state }
         pending := pending ++ next.actions
+      | .writeObserved .. => throw (IO.userError "output tracking unexpectedly enabled in default HTTP1 fixture")
       | .writeFile .. => throw (IO.userError "unexpected file output from byte-only fixture")
       | .readEnabled _ => pure ()
       | .drainClose => capture := { capture with closed := true }

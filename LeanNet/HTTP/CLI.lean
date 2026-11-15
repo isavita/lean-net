@@ -1,9 +1,18 @@
+import LeanNet.HTTP.Static
+import LeanNet.HTTP2.Server
+
 namespace LeanNet.HTTP.CLI
 
 structure Options where
   enablePush : Bool := false
   staticRoot : Option System.FilePath := none
   staticMemoryMiB : Nat := 8
+  metrics : Bool := false
+  accessLog : Option System.FilePath := none
+  logHelper : Option System.FilePath := none
+  reloadCertsMs : Option Nat := none
+  workers : Nat := 0
+  maxClients : Nat := 32
   positional : List String := []
   private memoryExplicit : Bool := false
 
@@ -12,6 +21,39 @@ private def collect (args : List String) (options : Options) : Except String Opt
   | [] => .ok { options with positional := options.positional.reverse }
   | "--" :: rest => .ok { options with positional := options.positional.reverse ++ rest }
   | "--enable-push" :: rest => collect rest { options with enablePush := true }
+  | "--metrics" :: rest => collect rest { options with metrics := true }
+  | "--workers" :: count :: rest =>
+    match count.toNat? with
+    | some value =>
+      if value > 256 then .error "--workers must be between 0 (automatic) and 256"
+      else collect rest { options with workers := value }
+    | none => .error "--workers requires a decimal count"
+  | "--workers" :: [] => .error "--workers requires a count"
+  | "--max-clients" :: count :: rest =>
+    match count.toNat? with
+    | some value =>
+      if value == 0 || value > 1000000 then .error "--max-clients must be between 1 and 1000000"
+      else collect rest { options with maxClients := value }
+    | none => .error "--max-clients requires a decimal count"
+  | "--max-clients" :: [] => .error "--max-clients requires a count"
+  | "--access-log" :: path :: rest =>
+    if options.accessLog.isSome then .error "--access-log may be supplied once"
+    else if path.isEmpty || path.startsWith "--" then .error "--access-log requires a path"
+    else collect rest { options with accessLog := some (System.FilePath.mk path) }
+  | "--access-log" :: [] => .error "--access-log requires a path"
+  | "--log-helper" :: path :: rest =>
+    if options.logHelper.isSome then .error "--log-helper may be supplied once"
+    else if path.isEmpty || path.startsWith "--" then .error "--log-helper requires an executable path"
+    else collect rest { options with logHelper := some (System.FilePath.mk path) }
+  | "--log-helper" :: [] => .error "--log-helper requires an executable path"
+  | "--reload-certs-ms" :: interval :: rest =>
+    if options.reloadCertsMs.isSome then .error "--reload-certs-ms may be supplied once"
+    else match interval.toNat? with
+      | some value =>
+        if value == 0 || value > 3600000 then .error "--reload-certs-ms must be between 1 and 3600000"
+        else collect rest { options with reloadCertsMs := some value }
+      | none => .error "--reload-certs-ms requires a decimal millisecond interval"
+  | "--reload-certs-ms" :: [] => .error "--reload-certs-ms requires a millisecond interval"
   | "--static" :: directory :: rest =>
     if options.staticRoot.isSome then .error "--static may be supplied once"
     else if directory.isEmpty || directory.startsWith "--" then .error "--static requires a directory"
@@ -32,6 +74,8 @@ def parse (args : List String) : Except String Options := do
   let options ← collect args {}
   if options.memoryExplicit && options.staticRoot.isNone then
     throw "--static-memory requires --static"
+  if options.logHelper.isSome && options.accessLog.isNone then
+    throw "--log-helper requires --access-log"
   return options
 
 def port (argument : Option String) (fallback : UInt16) : Except String UInt16 := do
@@ -39,5 +83,36 @@ def port (argument : Option String) (fallback : UInt16) : Except String UInt16 :
   let some value := text.toNat? | throw "port must be a decimal number"
   if value == 0 || value > 65535 then throw "port must be between 1 and 65535"
   return value.toUInt16
+
+/-- CLI policy lives in the library; the executable only validates positional
+    arguments and enters this bracketed server. -/
+def Options.httpConfig (options : Options) : IO ReactorServerConfig := do
+  let accessLog ← match options.accessLog with
+    | none => pure none
+    | some path => do
+      let helper ← match options.logHelper with
+        | some value => pure value
+        | none => do
+          let executable ← IO.appPath
+          let directory := executable.parent.getD (System.FilePath.mk ".")
+          pure (directory / (if System.Platform.isWindows then "lean-net-access-log-helper.exe" else "lean-net-access-log-helper"))
+      pure (some { path, helperBinary := helper : Observability.AccessConfig })
+  return {
+    workers := options.workers
+    server := { maxClients := options.maxClients }
+    http2 := { enablePush := options.enablePush }
+    metricsPath := if options.metrics then some "/metrics".toUTF8 else none
+    accessLog }
+
+def Options.serve (options : Options) (host : String := "127.0.0.1")
+    (port : UInt16 := 8080) : IO Unit := do
+  if options.reloadCertsMs.isSome then throw (IO.userError "--reload-certs-ms requires the TLS server")
+  let http ← options.httpConfig
+  if let some root := options.staticRoot then
+    let bytes := options.staticMemoryMiB * 1024 * 1024
+    Static.serveRoot root
+      { builder := { maxFileBytes := bytes, maxPackBytes := bytes }, residentBytes := bytes }
+      http host port
+  else HTTP2.serveWithOptions http host port
 
 end LeanNet.HTTP.CLI

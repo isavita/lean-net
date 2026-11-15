@@ -23,8 +23,28 @@ private def checkZero (operation : String) (raw : UInt64) : IO Unit := do
   let value ← check operation raw
   if value != 0 then throw (IO.userError s!"{operation}: unexpected native result {value}")
 
-/-- Configure certificates once; every native worker joins before this bracket
-    frees the shared OpenSSL contexts and their resumption caches. -/
+/-- Atomically request off-loop loading. Requests may coalesce; `completed`
+    reaching this ticket means the loader recorded a success or failure. -/
+def Bundle.requestReload (bundle : Bundle) : IO UInt64 := do
+  unless ← bundle.alive.get do throw (IO.userError "TLS certificate bundle is closed")
+  check "TLS certificate reload request" (← FFI.Worker.bundleReloadRequest bundle.handle)
+
+def Bundle.reloadStatus (bundle : Bundle) : IO ReloadStatus := do
+  unless ← bundle.alive.get do throw (IO.userError "TLS certificate bundle is closed")
+  let raw ← FFI.Worker.bundleReloadStats bundle.handle
+  return {
+    generation := raw.generation
+    attempts := raw.attempts
+    publications := raw.publications
+    failures := raw.failures
+    lastError := Errno.decode raw.lastError
+    liveVersions := raw.liveVersions
+    loaderThreads := raw.loaderThreads
+    requested := raw.requested
+    completed := raw.completed }
+
+/-- Each TLS worker joins before the loader is stopped/joined and immutable
+    context snapshots and their resumption caches are released. -/
 def withBundle (config : Config) (use : Bundle → IO α) : IO α := do
   if config.queueCapacity == 0 || config.queueCapacity > 256 ||
       config.handshakeTimeoutMs == 0 || config.shutdownTimeoutMs == 0 ||
@@ -40,7 +60,11 @@ def withBundle (config : Config) (use : Bundle → IO α) : IO α := do
   let handle ← check "TLS certificate bundle" raw message
   if handle == 0 then throw (IO.userError "TLS certificate bundle returned null")
   let bundle : Bundle := ⟨handle, ← IO.mkRef true⟩
-  try use bundle
+  try
+    if let some reload := config.reload then
+      if reload.intervalMs > 9223372036854775807 then throw (IO.userError "TLS reload interval exceeds native range")
+      checkZero "TLS certificate loader start" (← FFI.Worker.bundleReloadStart handle reload.intervalMs)
+    use bundle
   finally
     bundle.alive.set false
     checkZero "TLS certificate bundle free" (← FFI.Worker.bundleFree handle)
@@ -60,10 +84,13 @@ private structure Session where
   eofSent : Bool := false
   pendingBytes : Nat := 0
   cipherReading : Bool := true
+  nativeClosed : Bool := false
+  nativeErrors : Array (UInt32 × Int) := #[]
 
 private structure State where
   sessions : Std.HashMap LeanNet.Reactor.SocketId Session := {}
   identities : Std.HashMap UInt64 LeanNet.Reactor.SocketId := {}
+  shutdownBefore : Option UInt64 := none
 
 private structure Driver where
   handle : UInt64
@@ -108,7 +135,7 @@ private def Driver.setCipherReading (driver : Driver) (id : LeanNet.Reactor.Sock
     original reactor lease until the TLS worker returns credit. -/
 private def Driver.feedPending (driver : Driver) (id : LeanNet.Reactor.SocketId) : IO Unit := do
   let some initial := (← driver.state.get).sessions[id]? | return
-  if initial.native == 0 then return
+  if initial.native == 0 || initial.nativeClosed then return
   let budget := (initial.pendingFront.length + initial.pendingBack.length) * 16 + 1
   for _ in [:budget] do
     let some current := (← driver.state.get).sessions[id]? | return
@@ -177,7 +204,7 @@ private def Driver.endpoint (driver : Driver) (id : LeanNet.Reactor.SocketId)
     ordinary bounded resource pressure as a server failure. -/
 private def Driver.tryAttach (driver : Driver) (id : LeanNet.Reactor.SocketId) : IO Unit := do
   let some session := (← driver.state.get).sessions[id]? | return
-  if session.native != 0 then return
+  if session.native != 0 || session.nativeClosed then return
   unless ← id.isLive driver.reactor do return
   let raw ← FFI.Worker.attach driver.handle session.wire
   let code := Errno.decode raw
@@ -198,6 +225,7 @@ private def Driver.attach (driver : Driver) (socket : LeanNet.Reactor.Socket .co
 private def Driver.readCipher (driver : Driver) (id : LeanNet.Reactor.SocketId)
     (buffer : LeanNet.Reactor.Buffer) (offset length : UInt32) : IO Unit := do
   let some session := (← driver.state.get).sessions[id]? | buffer.release; return
+  if session.nativeClosed then buffer.release; return
   if length.toNat > 65536 - session.pendingBytes then
     buffer.release
     driver.abort id
@@ -220,6 +248,15 @@ private def Driver.nativeEvent (driver : Driver) : LeanNet.Reactor.Event → IO 
     if let some session := (← driver.state.get).sessions[socket.id]? then
       if session.native != 0 then
         checkZero "TLS native close acknowledgement" (← FFI.Worker.nativeClosed driver.handle session.native)
+        -- The TLS thread can still publish a final acknowledged write fence.
+        -- Keep its identity until TLSW_CLOSED, but return raw input immediately.
+        driver.put socket.id { session with
+          nativeClosed := true
+          pendingFront := []
+          pendingBack := []
+          pendingBytes := 0 }
+        releasePending session
+        return #[]
     driver.forget socket.id
     return #[.closed socket.id]
   | .eof socket => do
@@ -236,7 +273,13 @@ private def Driver.nativeEvent (driver : Driver) : LeanNet.Reactor.Event → IO 
   | .wireTimer id kind => pure #[.timer id kind]
   | .wake => pure #[.wake]
   | .error id flags code => do
-    if !(← Errno.isInterrupted code) then driver.abort id
+    if !(← Errno.isInterrupted code) then
+      if let some session := (← driver.state.get).sessions[id]? then
+        if session.native != 0 then
+          driver.abort id
+          driver.put id { session with nativeErrors := session.nativeErrors.push (flags, code) }
+          return #[]
+      driver.abort id
     return #[.error id flags code]
 
 private def Driver.poll (driver : Driver) : IO (Array HTTP.Transport.Event) := do
@@ -270,6 +313,9 @@ private def Driver.poll (driver : Driver) : IO (Array HTTP.Transport.Event) := d
       | 3 => events := events.push (.written id raw.operation (Errno.decode raw.result).toNat)
       | 4 => events := events.push (.eof id)
       | 6 =>
+        if let some session := (← driver.state.get).sessions[id]? then
+          for (flags, code) in session.nativeErrors do
+            events := events.push (.error id flags code)
         driver.forget id
         events := events.push (.closed id)
       | 7 =>
@@ -301,7 +347,8 @@ private def Driver.stop (driver : Driver) (duration : UInt64) : IO Unit := do
   for (_id, session) in (← driver.state.get).sessions.toArray do
     if session.ready.isSome then
       checkZero "TLS worker shutdown" (← FFI.Worker.shutdown driver.handle session.native)
-  let stopDeadline := (← LeanNet.Reactor.nowMs) + duration + 100
+  let proposed := (← LeanNet.Reactor.nowMs) + duration + 100
+  let stopDeadline := ((← driver.state.get).shutdownBefore.map (min proposed)).getD proposed
   let mut draining := true
   while draining && (← LeanNet.Reactor.nowMs) < stopDeadline do
     driver.stopEvents (← driver.poll)
@@ -331,9 +378,12 @@ def withWorkerStats (bundle : Bundle) (config : Config) (reactor : LeanNet.React
   let driver : Driver := { handle, reactor, state := ← IO.mkRef {}, alive := ← IO.mkRef true }
   try
     let transport : HTTP.Transport.Worker := {
+      deferClosed := true
       event := driver.nativeEvent
       poll := driver.poll
       hasWork := do return (← check "TLS pending work" (← FFI.Worker.hasWork handle)) != 0
+      shutdownBefore := fun deadline => driver.state.modify fun state =>
+        { state with shutdownBefore := some ((state.shutdownBefore.map (min deadline)).getD deadline) }
       reservedBuffers := 2 * maxClients }
     let diagnostics : IO Stats := do
       unless ← driver.alive.get do throw (IO.userError "TLS worker is closed")

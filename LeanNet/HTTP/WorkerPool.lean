@@ -99,14 +99,20 @@ where
     client limit, private reactor, and shared stop group. It should create its
     own handler state there, then run until the group stops. All started tasks
     are stopped and joined before signal, reactor, or endpoint brackets close. -/
-def withWorkerPool (host : String) (port : UInt16) (workers maxClients : Nat)
-    (native : Reactor.Config)
-    (run : Nat → Nat → Reactor.Reactor → Reactor.Group → IO Unit) : IO Unit := do
+def workerCount (workers maxClients : Nat) : IO Nat := do
   if maxClients == 0 then throw (IO.userError "HTTP maxClients must be positive")
   if workers > 256 then throw (IO.userError "HTTP worker count must not exceed 256")
   if workers > maxClients then throw (IO.userError "HTTP worker count exceeds maxClients")
   let count ← if workers == 0 then pure (min 256 (min maxClients (← Reactor.cpuCount))) else pure workers
   if count == 0 then throw (IO.userError "HTTP worker count must be positive")
+  return count
+
+/-- Create the resolved worker set; the callback constructs its private state
+    on each dedicated owner and every task joins before resources close. -/
+def withWorkerPool (host : String) (port : UInt16) (workers maxClients : Nat)
+    (native : Reactor.Config)
+    (run : Nat → Nat → Reactor.Reactor → Reactor.Group → IO Unit) : IO Unit := do
+  let count ← workerCount workers maxClients
   let partitions := (Array.range count).map fun index =>
     maxClients / count + if index < maxClients % count then 1 else 0
   let handoff := count > 1 && (System.Platform.isWindows || System.Platform.isOSX)

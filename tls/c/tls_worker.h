@@ -18,7 +18,13 @@ enum tlsw_event_kind {
 lean_object *lean_tlsw_bundle_new(b_lean_obj_arg cert, b_lean_obj_arg key,
     b_lean_obj_arg names, b_lean_obj_arg certs, b_lean_obj_arg keys,
     uint8_t tickets);
+/* Stop/wake/join the loader before dropping outer ownership. A join failure
+ * retains the graph. After a successful join, wake/destroy/close errors still
+ * consume outer ownership: callers must not retry free on that error. */
 lean_object *lean_tlsw_bundle_free(uint64_t handle);
+lean_object *lean_tlsw_bundle_reload_start(uint64_t handle, uint64_t interval_ms);
+lean_object *lean_tlsw_bundle_reload_request(uint64_t handle);
+lean_object *lean_tlsw_bundle_reload_stats(uint64_t handle);
 lean_object *lean_tlsw_worker_new(uint64_t bundle, b_lean_obj_arg reactor,
     uint32_t max_sessions, uint32_t queue_capacity, uint64_t handshake_ms,
     uint64_t shutdown_ms);
@@ -34,6 +40,9 @@ lean_object *lean_tlsw_resume_file(uint64_t handle, uint64_t session);
 lean_object *lean_tlsw_peer_eof(uint64_t handle, uint64_t session);
 lean_object *lean_tlsw_shutdown(uint64_t handle, uint64_t session);
 lean_object *lean_tlsw_abort(uint64_t handle, uint64_t session);
+/* Native closure cancels future work. Pump preserves acknowledged historical
+ * WRITTEN events, then emits TLSW_CLOSED after the TLS producer stops. A claimed
+ * plaintext loan can be returned after CLOSED; its slot is not reused early. */
 lean_object *lean_tlsw_native_closed(uint64_t handle, uint64_t session);
 lean_object *lean_tlsw_release_plain(uint64_t handle, uint64_t session);
 lean_object *lean_tlsw_read_enabled(uint64_t handle, uint64_t session,

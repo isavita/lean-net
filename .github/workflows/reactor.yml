@@ -7,10 +7,17 @@ on:
 
 jobs:
   native:
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            python: python3
+          - os: macos-latest
+            python: python3
+          - os: windows-latest
+            python: python
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -53,13 +60,16 @@ jobs:
           test: false
           lint: false
       - name: Build reactor and echo
-        run: lake build lean-net-echo lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture
+        run: lake build lean-net-echo lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-protocol-fuzz
       - name: Pure HTTP/1 protocol machines
         run: |
           lake env lean --run test/HTTP1ParserV2Test.lean
           lake env lean --run test/HTTP1EncodingTest.lean
           lake env lean --run test/HTTP1MachineTest.lean
           lake env lean --run test/HTTP1FileTest.lean
+          lake env lean --run test/HTTP1ShutdownTest.lean
+          lake env lean --run test/ResponseOutputTest.lean
+          lake env lean --run test/ObservabilityMetricsTest.lean
       - name: Pure HTTP/2 protocol machines
         run: |
           lake env lean --run test/HTTP2FrameTest.lean
@@ -74,6 +84,20 @@ jobs:
           lake env lean --run test/HTTP2FileTest.lean
       - name: Pure static selection, paths and dates
         run: lake env lean --run test/StaticSelectionTest.lean
+      - name: Short deterministic protocol fuzz and controller invariants
+        run: |
+          lake env ${{ matrix.python }} test/fuzz_protocols.py --profile short --output "$RUNNER_TEMP/phase6-fuzz-${{ runner.os }}"
+          lake env ${{ matrix.python }} test/test_production_harness.py -v
+      - name: Preserve protocol fuzz seeds and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-fuzz-${{ runner.os }}
+          path: ${{ runner.temp }}/phase6-fuzz-${{ runner.os }}
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Bounded access log helper ownership and output
+        run: lake env ${{ matrix.python }} test/test_access_log.py -v
       - name: Packed static codecs and publication (Unix)
         if: runner.os != 'Windows'
         run: python3 test/test_static_catalog.py -v
@@ -91,6 +115,7 @@ jobs:
           python3 test/test_reactor_wire.py -v
           python3 test/test_reactor_echo.py -v
           python3 test/test_http1_reactor.py -v
+          python3 test/test_graceful_shutdown.py -v
       - name: Worker echo and FFI setup ownership (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -98,6 +123,7 @@ jobs:
           lake env python test/test_reactor_wire.py -v
           lake env python test/test_reactor_echo.py -v
           lake env python test/test_http1_reactor.py -v
+          lake env python test/test_graceful_shutdown.py -v
       - name: Echo acceptance
         if: runner.os != 'Windows'
         run: python3 test/test_echo.py -v

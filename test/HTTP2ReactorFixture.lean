@@ -52,10 +52,19 @@ private def handlers (worker : Nat) : IO Handlers := do
   }
 
 def main (args : List String) : IO UInt32 := do
-  let some port := args[0]?.bind String.toNat? | throw (IO.userError "usage: fixture PORT [mixed|h2-only|push|limits|bench] [WORKERS]")
+  let some port := args[0]?.bind String.toNat? | throw (IO.userError "usage: fixture PORT [mixed|h2-only|push|limits|bench|bench-observe] [WORKERS]")
   if port == 0 || port > 65535 then throw (IO.userError "invalid port")
   let mode := args[1]?.getD "mixed"
-  unless ["mixed", "h2-only", "push", "limits", "bench"].contains mode do throw (IO.userError "invalid HTTP/2 fixture mode")
+  unless ["mixed", "h2-only", "push", "limits", "bench", "bench-observe"].contains mode do throw (IO.userError "invalid HTTP/2 fixture mode")
+  let benchmark := mode == "bench" || mode == "bench-observe"
+  let accessLog ← if mode == "bench-observe" then do
+      let executable ← IO.appPath
+      let directory := executable.parent.getD (System.FilePath.mk ".")
+      pure (some {
+        path := System.FilePath.mk (if System.Platform.isWindows then "NUL" else "/dev/null"),
+        helperBinary := directory / (if System.Platform.isWindows then "lean-net-access-log-helper.exe" else "lean-net-access-log-helper")
+        : HTTP.Observability.AccessConfig })
+    else pure none
   let workers := (args[2]?.bind String.toNat?).getD 1
   if workers == 0 || workers > 256 then throw (IO.userError "invalid worker count")
   let connection : HTTP2.Connection.Config := if mode == "limits" then {
@@ -65,8 +74,10 @@ def main (args : List String) : IO UInt32 := do
     else { enablePush := mode == "push" }
   let config : HTTP.ReactorServerConfig := {
     workers, http2 := connection, cleartextProtocol := if mode == "mixed" then .detect else .http2,
-    server := { maxClients := if mode == "bench" then 128 else 64,
+    server := { maxClients := if benchmark then 128 else 64,
                 maxResponseBytes := 8 * 1024 * 1024, maxResponseHeaderBytes := 65536 },
-    outputBuffers := if mode == "bench" then 512 else 128 }
+    outputBuffers := if benchmark then 512 else 128,
+    metricsPath := if mode == "bench-observe" then some "/metrics".toUTF8 else none,
+    accessLog }
   HTTP.ReactorServer.serveFactory handlers config "127.0.0.1" (UInt16.ofNat port)
   return 0

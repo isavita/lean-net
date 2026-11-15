@@ -29,7 +29,8 @@ static void table_case(const char *certificate,const char *private_key,
   check(lean_is_exclusive(cert) && lean_is_exclusive(key),"default borrowed paths retain exactly caller ownership");
   check(success ? value>0 : value<0,"certificate table setup outcome");
   if(success){
-    tw_bundle *bundle=(tw_bundle *)(uintptr_t)value;
+    tw_provider *provider=(tw_provider *)(uintptr_t)value;
+    tw_bundle *bundle=provider->current;
     for(uint32_t i=0;i<bundle->count;++i){
       SSL_CTX *context=bundle->contexts[i].ssl;
       check(SSL_CTX_get_min_proto_version(context)==TLS1_2_VERSION,"TLS 1.2 minimum retained");

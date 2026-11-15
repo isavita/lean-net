@@ -1,0 +1,78 @@
+{
+  "duration_seconds": 86400,
+  "warmup_seconds": 300,
+  "tail_seconds": 30,
+  "sample_seconds": 60,
+  "servers": [
+    {
+      "name": "plain",
+      "scheme": "http",
+      "binary": ".lake/build/bin/lean-net-http1",
+      "args": [
+        "{port}",
+        "--metrics",
+        "--max-clients",
+        "128",
+        "--workers",
+        "8",
+        "--access-log",
+        "{null}"
+      ],
+      "path": "/",
+      "body_hex": "48656c6c6f2066726f6d206c65616e2d6e6574210a",
+      "metrics_path": "/metrics",
+      "connections": 10,
+      "rps_per_client": 510,
+      "metrics": {
+        "completed": {
+          "name": "lean_net_successful_completed_requests_total"
+        },
+        "errors": {
+          "name": "lean_net_request_errors_total"
+        },
+        "timeouts": {
+          "name": "lean_net_request_timeouts_total"
+        },
+        "resets": {
+          "name": "lean_net_connection_resets_total"
+        }
+      }
+    },
+    {
+      "name": "tls",
+      "scheme": "https",
+      "binary": "tls/.lake/build/bin/lean-net-tls",
+      "args": [
+        "{cert}",
+        "{key}",
+        "{port}",
+        "--metrics",
+        "--max-clients",
+        "128",
+        "--workers",
+        "8",
+        "--access-log",
+        "{null}"
+      ],
+      "path": "/",
+      "body_hex": "48656c6c6f2066726f6d206c65616e2d6e6574210a",
+      "metrics_path": "/metrics",
+      "connections": 10,
+      "rps_per_client": 510,
+      "metrics": {
+        "completed": {
+          "name": "lean_net_successful_completed_requests_total"
+        },
+        "errors": {
+          "name": "lean_net_request_errors_total"
+        },
+        "timeouts": {
+          "name": "lean_net_request_timeouts_total"
+        },
+        "resets": {
+          "name": "lean_net_connection_resets_total"
+        }
+      }
+    }
+  ]
+}

@@ -6,6 +6,9 @@ namespace LeanNetTLS.FFI.Worker
 @[extern "lean_tlsw_bundle_new"] opaque bundleNew (cert key : @& String)
   (names certs keys : @& Array String) (tickets : UInt8) : IO (UInt64 × String)
 @[extern "lean_tlsw_bundle_free"] opaque bundleFree (handle : UInt64) : IO UInt64
+@[extern "lean_tlsw_bundle_reload_start"] opaque bundleReloadStart (handle intervalMs : UInt64) : IO UInt64
+@[extern "lean_tlsw_bundle_reload_request"] opaque bundleReloadRequest (handle : UInt64) : IO UInt64
+@[extern "lean_tlsw_bundle_reload_stats"] opaque bundleReloadStats (handle : UInt64) : IO LeanNetTLS.Reactor.RawReloadStats
 @[extern "lean_tlsw_worker_new"] opaque workerNew (bundle : UInt64)
   (reactor : @& LeanNet.Reactor.Reactor) (maxSessions queueCapacity : UInt32)
   (handshakeMs shutdownMs : UInt64) : IO (UInt64 × String)
