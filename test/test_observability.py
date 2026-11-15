@@ -141,7 +141,8 @@ class Running:
         records = [json.loads(line) for line in lines]
         for record in records:
             self.case.assertEqual(set(record), {"timestamp", "timestamp_ms", "worker", "protocol", "status", "outcome",
-                "bytes_sent", "duration_ms", "duration_us", "remote_ip", "trace_id", "method", "path", "target",
+                "bytes_sent", "duration_ms", "duration_us", "remote_ip", "trace_id", "route", "reject_reason",
+                "method", "path", "target",
                 "method_truncated", "target_truncated", "target_redacted"})
             self.case.assertRegex(record["timestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
             self.case.assertEqual(record["path"], record["target"])

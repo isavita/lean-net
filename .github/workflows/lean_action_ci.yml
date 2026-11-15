@@ -63,6 +63,7 @@ jobs:
           lake build lean-net-gate-fixture LeanNet.Gate.Literal
           python3 test/test_gate.py -v
           python3 test/test_ratelimit.py -v
+          python3 test/test_gate_cli.py -v
           python3 test/test_admin.py -v
       - name: Short deterministic protocol fuzz and controller invariants
         run: |

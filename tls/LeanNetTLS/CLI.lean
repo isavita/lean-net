@@ -17,6 +17,7 @@ def serve (options : LeanNet.HTTP.CLI.Options) (certificate privateKey : String)
     clientCA := options.clientCA.map (·.toString)
     requireClientCert := options.requireClientCert
     ocspResponse := options.ocspResponse.map (·.toString) }
+  options.withGate http fun http => do
   if let some root := options.staticRoot then
     let bytes := options.staticMemoryMiB * 1024 * 1024
     ReactorServer.serveStaticRoot root tls

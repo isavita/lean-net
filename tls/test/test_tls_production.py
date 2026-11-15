@@ -367,6 +367,28 @@ class TLSProduction(unittest.TestCase):
         self.assertIn("sni=none", text)
         self.assertIn("principal=none", text)
 
+    def test_gate_enforces_host_sni_agreement(self):
+        policy = Path(self.directory.name) / "gate.policy"
+        policy.write_text(f"host {NAMES[0]} {{ tls sni strict ; fallback app }}\n"
+                          f"host {NAMES[1]} {{ tls sni strict ; fallback app }}\n")
+        server = self.start("--gate", policy)
+        curl = curl_binary()
+        def status(sni, host):
+            result = subprocess.run([curl, "-sS", "--noproxy", "*", "-o", os.devnull, "-w", "%{http_code}",
+                                     "--cacert", str(self.certs.ca), "--resolve", f"{sni}:{server.port}:{HOST}",
+                                     "-H", f"Host: {host}", f"https://{sni}:{server.port}/"],
+                                    capture_output=True, timeout=20)
+            return int(result.stdout.decode() or 0)
+        self.assertEqual(status(NAMES[0], NAMES[0]), 200)
+        # A connection authenticated for one name cannot be used for another.
+        self.assertEqual(status(NAMES[0], NAMES[1]), 421)
+        self.assertEqual(status(NAMES[0], "unknown.test"), 421)
+        # Without SNI (IP literal) a strict host is refused.
+        ctx = context(self.certs, ("http/1.1",)); ctx.check_hostname = False
+        with ctx.wrap_socket(socket.create_connection((HOST, server.port), timeout=5)) as sock:
+            sock.sendall(request(b"/", close=True))
+            self.assertEqual(read_http(sock)[0], 421)
+
     def test_mtls_curl_acceptance_and_rejection(self):
         curl = curl_binary()
         server = self.start("--client-ca", self.client_ca, "--require-client-cert")

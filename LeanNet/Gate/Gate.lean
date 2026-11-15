@@ -108,7 +108,11 @@ def decide (config : Config) (policy : Policy) (worker : Nat) (facts : Transport
     | some (.app (some name)) => (config.app.handlers.find? (·.1 == name)).map fun (_, handler) => handler a
     | some (.proxy _ _) => config.app.forwarder.map (· a)
     | _ => none
-  return .ok (.accept a.rules.body dispatch (stripper a.rules.headers.strip))
+  let label := match a.selection with
+    | .route r => (a.policy.hosts[a.host]).routes[r].pattern
+    | .fallback => "fallback"
+    | .internal => "internal"
+  return .ok (.accept a.rules.body dispatch (stripper a.rules.headers.strip) (some label))
 
 /-- The per-worker admission factory. Each worker compiles its own copy of
     the policy on its own thread (no cross-core reference counting). -/

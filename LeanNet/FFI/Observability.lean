@@ -5,7 +5,7 @@ opaque create (workers capacity : UInt32) (path helper : @& String)
   (fileBytes : UInt64) (files pollMs : UInt32) : IO UInt64
 @[extern "lean_ob_emit"]
 opaque emit (handle : UInt64) (worker : UInt32) (timestampMs durationUs bytesSent : UInt64)
-  (status protocol outcome : UInt32) (method target remote trace : @& ByteArray) : IO UInt64
+  (status protocol outcome : UInt32) (method target remote trace route reason : @& ByteArray) : IO UInt64
 @[extern "lean_ob_publish"]
 opaque publish (handle : UInt64) (worker : UInt32) (fields : @& Array UInt64) : IO UInt64
 @[extern "lean_ob_snapshot"]

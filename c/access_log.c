@@ -43,6 +43,8 @@ typedef struct {
   uint8_t method[OB_METHOD_BYTES], target[OB_TARGET_BYTES];
   uint32_t remote_length, trace_length;
   uint8_t remote[OB_REMOTE_BYTES], trace[OB_TRACE_BYTES];
+  uint32_t route_length, reason_length;
+  uint8_t route[OB_ROUTE_BYTES], reason[OB_REASON_BYTES];
 } ob_cell;
 typedef struct {
   atomic_uint head, tail;
@@ -450,7 +452,8 @@ int ob_emit(ob_hub *hub, uint32_t worker, const ob_record *record) {
       (record->method_length && !record->method) || (record->target_length && !record->target) ||
       record->status > 599 || record->protocol > 2 || record->outcome > 4 ||
       (record->remote_length && !record->remote) ||
-      (record->trace_length && (!record->trace || record->trace_length != OB_TRACE_BYTES)))
+      (record->trace_length && (!record->trace || record->trace_length != OB_TRACE_BYTES)) ||
+      (record->route_length && !record->route) || (record->reason_length && !record->reason))
     return -EINVAL;
   if (!hub->logging)
     return 2;
@@ -500,6 +503,14 @@ int ob_emit(ob_hub *hub, uint32_t worker, const ob_record *record) {
   cell->remote_length = (uint32_t)remote;
   if (remote)
     memcpy(cell->remote, record->remote, remote);
+  size_t route = record->route_length < OB_ROUTE_BYTES ? record->route_length : OB_ROUTE_BYTES;
+  cell->route_length = (uint32_t)route;
+  if (route)
+    memcpy(cell->route, record->route, route);
+  size_t reason = record->reason_length < OB_REASON_BYTES ? record->reason_length : OB_REASON_BYTES;
+  cell->reason_length = (uint32_t)reason;
+  if (reason)
+    memcpy(cell->reason, record->reason, reason);
   cell->trace_length = (uint32_t)record->trace_length;
   if (record->trace_length)
     memcpy(cell->trace, record->trace, OB_TRACE_BYTES);
@@ -1069,6 +1080,28 @@ static int ob_line(const ob_cell *cell, uint32_t worker, char out[OB_LINE_BYTES]
     memcpy(out + at, "null", 4);
     at += 4;
   }
+  if (cell->route_length > OB_ROUTE_BYTES || cell->reason_length > OB_REASON_BYTES)
+    return -EINVAL;
+  memcpy(out + at, ",\"route\":", 9);
+  at += 9;
+  if (cell->route_length) {
+    out[at++] = '"';
+    at += ob_escape(out + at, cell->route, cell->route_length);
+    out[at++] = '"';
+  } else {
+    memcpy(out + at, "null", 4);
+    at += 4;
+  }
+  memcpy(out + at, ",\"reject_reason\":", 17);
+  at += 17;
+  if (cell->reason_length) {
+    out[at++] = '"';
+    at += ob_escape(out + at, cell->reason, cell->reason_length);
+    out[at++] = '"';
+  } else {
+    memcpy(out + at, "null", 4);
+    at += 4;
+  }
   memcpy(out + at, ",\"method\":\"", 11);
   at += 11;
   at += ob_escape(out + at, cell->method, cell->method_length);
@@ -1312,7 +1345,8 @@ lean_object *lean_ob_new(uint32_t workers, uint32_t capacity, b_lean_obj_arg pat
 lean_object *lean_ob_emit(uint64_t handle, uint32_t worker, uint64_t timestamp_ms,
                           uint64_t duration_us, uint64_t bytes_sent, uint32_t status,
                           uint32_t protocol, uint32_t outcome, b_lean_obj_arg method,
-                          b_lean_obj_arg target, b_lean_obj_arg remote, b_lean_obj_arg trace) {
+                          b_lean_obj_arg target, b_lean_obj_arg remote, b_lean_obj_arg trace,
+                          b_lean_obj_arg route, b_lean_obj_arg reason) {
   ob_record record = {timestamp_ms,
                       duration_us,
                       bytes_sent,
@@ -1326,7 +1360,11 @@ lean_object *lean_ob_emit(uint64_t handle, uint32_t worker, uint64_t timestamp_m
                       lean_sarray_cptr(remote),
                       lean_sarray_cptr(trace),
                       lean_sarray_size(remote),
-                      lean_sarray_size(trace)};
+                      lean_sarray_size(trace),
+                      lean_sarray_cptr(route),
+                      lean_sarray_cptr(reason),
+                      lean_sarray_size(route),
+                      lean_sarray_size(reason)};
   return ob_result(ob_emit((ob_hub *)(uintptr_t)handle, worker, &record));
 }
 lean_object *lean_ob_publish(uint64_t handle, uint32_t worker, b_lean_obj_arg array) {

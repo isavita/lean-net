@@ -18,6 +18,8 @@ structure RequestEvent where
   tunnelHead : Option RequestHead := none
   /-- Present only when `Config.headGate` paused this stream for admission. -/
   gateHead : Option RequestHead := none
+  /-- The paused stream may still receive DATA or trailers. -/
+  gateOpen : Bool := false
 
 structure TunnelDataEvent where
   streamId : UInt32
@@ -446,7 +448,8 @@ private def finishHeaders (connection : Connection) (assembly : HeaderAssembly) 
         let request : HTTP1.Request :=
           { method := head.method, version := "HTTP/2", target := head.target, headers := head.headers, body := ByteArray.empty }
         return (putStream connection entry, ByteArray.empty,
-          #[{ streamId := assembly.streamId, request, startedAt := entry.startedAt, gateHead := some head }])
+          #[{ streamId := assembly.streamId, request, startedAt := entry.startedAt, gateHead := some head,
+              gateOpen := !assembly.endStream }])
       return ← afterHead connection entry head assembly.endStream
   else
     if !assembly.endStream || entry.delivered then
@@ -1241,9 +1244,10 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
         outputSize := outputSize + bytes.size
         heads := heads ++ events.filter (·.gateHead.isSome)
         requests := requests ++ events.filter (·.gateHead.isNone)
-        -- Pause after a head that needs a decision: later frames, including
-        -- its DATA, are read only after the driver admits or rejects it.
-        if !tunnelData.isEmpty || events.any (fun e => e.tunnelHead.isSome || e.gateHead.isSome) then break
+        -- Pause after a head that may still carry a body: later frames,
+        -- including its DATA, are read only after the decision. Bodyless
+        -- (END_STREAM) heads are batched and decided after this step.
+        if !tunnelData.isEmpty || events.any (fun e => e.tunnelHead.isSome || (e.gateHead.isSome && e.gateOpen)) then break
     if outputSize > connection.config.maxOutputBatchBytes then
       return failedStep connection (connError .enhanceYourCalm "connection output batch exceeded") consumed output requests peerResets started pingAcks
   return { connection, consumed, output, requests := requests.filter (fun event => connection.canRespond event.streamId), peerResets, started, pingAcks, tunnelData, tunnelResets, heads }

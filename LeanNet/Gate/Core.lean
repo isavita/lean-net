@@ -31,7 +31,7 @@ def tokenByte (c : UInt8) : Bool :=
 
 /-- Lowercase token name and safe value: the invariant every admitted field holds. -/
 def fieldOk (field : HTTP1.Header) : Bool :=
-  !field.name.isEmpty && field.name.toUTF8.data.all (fun c => tokenByte c && !(c >= 65 && c <= 90)) &&
+  !field.name.isEmpty && field.name.all (fun c => c.toNat < 128 && tokenByte c.toUInt8 && !c.isUpper) &&
   !(field.value.data[0]?.any (fun c => c == 32 || c == 9)) &&
   !(field.value.data.back?.any (fun c => c == 32 || c == 9)) &&
   field.value.data.all valueByte
@@ -235,8 +235,10 @@ def normalizePath (target : ByteArray) (maxDepth : Nat := 32) : Except PathError
   if target.isEmpty || target[0]! != 47 then throw .notOriginForm
   let stop := (target.data.findIdx? (· == 63)).getD target.size
   let query := if stop < target.size then target.extract (stop + 1) target.size else ByteArray.empty
-  let mut path := ByteArray.empty
-  let mut i := 0
+  -- Common case: no escapes or backslashes, so the path is one slice.
+  let plain := !target.data.any (fun c => c == 37 || c == 92) 0 stop
+  let mut path := if plain then target.extract 0 stop else ByteArray.empty
+  let mut i := if plain then stop else 0
   while i < stop do
     let c := target[i]!
     if c == 92 then throw .encodedSeparator

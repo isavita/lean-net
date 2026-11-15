@@ -354,6 +354,10 @@ int main(int argc, char **argv) {
                       NULL,
                       NULL,
                       0,
+                      0,
+                      NULL,
+                      NULL,
+                      0,
                       0};
   REQUIRE(ob_emit(hub, 0, &record) == 2);
 #ifndef _WIN32

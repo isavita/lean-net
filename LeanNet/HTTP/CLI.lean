@@ -1,5 +1,6 @@
 import LeanNet.HTTP.Static
 import LeanNet.HTTP2.Server
+import LeanNet.Gate
 
 namespace LeanNet.HTTP.CLI
 
@@ -29,6 +30,8 @@ structure Options where
   requireClientCert : Bool := false
   /-- TLS only: DER OCSP response stapled for the default certificate. -/
   ocspResponse : Option System.FilePath := none
+  /-- Gate policy file (see docs/gateway.md); reloaded on SIGHUP. -/
+  gateFile : Option System.FilePath := none
   private memoryExplicit : Bool := false
 
 private def collect (args : List String) (options : Options) : Except String Options :=
@@ -69,6 +72,11 @@ private def collect (args : List String) (options : Options) : Except String Opt
     else if path.isEmpty || path.startsWith "--" then .error "--ocsp-response requires a DER file"
     else collect rest { options with ocspResponse := some (System.FilePath.mk path) }
   | "--ocsp-response" :: [] => .error "--ocsp-response requires a DER file"
+  | "--gate" :: path :: rest =>
+    if options.gateFile.isSome then .error "--gate may be supplied once"
+    else if path.isEmpty || path.startsWith "--" then .error "--gate requires a policy file"
+    else collect rest { options with gateFile := some (System.FilePath.mk path) }
+  | "--gate" :: [] => .error "--gate requires a policy file"
   | "--metrics" :: rest => collect rest { options with metrics := true }
   | "--http2-ping-ms" :: interval :: rest =>
     if options.pingIntervalMs.isSome then .error "--http2-ping-ms may be supplied once"
@@ -198,12 +206,33 @@ def Options.httpConfig (options : Options) : IO ReactorServerConfig := do
     pinWorkers := options.pinWorkers
     websocketOrigin := options.websocketOrigin.map (·.toUTF8) }
 
+/-- Install the `--gate` policy, if any: validated at startup (a bad file
+    stops the server), reloaded on SIGHUP, with its counters on `/metrics`.
+    CLI policies can route to the server's own handlers (`app`), `deny`,
+    `redirect` and `websocket`; named handlers need a library program. -/
+def Options.withGate (options : Options) (http : ReactorServerConfig)
+    (use : ReactorServerConfig → IO Unit) : IO Unit := do
+  let some path := options.gateFile | use http
+  let text ← IO.FS.readFile path
+  let spec ← match Gate.Spec.parse text with
+    | .ok spec => pure spec
+    | .error error => throw (IO.userError (toString error))
+  let workers ← workerCount http.workers http.server.maxClients
+  Gate.withLive { spec } workers fun live => do
+    let previous := http.onReload
+    let metrics := http.extraMetrics
+    use { http with
+      admission := some live.factory
+      onReload := do previous; live.reloadFile path
+      extraMetrics := do return (← metrics) ++ (← live.metrics) }
+
 def Options.serve (options : Options) (host : String := "127.0.0.1")
     (port : UInt16 := 8080) : IO Unit := do
   if options.reloadCertsMs.isSome then throw (IO.userError "--reload-certs-ms requires the TLS server")
   if options.clientCA.isSome || options.ocspResponse.isSome then
     throw (IO.userError "--client-ca, --require-client-cert and --ocsp-response require the TLS server")
   let http ← options.httpConfig
+  options.withGate http fun http => do
   if let some root := options.staticRoot then
     let bytes := options.staticMemoryMiB * 1024 * 1024
     Static.serveRoot root

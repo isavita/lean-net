@@ -56,6 +56,9 @@ structure ReactorServerConfig where
   /-- Optional head-stage admission (see `LeanNet.HTTP.Admission`). `none`
       keeps the core server's behaviour unchanged. -/
   admission : Option Admission.Factory := none
+  /-- Extra Prometheus exposition appended to the metrics endpoint and the
+      admin port (e.g. gate counters). -/
+  extraMetrics : IO ByteArray := pure ByteArray.empty
   /-- Demo WebSocket echo route `/ws`; the exact allowed browser Origin must
       be configured explicitly. Applications can use their own policy. -/
   websocketOrigin : Option ByteArray := none
@@ -141,6 +144,9 @@ private structure RequestObservation where
   counted : Bool := true
   remote : ByteArray := ByteArray.empty
   traceId : ByteArray := ByteArray.empty
+  /-- Admission outcome labels from configuration (never request bytes). -/
+  route : ByteArray := ByteArray.empty
+  rejectReason : ByteArray := ByteArray.empty
 
 /-- Admission-selected per-request handling. -/
 private structure Dispatch where
@@ -299,7 +305,8 @@ private def Driver.finishObservation (driver : Driver) (id : Reactor.SocketId) (
     durationUs := duration.toUInt64, bytesSent := request.payloadSent,
     status := request.status.toUInt32, protocol := request.protocol,
     method := request.method, target := request.target, outcome,
-    remote := request.remote, traceId := request.traceId }
+    remote := request.remote, traceId := request.traceId, route := request.route,
+    rejectReason := request.rejectReason }
   pure ()
 
 private def Driver.abortObservation (driver : Driver) (id : Reactor.SocketId)
@@ -572,7 +579,8 @@ private def Driver.reply (driver : Driver) (id : Reactor.SocketId) (requestId : 
     let snapshot ← observer.hub.snapshot
     return { response := {
       headers := #[{ name := "Content-Type", value := Observability.metricsContentType }]
-      body := snapshot.renderPrometheus ++ (← observer.hub.processMetrics) ++ (← driver.transport.metrics) } }
+      body := snapshot.renderPrometheus ++ (← observer.hub.processMetrics) ++ (← driver.transport.metrics) ++
+        (← driver.config.extraMetrics) } }
   let request ← driver.traced id requestId request
   let request := match dispatch.bind (·.rewrite) with | some rewrite => rewrite request | none => request
   match dispatch.bind (·.handler) with
@@ -587,6 +595,15 @@ private def Driver.factsOf (driver : Driver) (id : Reactor.SocketId) : IO Transp
     | none => do return Transport.Facts.plain (← id.peerBytes driver.reactor)
   driver.put id { client with facts := some facts }
   return facts
+
+/-- Record admission labels on an in-flight observation. -/
+private def Driver.labelObservation (driver : Driver) (id : Reactor.SocketId) (requestId : Nat)
+    (route : Option String) (reason : String) : IO Unit := do
+  if driver.observer.isNone then return
+  let some client ← driver.client? id | return
+  let some observation := client.requests[requestId]? | return
+  let observation := { observation with route := (route.getD "").toUTF8, rejectReason := reason.toUTF8 }
+  driver.put id { client with requests := client.requests.insert requestId observation }
 
 /-- Run the configured admission hook. Exceptions become a 500 rejection. -/
 private def Driver.admit (driver : Driver) (id : Reactor.SocketId) (hook : Admission.Hook)
@@ -635,6 +652,7 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
       if let some hook := driver.admission then
         match ← driver.admit id hook (admissionHead1 driver head framing) with
         | .reject rejection =>
+          driver.labelObservation id requestId none rejection.label
           let some client ← driver.client? id | return
           if client.retired then return
           if rejection.drop then
@@ -643,7 +661,8 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
           let .http1 machine := client.protocol | return
           driver.applyStep id (machine.decideHead requestId (.reject (limitedReply driver.config rejection.reply)))
           return
-        | .accept limit handler rewrite =>
+        | .accept limit handler rewrite label =>
+          driver.labelObservation id requestId label ""
           bodyLimit := limit
           if handler.isSome || rewrite.isSome then
             if let some client ← driver.client? id then
@@ -1059,13 +1078,16 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
       let .http2 machine := client.protocol | return
       let verdict ← match driver.admission with
         | some hook => driver.admit id hook (admissionHead2 driver head)
-        | none => pure (.accept none none none)
+        | none => pure (.accept none none none none)
+      match verdict with
+      | .reject rejection => driver.labelObservation id streamId.toNat none rejection.label
+      | .accept _ _ _ label => driver.labelObservation id streamId.toNat label ""
       let step := match verdict with
         | .reject rejection =>
           if rejection.drop then machine.rejectHead streamId 421 #[]
           else machine.rejectHead streamId rejection.status rejection.headers
-        | .accept limit _ _ => machine.admitHead streamId limit
-      if let .accept _ handler rewrite := verdict then
+        | .accept limit _ _ _ => machine.admitHead streamId limit
+      if let .accept _ handler rewrite _ := verdict then
         if handler.isSome || rewrite.isSome then
           if let some current ← driver.client? id then
             driver.put id { current with dispatch := current.dispatch.insert streamId.toNat { handler, rewrite } }
@@ -1748,7 +1770,8 @@ private def withAdmin (config : ReactorServerConfig) (workers : Nat)
       | some hub => hub.processMetrics
       | none => pure ByteArray.empty
     -- Draining begins when the pool stops; readiness then reports 503.
-    draining := do return (← finished.get) || (← Reactor.processStopping) }
+    draining := do return (← finished.get) || (← Reactor.processStopping)
+    extraMetrics := config.extraMetrics }
   Admin.withServer port source stop fun run => do
     let task ← IO.asTask run Task.Priority.dedicated
     try serve

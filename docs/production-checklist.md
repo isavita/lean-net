@@ -100,3 +100,19 @@ coverage comes from the CI matrices.
 | Smuggling probes | Done | `test_resilience.py` (custom differential probes; Burp Suite was not used). |
 | 24-hour soak at 10k RPS | **Open** | Needs dedicated hardware and a full day. `test/soak24.py` provides the harness and acceptance thresholds. |
 | TLS testing with s_client and curl mTLS | Done | `tls/test/test_tls_production.py`. |
+
+## Optional gate and gateway (2026-11-15)
+
+The opt-in request gate (`--gate POLICY` or `LeanNet.Gate`) is documented in
+[gateway.md](gateway.md). It adds:
+- virtual-host allowlists with strict Host/SNI agreement;
+- path routing with strict normalisation;
+- header, address and mTLS principal rules;
+- named application checks;
+- native GCRA rate limits;
+- per-route body bounds;
+- typed rejections;
+- SIGHUP policy reload, metrics and access-log fields.
+
+The core server is unchanged when no gate is configured. Measured overhead
+is about 9% under h2load on the test VM.

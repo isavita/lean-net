@@ -207,7 +207,7 @@ private def runtime : IO Unit := do
   let decide := fun target extra => hook.decide facts (head "api.example.com" "GET" target extra)
   for _ in [:2] do
     match ← decide "/profile/7" #[] with
-    | .accept _ (some handler) _ =>
+    | .accept _ (some handler) _ _ =>
       let reply ← handler { method := "GET", target := "/profile/7".toUTF8, headers := #[], body := .empty }
       check (reply.response.body == "7".toUTF8) "forwarder receives the admitted request"
     | _ => throw (IO.userError "rate-limited route rejected early")
@@ -215,7 +215,7 @@ private def runtime : IO Unit := do
   | .reject r => check (r.status == 429 && r.headers.any (fun h => h.name == "retry-after" && h.value == "2".toUTF8)) "429 Retry-After"
   | .accept .. => throw (IO.userError "limit not enforced")
   match ← decide "/keyed" #[hdr "x-api-key" "k", hdr "x-debug" "1"] with
-  | .accept _ none (some rewrite) =>
+  | .accept _ none (some rewrite) _ =>
     let request := rewrite { method := "GET", target := "/keyed".toUTF8, headers := #[hdr "x-debug" "1", hdr "x-api-key" "k"], body := .empty }
     check (!request.headers.any (·.name == "x-debug") && request.headers.any (·.name == "x-api-key")) "strip rewrite"
   | _ => throw (IO.userError "strip rewrite missing")

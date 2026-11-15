@@ -42,11 +42,14 @@ structure Handle where
 /-- Create the shared limiter for `spec` and `workers`, run `use`, then free
     it. Keep every worker inside this bracket. `keyedSlots` (a power of two)
     bounds the keyed table (8 bytes per slot). -/
-def withLimiter (spec : Spec) (workers : Nat) (use : Handle → IO α) (keyedSlots : Nat := 65536) : IO α := do
+def withLimiter (spec : Spec) (workers : Nat) (use : Handle → IO α) (keyedSlots : Nat := 65536)
+    (routeCapacity : Option Nat := none) : IO α := do
   if spec.rates.isEmpty then throw (IO.userError "rate limiter needs at least one ratelimit rule")
-  let routeCount ← match Policy.compile spec with
+  let compiled ← match Policy.compile spec with
     | .ok policy => pure policy.routeCount
     | .error error => throw (IO.userError (toString error))
+  -- Route-keyed rules reserve one bucket per route, plus headroom for reloads.
+  let routeCount := max compiled (routeCapacity.getD compiled)
   let raw ← ffiNew (encodeRules spec.rates routeCount) workers.toUInt32 keyedSlots.toUInt32
     (← IO.getRandomBytes 16) (← IO.monoMsNow).toUInt64
   let code := Errno.decode raw

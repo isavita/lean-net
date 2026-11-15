@@ -30,6 +30,9 @@ structure AccessRecord where
   remote : ByteArray := ByteArray.empty
   /-- 16-byte W3C trace-id; empty when the request carried none. -/
   traceId : ByteArray := ByteArray.empty
+  /-- Gate route pattern and rejection reason; empty when not gated. -/
+  route : ByteArray := ByteArray.empty
+  rejectReason : ByteArray := ByteArray.empty
 
 inductive EmitResult where
   | queued | dropped | disabled
@@ -71,7 +74,8 @@ def Lane.emit (lane : Lane) (record : AccessRecord) : IO EmitResult := do
   let result ← checked "access log enqueue" (← FFI.Observability.emit lane.hub.handle lane.workerId
     record.timestampUnixMs record.durationUs record.bytesSent record.status
     record.protocol.index.toUInt32 record.outcome.index.toUInt32 record.method record.target
-    (record.remote.extract 0 63) (if record.traceId.size == 16 then record.traceId else ByteArray.empty))
+    (record.remote.extract 0 63) (if record.traceId.size == 16 then record.traceId else ByteArray.empty)
+    (record.route.extract 0 127) (record.rejectReason.extract 0 31))
   match result with
   | 0 => return .queued
   | 1 => return .dropped

@@ -361,7 +361,8 @@ def Rejection.toAdmission (rejection : Rejection) : Admission.Rejection :=
   { status := rejection.status, headers := rejection.headers,
     body := if rejection.status >= 300 && rejection.status < 400 then ByteArray.empty
       else s!"{rejection.reason.label}\n".toUTF8
-    drop := rejection.drop }
+    drop := rejection.drop
+    label := rejection.reason.label }
 
 /-! ## Admission -/
 

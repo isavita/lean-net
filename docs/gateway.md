@@ -67,6 +67,63 @@ object is shared across cores. `Spec.hostsOnly #["api.example.com"]` is the
 smallest useful gate: a strict host allowlist in front of the existing
 handlers.
 
+## From the command line
+
+Both public executables accept `--gate POLICY`:
+
+```sh
+.lake/build/bin/lean-net-http1 --host 0.0.0.0 --metrics --gate ./gate.policy 8080
+tls/.lake/build/bin/lean-net-tls chain.pem key.pem --metrics --gate ./gate.policy 8443
+```
+
+- **Startup.** The policy is validated at startup; an invalid file stops the
+  server.
+- **Reload.** `SIGHUP` re-reads and atomically publishes it. On the TLS
+  server it also reloads certificates. Invalid text keeps the current policy
+  and increments `lean_net_gate_reloads_total{result="failed"}`. Each worker
+  picks up a new generation with one relaxed atomic load and compiles a
+  private copy. In-flight requests keep their snapshot. Changing `ratelimit`
+  lines requires a restart.
+- **Actions.** CLI policies can use `app` (the server's handlers or static
+  files), `deny`, `redirect` and `websocket`. Named handlers (`app NAME`),
+  named checks and `proxy` need a library program that registers them.
+- **Metrics.** Gate counters appear on `/metrics` and on the admin port:
+  - `lean_net_gate_policy_generation`
+  - `lean_net_gate_reloads_total{result}`
+  - `lean_net_gate_admitted_total`
+  - `lean_net_gate_rejections_total{reason}`
+  - `lean_net_rate_limit_decisions_total{result}`
+- **Access logs.** Records gain `route` (the matched pattern, `fallback` or
+  `internal`) and `reject_reason` (the fixed reason label). Both come from
+  configuration, never from request bytes.
+
+The library equivalent is `Gate.withLive config workers fun live => …`, then
+set `admission := some live.factory`, `onReload := live.reloadFile path` and
+`extraMetrics := live.metrics`.
+
+### Overhead
+
+h2load on a shared 4-vCPU Linux VM: `-n 100000 -c 10 -m 100 -t 2`,
+4 workers, six alternating rounds per mode. The gated policy has a
+header-rule block, three routes and a fallback.
+
+| Mode | Mean (req/s) | Rounds (req/s) |
+| --- | --- | --- |
+| No gate | 84,930 | 101,654 / 81,181 / 102,372 / 81,656 / 69,667 / 72,703 |
+| `--gate` | 76,894 | 79,920 / 93,604 / 73,182 / 70,931 / 63,798 / 79,928 |
+
+That is about 9% overhead. All 1.2 million requests succeeded, and RSS
+stayed flat at about 152 MB. h2load ran on the same VM, so these numbers
+are indicative only; measure on your target hardware.
+
+What keeps the overhead low:
+- The hot path has no shared atomic writes: admissions count on per-worker
+  cache lines, and the generation check is a relaxed load.
+- Bodyless HTTP/2 heads are decided in batches. The frame loop pauses only
+  for heads that may carry a body.
+- Paths without escapes are normalised as one slice.
+- Header-name checks do not allocate.
+
 ## Policy language
 
 ```

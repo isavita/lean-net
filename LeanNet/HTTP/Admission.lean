@@ -60,6 +60,8 @@ structure Rejection where
   /-- Close without any response (HTTP/1) or refuse the stream (HTTP/2),
       e.g. for unknown hosts probed by scanners. -/
   drop : Bool := false
+  /-- Fixed reason label for access logs (never request bytes). -/
+  label : String := ""
   deriving Inhabited
 
 def Rejection.reply (rejection : Rejection) : HTTP1.Reply :=
@@ -74,6 +76,8 @@ def Rejection.reply (rejection : Rejection) : HTTP1.Reply :=
 inductive Verdict where
   | accept (bodyLimit : Option Nat := none) (dispatch : Option (HTTP1.Request → IO HTTP1.Reply) := none)
       (rewrite : Option (HTTP1.Request → HTTP1.Request) := none)
+      -- label: matched route pattern for access logs (configuration only).
+      (label : Option String := none)
   | reject (rejection : Rejection)
 
 /-- Runs synchronously on the worker; must not block. Exceptions are treated
