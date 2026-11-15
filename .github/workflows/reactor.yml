@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       compare_http1:
-        description: Compare HTTP/1.1 with Go net/http on Linux and upload raw results
+        description: Compare HTTP/1.1 with Go, Uvicorn and Puma on Linux and upload raw results
         type: boolean
         default: false
 
