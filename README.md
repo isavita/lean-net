@@ -4,6 +4,8 @@ Lean 4 libraries for TCP, HTTP/1.0, HTTP/1.1, HTTP/2, and WebSocket servers. The
 
 [API reference](https://isavita.github.io/lean-net/).
 
+[Runnable servers](examples/README.md): basic HTTP, a routed API, TLS static files, and a rate-limited gateway.
+
 ## Install
 
 Use the Lean version in [`lean-toolchain`](lean-toolchain). Install `pkg-config`, zlib, and Brotli development libraries (`zlib`, `libbrotlienc`, `libbrotlicommon`); Windows builds also need MinGW GCC and matching import libraries. In a consumer `lakefile.lean`:

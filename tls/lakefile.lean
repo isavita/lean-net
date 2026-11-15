@@ -1,6 +1,16 @@
 import Lake
 open Lake DSL
 
+private def tlsLibraryPath (name : String) : IO System.FilePath := do
+  let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", "openssl"] }
+  if location.exitCode != 0 || location.stdout.trimAscii.toString.isEmpty then
+    throw <| IO.userError "cannot locate OpenSSL library"
+  let fileName := if System.Platform.isWindows then s!"lib{name}.dll.a"
+    else if System.Platform.isOSX then s!"lib{name}.dylib" else s!"lib{name}.so"
+  let path := System.FilePath.mk location.stdout.trimAscii.toString / fileName
+  unless ← path.pathExists do throw <| IO.userError s!"missing OpenSSL library: {path}"
+  return path
+
 package «lean-net-tls» where
   version := v!"0.1.1"
   description := "TLS, mTLS, SNI and verified HTTPS upstreams for lean-net"
@@ -8,6 +18,11 @@ package «lean-net-tls» where
   homepage := "https://isavita.github.io/lean-net/LeanNetTLS.html"
   license := "Apache-2.0"
   licenseFiles := #["../LICENSE", "../NOTICE"]
+  moreLinkObjs := if System.Platform.isWindows then
+      #[`@/«lean-net-openssl-ssl», `@/«lean-net-openssl-crypto»]
+    else #[]
+  moreLinkLibs := if System.Platform.isWindows then #[]
+    else #[`@/«lean-net-openssl-ssl-shared», `@/«lean-net-openssl-crypto-shared»]
   moreLinkArgs := run_io do
     let version ← IO.Process.output { cmd := "pkg-config", args := #["--atleast-version=1.1.1", "openssl"] }
     if version.exitCode != 0 then throw <| IO.userError "OpenSSL 1.1.1 or newer is required"
@@ -62,6 +77,20 @@ package «lean-net-tls» where
       flag != "-lbrotlienc" && flag != "-lbrotlicommon") ++ #["-lm", "-lrt"]
 
 require «lean-net» from "../"
+
+target «lean-net-openssl-ssl» _pkg : System.FilePath := do
+  inputBinFile (← tlsLibraryPath "ssl")
+
+target «lean-net-openssl-crypto» _pkg : System.FilePath := do
+  inputBinFile (← tlsLibraryPath "crypto")
+
+target «lean-net-openssl-ssl-shared» _pkg : Dynlib := do
+  let file ← inputBinFile (← tlsLibraryPath "ssl")
+  file.mapM fun path => pure { path, name := "ssl" }
+
+target «lean-net-openssl-crypto-shared» _pkg : Dynlib := do
+  let file ← inputBinFile (← tlsLibraryPath "crypto")
+  file.mapM fun path => pure { path, name := "crypto" }
 
 @[default_target]
 lean_lib LeanNetTLS

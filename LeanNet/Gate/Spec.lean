@@ -6,7 +6,7 @@ import LeanNet.Gate.Core
 # comments start with '#'; statements end at a newline or ';'
 limits { headers 64 ; header-bytes 16KiB ; target-bytes 16KiB ; path-depth 16 }
 ratelimit edge 2000/s burst 400 by client-ip      # by: route | client-ip | principal | header NAME | global
-backend profiles { http 10.0.0.5:8080 10.0.0.6:8080 ; serves api.example.com }
+backend profiles { http 10.0.0.5:8080 10.0.0.6:8080 ; serves api.example.com *.api.example.com }
 backend loopback { https [::1]:8443 ; verify ::1 ; serves local.example.com }
 host api.example.com, *.api.example.com {
   tls sni strict                                    # or: tls sni off
@@ -15,7 +15,7 @@ host api.example.com, *.api.example.com {
   limit edge ; check api-key ; body 1MiB ; timeout 30s
   headers { require x-api-key ; forbid x-internal-* ; max authorization 4KiB
             single authorization ; one-of content-type application/json ; strip x-debug }
-  route GET,HEAD /profile/:id        -> proxy profiles { limit api }
+  route GET,HEAD /profile/:id        -> proxy profiles
   route PUT      /profile/:id/avatar -> app avatar     { body 5MiB }
   route *        /admin/*            -> deny 403
   route GET      /ws                 -> websocket chat
@@ -29,7 +29,10 @@ Paths: literal segments, `:name` (one segment, captured) and a final `*`
 (the prefix itself and everything below it). `app` without a name is the
 server's own handlers. Host items are inherited by every route: `body` and
 `timeout` are overridden by the route; both host and route `allow` lists must
-match when present; `limit`, `check`, `deny`, `mtls` and `headers` accumulate. -/
+match when present; `limit`, `check`, `deny`, `mtls` and `headers` accumulate.
+Named `app`, `check` and `websocket` actions require application callbacks
+registered through `Gate.App`; the example's mTLS rule requires a TLS
+listener and verified client certificates. -/
 
 namespace LeanNet.Gate
 

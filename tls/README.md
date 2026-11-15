@@ -52,7 +52,7 @@ One TLS listener serves both protocols with the same handlers. Pass HTTP/1 setti
 | `reload := some { intervalMs := 1000 }` | Check certificate files periodically; zero permits explicit reload only |
 | `handshakeTimeoutMs`, `shutdownTimeoutMs` | TLS handshake and close deadlines (10,000 and 2,000 ms defaults) |
 
-Verified client identity is available as `HTTP1.Request.clientCertificate` (`subject` and typed `subjectAltNames`). Absent or unverified certificates yield `none`. Use `Gate` mTLS rules for admission; see the [gate policy](../docs/gateway.md). `Bundle.requestReload` initiates an explicit reload and `Bundle.reloadStatus` reports its result. SIGHUP also requests reload when `reload` is enabled. An invalid replacement retains the last valid certificate snapshot.
+Verified client identity is available as `HTTP1.Request.clientCertificate` (`subject` and tagged `subjectAltNames`, such as `DNS:example.com` or `URI:spiffe://example/app`). Absent or unverified certificates yield `none`. Use `Gate` mTLS rules for admission; see the [gate policy](../docs/gateway.md). `Bundle.requestReload` initiates an explicit reload and `Bundle.reloadStatus` reports its result. SIGHUP also requests reload when `reload` is enabled. An invalid replacement retains the last valid certificate snapshot.
 
 For HTTPS proxy targets, pass `upstreamCA := some "roots.pem"` as the final `serveFactory` argument when private trust roots are needed. Without it, the package uses OpenSSL's configured default roots. The backend certificate is checked against the target's configured `verify` name.
 

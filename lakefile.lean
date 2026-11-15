@@ -1,6 +1,24 @@
 import Lake
 open Lake DSL
 
+private def codecLibraryPath (packageName windowsName macName linuxName : String) : IO System.FilePath := do
+  let location ← IO.Process.output { cmd := "pkg-config", args := #["--variable=libdir", packageName] }
+  if location.exitCode != 0 || location.stdout.trimAscii.toString.isEmpty then
+    throw <| IO.userError s!"cannot locate {packageName} library"
+  let name := if System.Platform.isWindows then windowsName
+    else if System.Platform.isOSX then macName else linuxName
+  let path := System.FilePath.mk location.stdout.trimAscii.toString / name
+  unless ← path.pathExists do throw <| IO.userError s!"missing native library: {path}"
+  return path
+
+private def compilerLibraryPath (name : String) : IO System.FilePath := do
+  let compiler := if System.Platform.isWindows then "gcc" else "cc"
+  let location ← IO.Process.output { cmd := compiler, args := #[s!"-print-file-name={name}"] }
+  let path := System.FilePath.mk location.stdout.trimAscii.toString
+  if location.exitCode != 0 || !(← path.pathExists) then
+    throw <| IO.userError s!"cannot locate native system library: {name}"
+  return path
+
 package «lean-net» where
   version := v!"0.1.1"
   description := "TCP, HTTP/1.1, HTTP/2, WebSocket and reverse proxy libraries for Lean 4"
@@ -8,6 +26,16 @@ package «lean-net» where
   homepage := "https://isavita.github.io/lean-net/"
   license := "Apache-2.0"
   licenseFiles := #["LICENSE", "NOTICE"]
+  -- Native link objects and libraries propagate to consumers. Package link
+  -- arguments only apply to this package's own executables and shared libraries.
+  moreLinkObjs := if System.Platform.isWindows then
+      #[`@/«lean-net-zlib», `@/«lean-net-brotli-encoder», `@/«lean-net-brotli-common», `@/«lean-net-winsock»]
+    else if System.Platform.isOSX then #[]
+    else #[`@/«lean-net-brotli-encoder», `@/«lean-net-brotli-common», `@/«lean-net-realtime»]
+  moreLinkLibs := if System.Platform.isWindows then #[]
+    else if System.Platform.isOSX then
+      #[`@/«lean-net-zlib-shared», `@/«lean-net-brotli-encoder-shared», `@/«lean-net-brotli-common-shared»]
+    else #[`@/«lean-net-zlib-shared»]
   moreLinkArgs := run_io do
     let output ← IO.Process.output { cmd := "pkg-config", args := #["--libs", "zlib", "libbrotlienc", "libbrotlicommon"] }
     if output.exitCode != 0 then throw <| IO.userError "zlib and Brotli development libraries are required"
@@ -46,6 +74,33 @@ package «lean-net» where
       libraries := libraries.push path.toString
     return libraries ++ flags.filter (fun flag =>
       flag != "-lz" && flag != "-lbrotlienc" && flag != "-lbrotlicommon") ++ #["-lm", "-lrt"]
+
+target «lean-net-zlib» _pkg : System.FilePath := do
+  inputBinFile (← codecLibraryPath "zlib" "libz.dll.a" "libz.dylib" "libz.so")
+
+target «lean-net-brotli-encoder» _pkg : System.FilePath := do
+  inputBinFile (← codecLibraryPath "libbrotlienc" "libbrotlienc.dll.a" "libbrotlienc.dylib" "libbrotlienc.a")
+
+target «lean-net-brotli-common» _pkg : System.FilePath := do
+  inputBinFile (← codecLibraryPath "libbrotlicommon" "libbrotlicommon.dll.a" "libbrotlicommon.dylib" "libbrotlicommon.a")
+
+target «lean-net-zlib-shared» _pkg : Dynlib := do
+  let file ← inputBinFile (← codecLibraryPath "zlib" "libz.dll.a" "libz.dylib" "libz.so")
+  file.mapM fun path => pure { path, name := "z" }
+
+target «lean-net-brotli-encoder-shared» _pkg : Dynlib := do
+  let file ← inputBinFile (← codecLibraryPath "libbrotlienc" "libbrotlienc.dll.a" "libbrotlienc.dylib" "libbrotlienc.so")
+  file.mapM fun path => pure { path, name := "brotlienc" }
+
+target «lean-net-brotli-common-shared» _pkg : Dynlib := do
+  let file ← inputBinFile (← codecLibraryPath "libbrotlicommon" "libbrotlicommon.dll.a" "libbrotlicommon.dylib" "libbrotlicommon.so")
+  file.mapM fun path => pure { path, name := "brotlicommon" }
+
+target «lean-net-winsock» _pkg : System.FilePath := do
+  inputBinFile (← compilerLibraryPath "libws2_32.a")
+
+target «lean-net-realtime» _pkg : System.FilePath := do
+  inputBinFile (← compilerLibraryPath "librt.a")
 
 @[default_target]
 lean_lib LeanNet
