@@ -4,7 +4,7 @@
 This tool never builds. It snapshots committed binaries and source, starts two
 servers, warms persistent h2load sessions, and measures a common 86,400-second
 window. --smoke-seconds exercises orchestration but can NEVER pass the soak gate.
-See test/production-hardening.md for the JSON contract and exact acceptance.
+See test/README.md for invocation and test/soak24.example.json for configuration.
 """
 import argparse
 from datetime import datetime, timezone
