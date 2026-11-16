@@ -51,9 +51,15 @@ private def handlers (_worker : Nat) : IO Handlers := do
 def main (args : List String) : IO Unit := do
   let some port := args.head?.bind String.toNat? | throw (IO.userError "usage: fixture PORT")
   if port == 0 || port > 65535 then throw (IO.userError "invalid port")
+  let tiny := args[1]? == some "tiny"
   HTTP.ReactorServer.serveFactory handlers {
     workers := 1
-    server := { maxClients := 16 }
+    server := { maxClients := if tiny then 2 else 16 }
+    maxInputBytes := if tiny then 65536 else 2 * 1024 * 1024 + 65536
+    outputBuffers := if tiny then 2 else 128
+    native := if tiny then {
+      maxConnections := 8, maxEvents := 16, maxWrites := 4,
+      buffers4k := 4, buffers16k := 0, buffers64k := 0 } else {}
     shutdownDrainMs := 100
     deferred := {
       maxPending := 3

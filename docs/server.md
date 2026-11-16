@@ -131,7 +131,9 @@ Successful completion removes the job without calling `cancel`.
 
 HTTP/1 keeps its parser paused at the pending request, so pipelined responses
 remain ordered. Transport reads stay armed to detect resets; any received
-pipeline tail stays on its worker under `maxInputBytes`. A TCP half-close still
+pipeline tail stays on its worker under `maxInputBytes`. Deferred HTTP/1 tails
+are copied into owned bytes and native receive loans are returned immediately,
+so a minimal buffer pool remains available to other clients and cancellation. A TCP half-close still
 allows the outstanding response. HTTP/2 keeps reading other streams and can
 complete them in any order. RST_STREAM cancels only that stream (`streamReset`);
 connection loss cancels all its jobs (`disconnected`). Graceful shutdown polls

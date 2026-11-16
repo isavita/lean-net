@@ -28,7 +28,8 @@ class DeferredReplies(unittest.TestCase):
         self.assertTrue(BINARY.exists(), f"build {BINARY}")
         self.port = unused_port()
         self.log = tempfile.TemporaryFile(mode="w+")
-        self.server = subprocess.Popen([str(BINARY), str(self.port)], stdout=self.log, stderr=self.log,
+        self.server = subprocess.Popen([str(BINARY), str(self.port)] +
+            (["tiny"] if self._testMethodName.startswith("test_pending_http1_pipeline") else []), stdout=self.log, stderr=self.log,
                                       creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0)
         self.addCleanup(self.log.close)
         self.addCleanup(self.stop)
@@ -103,6 +104,36 @@ class DeferredReplies(unittest.TestCase):
         h2.request(3, b"/stats")
         self.assertIn(b"started=0;", h2.response(3))
         self.assertFalse(h2.goaways)
+
+    def test_pending_http1_pipeline_returns_native_receive_credits(self):
+        peer = self.connect()
+        peer.sendall(b"GET /hold HTTP/1.1\r\nHost: localhost\r\n\r\n" + b"X" * 32768)
+        # With four native pool cells, two are reserved for output. Pending
+        # pipeline bytes must not retain both remaining receive credits.
+        started = time.monotonic()
+        stats = self.get(b"/stats").body
+        self.assertIn(b"started=1;", stats)
+        self.assertNotIn(b"timeout", stats)
+        self.assertNotIn(b"disconnected", stats)
+        self.assertLess(time.monotonic() - started, .4, "pending pipeline monopolized receive buffer credits")
+
+    def test_pending_http1_pipeline_byte_bound_cancels_and_releases_capacity(self):
+        peer = self.connect()
+        started = time.monotonic()
+        try:
+            peer.sendall(b"GET /hold HTTP/1.1\r\nHost: localhost\r\n\r\n" + b"X" * 131072)
+        except OSError:
+            pass  # The bounded input queue can close while sendall is active.
+        stats = b""
+        while time.monotonic() - started < .4:
+            stats = self.get(b"/stats").body
+            if b"disconnected" in stats:
+                break
+            time.sleep(.002)
+        self.assertEqual(stats.count(b"disconnected"), 1, stats)
+        self.assertNotIn(b"timeout", stats)
+        self.assertLess(time.monotonic() - started, .4, "input overflow waited for application timeout")
+        self.assertEqual(self.get(b"/fast").body, b"/fast")
 
     def test_http1_pipeline_order_and_other_connection_progress(self):
         peer = self.connect()

@@ -381,6 +381,18 @@ private def normalizedInput (client : Client) : Client :=
 private def releaseInput (client : Client) : IO Unit := do
   cleanupActions ((client.inputFront ++ client.inputBack).toArray.map (·.release))
 
+/-- Deferred HTTP/1 work keeps transport reads armed for cancellation. Retain
+its bounded pipeline tail as owned bytes rather than monopolizing native pool
+cells needed by other clients or by the next reset/EOF completion. -/
+private def Driver.ownInput (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
+  let some client ← driver.client? id | return
+  let own := fun (chunk : InputChunk) =>
+    { chunk with view := ByteSlice.full chunk.view.copy, release := pure () }
+  let front := client.inputFront.map own
+  let back := client.inputBack.map own
+  driver.put id { client with inputFront := front, inputBack := back }
+  releaseInput client
+
 private def Driver.consume (driver : Driver) (id : Reactor.SocketId) (count : Nat) : IO Unit := do
   let some current ← driver.client? id | return
   let client := normalizedInput current
@@ -688,9 +700,10 @@ private def Driver.requestReply (driver : Driver) (id : Reactor.SocketId) (reque
     driver.state.modify fun state => { state with
       pendingReplies := state.pendingReplies.push { owner := id, requestId, job, deadline := expiresAt, bytes }
       pendingReplyBytes := state.pendingReplyBytes + bytes }
-    -- Keep transport reads armed so a reset is observable while HTTP/1
-    -- parsing is application-paused. Pipeline bytes remain bounded by
-    -- maxInputBytes and are never parsed ahead of this response.
+    -- Release native receive credits before rearming reads. The HTTP/1
+    -- parser remains paused; only its bounded, owned pipeline tail grows.
+    if let some client ← driver.client? id then
+      if let .http1 _ := client.protocol then driver.ownInput id
     driver.setReading id true
     return none
 
@@ -1840,7 +1853,14 @@ private def Driver.read (driver : Driver) (id : Reactor.SocketId)
     driver.closeNow id
     return
   let state ← driver.state.get
-  let chunk : InputChunk := { view, release, arrived := state.now }
+  let paused := match client.protocol with
+    | .http1 _ => state.pendingReplies.any (fun pending => pending.owner == id)
+    | _ => false
+  let chunk ← if paused then do
+      let owned := view.copy
+      release
+      pure { view := ByteSlice.full owned, arrived := state.now : InputChunk }
+    else pure { view, release, arrived := state.now }
   driver.put id { client with
     inputBack := chunk :: client.inputBack
     inputBytes := client.inputBytes + view.length
