@@ -105,12 +105,22 @@ class ApplicationStreams(unittest.TestCase):
         head = b""
         while not head.endswith(b"\r\n\r\n"): head += ping.recv(1)
         self.assertEqual(read_ws(ping), (0x89, b"unsolicited"))
+        close = self.connect()
+        close.sendall(b"GET /ws-close HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nOrigin: https://stream.test\r\n\r\n")
+        head = b""
+        while not head.endswith(b"\r\n\r\n"): head += close.recv(1)
+        self.assertEqual(read_ws(close), (0x88, b"\x11\x38"))
         h2 = self.h2()
         h2.request(1, b"/ws", method=b"CONNECT", end_stream=False,
                    headers=[(b":protocol", b"websocket"), (b"sec-websocket-version", b"13"),
                             (b"origin", b"https://stream.test")])
         h2.until(lambda: len(h2.bodies[1]) >= 13)
         self.assertEqual(h2.bodies[1], b"\x81\x0bunsolicited")
+        h2.request(3, b"/ws-close", method=b"CONNECT", end_stream=False,
+                   headers=[(b":protocol", b"websocket"), (b"sec-websocket-version", b"13"),
+                            (b"origin", b"https://stream.test")])
+        h2.until(lambda: len(h2.bodies[3]) >= 4)
+        self.assertEqual(h2.bodies[3], b"\x88\x02\x11\x38")
 
     def test_http1_chunks_arrive_before_producer_finishes_and_trailers_follow(self):
         peer = self.connect(); reader = Reader(peer)
@@ -226,6 +236,14 @@ class ApplicationStreams(unittest.TestCase):
         self.assertEqual(self.get(b"/big").body, b"A" * (2 * 1024 * 1024))
         peer = self.h2(); peer.request(1, b"/big")
         self.assertEqual(peer.response(1), b"A" * (2 * 1024 * 1024))
+
+    def test_invalid_stream_trailer_cancels_once_without_injection(self):
+        peer = self.h2(); peer.request(1, b"/bad-trailer")
+        peer.until(lambda: 1 in peer.resets)
+        self.assertTrue(all(b"x-injected" not in str(block.headers).encode() for block in peer.headers[1]))
+        peer.request(3, b"/stats", method=b"HEAD"); peer.response(3)
+        self.assertEqual(dict(peer.headers[3][0].headers)[b"x-closed"].count(b"failed"), 1)
+        peer.request(5, b"/immediate"); self.assertEqual(peer.response(5), b"ok")
 
     def test_idle_timeout_resets_only_affected_http2_stream(self):
         peer = self.h2(); peer.request(1, b"/timeout")

@@ -7,14 +7,14 @@ private def handlers (_ : Nat) : IO Handlers := do
   let closed ← IO.mkRef (#[] : Array String)
   let ticks ← IO.mkRef (0 : Nat)
   let drain ← IO.mkRef (none : Option (Nat × Nat))
-  let callbacks (ping : Bool := false) : IO WebSocket.Callbacks := do
+  let callbacks (kind : WebSocket.Opcode := .text) : IO WebSocket.Callbacks := do
     let sent ← IO.mkRef false
     return {
       onMessage := fun _ _ => pure none
       onPoll := do
         if ← sent.get then return none
         sent.set true
-        return some { opcode := if ping then .ping else .text, payload := "unsolicited".toUTF8 } }
+        return some { opcode := kind, payload := if kind == .close then ByteArray.mk #[17, 56] else "unsolicited".toUTF8 } }
   let policy : WebSocket.Handshake.Policy := { originAllowed := fun value => value == some "https://stream.test".toUTF8 }
   return {
     tickIntervalMs := 5
@@ -29,11 +29,11 @@ private def handlers (_ : Nat) : IO Handlers := do
       | some (started, _) => return (← IO.monoMsNow) >= started + 40
     onShutdown := do IO.println s!"SHUTDOWN {(← IO.monoMsNow)} TICKS {(← ticks.get)}"
     onHeaders := fun head _ => do
-      if ["/ws".toUTF8, "/ws-ping".toUTF8].contains head.target then
-        WebSocket.Server.acceptHTTP1 head policy (← callbacks (head.target == "/ws-ping".toUTF8))
+      if ["/ws".toUTF8, "/ws-ping".toUTF8, "/ws-close".toUTF8].contains head.target then
+        WebSocket.Server.acceptHTTP1 head policy (← callbacks (if head.target == "/ws-ping".toUTF8 then .ping else if head.target == "/ws-close".toUTF8 then .close else .text))
       else pure (.accept none)
     onWebSocket := fun head => do
-      if ["/ws".toUTF8, "/ws-ping".toUTF8].contains head.target then return some (policy, ← callbacks)
+      if ["/ws".toUTF8, "/ws-ping".toUTF8, "/ws-close".toUTF8].contains head.target then return some (policy, ← callbacks (if head.target == "/ws-ping".toUTF8 then .ping else if head.target == "/ws-close".toUTF8 then .close else .text))
       return none
     streamRequests := fun head => pure (["/upload", "/bidi", "/early"].contains (String.fromUTF8! head.target))
     onRequest := fun _ => pure { response := { status := 500 } }
@@ -102,7 +102,7 @@ private def handlers (_ : Nat) : IO Handlers := do
           if target == "/cancel" || target == "/timeout" then return none
           let current ← offset.get
           if current == data.size then
-            return some (.finish (if target == "/known" then #[] else #[{ name := "x-finished", value := "yes".toUTF8 }]))
+            return some (.finish (if target == "/known" then #[] else #[{ name := "x-finished", value := (if target == "/bad-trailer" then "yes\r\nx-injected: bad" else "yes").toUTF8 }]))
           if budget == 0 then return none
           if target == "/chunks" && current > 0 && (← Reactor.nowMs) - started < 200 then return none
           let count := min budget (if target == "/chunks" && current == 0 then 5 else data.size - current)

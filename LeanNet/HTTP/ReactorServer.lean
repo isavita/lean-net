@@ -1712,7 +1712,8 @@ private def Driver.pumpAppStreams (driver : Driver) : IO Unit := do
           | .finish trailers =>
             if trailers.size > driver.config.server.maxResponseHeaders ||
                 trailers.foldl (fun n h => n + h.name.utf8ByteSize + h.value.size + 4) 0 > driver.config.server.maxResponseHeaderBytes ||
-                trailers.any (fun h => !stream.body.declaredTrailers.any (·.toLower == h.name.toLower)) ||
+                trailers.any (fun h => !stream.body.declaredTrailers.any (·.toLower == h.name.toLower) ||
+                  h.value.data.any (fun b => (b < 32 && b != 9) || b == 127)) ||
                 stream.body.knownLength.any (· != stream.sent) then
               driver.abortAppStream id key .failed
               continue

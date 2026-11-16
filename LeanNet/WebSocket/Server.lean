@@ -17,6 +17,16 @@ private structure Session where
 
 private def queueReply (session : Session) (reply : Reply) :
     IO (Session × List Connection.Action) := do
+  if reply.opcode == .close then
+    if reply.payload.size == 1 || reply.payload.size > 125 then
+      throw (IO.userError "invalid application WebSocket close payload")
+    let code := if reply.payload.isEmpty then none else
+      some (reply.payload[0]!.toNat * 256 + reply.payload[1]!.toNat)
+    let reason := reply.payload.extract (min 2 reply.payload.size) reply.payload.size
+    let step ← match session.connection.beginClose code reason with
+      | .ok step => pure step
+      | .error error => throw (IO.userError error.message)
+    return ({ session with connection := step.state, pending := none }, step.actions)
   let accepted := if reply.opcode == .ping || reply.opcode == .pong then
       session.connection.tryControl reply.opcode reply.payload
     else session.connection.trySend reply.opcode reply.payload
