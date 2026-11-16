@@ -3,6 +3,7 @@
 #define LEAN_NET_REACTOR_FFI_H
 #include "reactor.h"
 #include "reactor_lean.h"
+#include "atomic_flag.h"
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
