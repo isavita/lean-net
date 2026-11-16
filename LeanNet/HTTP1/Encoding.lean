@@ -1,4 +1,5 @@
 import LeanNet.FileRegion
+import LeanNet.HTTP.Stream
 import LeanNet.HTTP1.Protocol
 import LeanNet.HTTP1.Response
 
@@ -40,6 +41,8 @@ structure Reply where
   options : ResponseOptions := {}
   informational : Array (Response × ResponseOptions) := #[]
   fileRegion : Option FileRegion := none
+  /-- Owner-worker cooperative response body; mutually exclusive with body/file. -/
+  stream : Option HTTP.Stream.Body := none
 
 private def fieldTokenByte (b : UInt8) : Bool :=
   let n := b.toNat

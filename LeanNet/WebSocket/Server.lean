@@ -105,6 +105,14 @@ def rawPipe (callbacks : Callbacks) (config : Connection.Config := {}) : IO RawP
       if session.pending.isSome then return { consumed := some 0, readEnabled := some false }
       let step := session.connection.feedSlice view.bytes view.offset view.length
       process reference callbacks step (some step.consumed)
+    onPoll := do
+      let session ← reference.get
+      if session.pending.isSome || session.connection.isClosing || session.connection.isClosed then return {}
+      let reply ← callbacks.onPoll
+      let some reply := reply | return {}
+      let (next, actions) ← queueReply session reply
+      reference.set next
+      process reference callbacks { state := next.connection, actions }
     onWritten := fun ticket => do
       let session ← reference.get
       let result ← process reference callbacks (session.connection.outputWritten ticket)

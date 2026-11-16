@@ -1,11 +1,7 @@
+import LeanNet.HTTP.Cancel
 import LeanNet.HTTP1.Streaming
 
 namespace LeanNet.HTTP.Deferred
-
-/-- Why the owner retired an unfinished application exchange. -/
-inductive CancelReason where
-  | disconnected | streamReset | timeout | shutdown | overloaded | failed
-  deriving BEq, Repr, Inhabited
 
 /-- Per-reactor application completion budgets. These bound retained application
 work separately from the protocol's input and output budgets. -/
