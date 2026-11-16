@@ -13,6 +13,7 @@ host api.test, api.test:8443 {
   headers { forbid x-internal-* ; strip x-debug }
   route GET      /items/:id      -> app item
   route POST     /upload         -> app upload { body 16 }
+  route POST     /stream         -> app stream { body 16 }
   route *        /admin/*        -> deny 403
   route GET      /legacy         -> app
   route GET      /keyed          -> app item { check api-key }
@@ -32,13 +33,15 @@ private def app : App := {
     ("item", fun a request => pure (text
       s!"item id={(String.fromUTF8? ((a.capture "id").getD .empty)).getD "?"} host={(String.fromUTF8? a.authority.host).getD "?"} debug={request.headers.any (·.name == "x-debug")}\n")),
     ("upload", fun _ request => pure (text s!"upload bytes={request.body.size}\n")),
+    ("stream", fun _ request => pure (text s!"stream bytes={request.body.size} trailers={request.trailers.size}\n")),
     ("tenant", fun a request => pure (text s!"tenant={(String.fromUTF8? a.authority.host).getD "?"} path={(String.fromUTF8? a.path.path).getD "?"} method={request.method}\n"))]
   checks := #[("api-key", fun a => pure <|
     if a.head.headers.any (fun h => h.name == "x-api-key" && h.value == "secret".toUTF8) then .ok ()
     else .error (.make .checkFailed 401))] }
 
 private def server : Handlers := {
-  onRequest := fun request => pure (text s!"server debug={request.headers.any (·.name == "x-debug")}\n") }
+  onRequest := fun request => pure (text s!"server debug={request.headers.any (·.name == "x-debug")}\n")
+  streamRequests := fun head => pure (head.target == "/stream".toUTF8) }
 
 def main (args : List String) : IO Unit := do
   let some port := args.head?.bind String.toNat? | throw (IO.userError "expected port")

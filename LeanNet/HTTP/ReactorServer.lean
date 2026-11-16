@@ -893,6 +893,11 @@ private def Driver.secureRejection (driver : Driver)
   { rejection with headers := (applySecurityHeaders
       (driver.config.securityHeaders.fields driver.transport.secure) response).headers }
 
+private def Driver.h2RejectionReply (driver : Driver)
+    (rejection : Admission.Rejection) : Reply :=
+  let reply := limitedReply driver.config (driver.secureRejection rejection).reply
+  { reply with options := { reply.options with forceClose := false } }
+
 private def admissionHead1 (driver : Driver) (head : RequestHead) (framing : BodyFraming) : Admission.Head :=
   let authority := (head.headers.find? (·.name == "host")).map (·.value) |>.getD ByteArray.empty
   let upgrade := head.headers.any (·.name == "upgrade")
@@ -1441,7 +1446,7 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
           else
             let rejection := driver.secureRejection rejection
             pure (machine.rejectHead streamId rejection.status rejection.headers)
-        | .accept limit _ _ _ _ _ => do
+        | .accept limit _ _ _ _ postBody => do
           let framing := match head.contentLength with
             | some n => BodyFraming.contentLength n | none => .chunked
           let plainHead : RequestHead := {
@@ -1452,7 +1457,11 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
             catch _ => pure (.reject { response := { status := 500 } })
           match decision with
           | .accept _ =>
-            let streaming ← if head.protocol.isNone then driver.handlers.streamRequests plainHead else pure false
+            -- A post-body validator must see terminal metadata before any
+            -- handler or proxy is dispatched. The bounded H2 body lane does
+            -- that; the streaming lane dispatches at the initial head.
+            let streaming ← if head.protocol.isNone && postBody.isNone then
+              driver.handlers.streamRequests plainHead else pure false
             if streaming then
               if ← driver.openUpload id streamId (machine.requestEnded streamId) then
                 pure (machine.admitStreamingHead streamId limit)
@@ -1533,9 +1542,8 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
             driver.labelObservation id event.streamId.toNat none rejection.label
             if let some current ← driver.client? id then
               if let .http2 machine := current.protocol then
-                let rejection := driver.secureRejection rejection
                 let response := machine.respond event.streamId
-                  (limitedReply driver.config rejection.reply) #[]
+                  (driver.h2RejectionReply rejection) #[]
                 driver.put id { current with protocol := .http2 response.state, kick := true }
                 actions := response.actions ++ actions
             pure none

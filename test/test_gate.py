@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from test_http2_e2e import Peer, frame
 
 ROOT = Path(__file__).resolve().parents[1]
 SUFFIX = ".exe" if sys.platform == "win32" else ""
@@ -51,6 +52,61 @@ class FixtureCase(unittest.TestCase):
 
 
 class GateWire(FixtureCase):
+    def test_http2_gate_waits_for_terminal_trailers(self):
+        def request(stream, path, *, end=False):
+            block = b"\x83\x86\x04" + bytes([len(path)]) + path + b"\x01\x08api.test"
+            return frame(1, 4 | int(end), stream, block)
+
+        def response(peer, stream):
+            status = None
+            body = bytearray()
+            for _ in range(500):
+                kind, flags, current, payload = peer.read()
+                self.assertNotEqual(kind, 7, f"Gate trailer rejection closed the H2 connection: {payload.hex()}")
+                if current != stream:
+                    continue
+                self.assertNotEqual(kind, 3, "Gate trailer rejection reset an uncommitted response")
+                if kind == 1:
+                    self.assertIsNone(status)
+                    status = payload[0]
+                elif kind == 0:
+                    body.extend(payload)
+                if flags & 1 and kind in (0, 1):
+                    return status, bytes(body)
+            self.fail("Gate streaming response did not complete")
+
+        peer = Peer(self.port)
+        self.addCleanup(peer.close)
+        peer.sock.sendall(request(1, b"/stream") + frame(0, 1, 1, b"abc"))
+        self.assertEqual(response(peer, 1), (0x88, b"stream bytes=3 trailers=0\n"))
+
+        peer.sock.sendall(request(3, b"/stream") + frame(0, 0, 3, b"abc") +
+                          frame(6, payload=b"gatewait"))
+        # PING ACK proves the worker processed the open upload. A premature
+        # dispatch would already have emitted this fixture's immediate 200.
+        for _ in range(100):
+            kind, flags, current, payload = peer.read()
+            self.assertNotEqual(kind, 7)
+            self.assertFalse(current == 3 and kind in (0, 1, 3),
+                             "Gate handler ran before terminal upload metadata")
+            if kind == 6 and flags & 1 and payload == b"gatewait":
+                break
+        else:
+            self.fail("HTTP/2 PING barrier did not complete")
+        trailer = b"\x00\x0fx-internal-role\x05admin"
+        peer.sock.sendall(frame(1, 5, 3, trailer))
+        self.assertEqual(response(peer, 3), (0x8c, b"invalid_trailer\n"))
+
+        peer.sock.sendall(request(5, b"/stream") + frame(0, 1, 5, b"ok"))
+        self.assertEqual(response(peer, 5), (0x88, b"stream bytes=2 trailers=0\n"))
+
+        # The buffered HTTP/2 path uses the same Gate policy and also keeps
+        # its rejection scoped to this stream.
+        peer.sock.sendall(request(7, b"/upload") + frame(1, 5, 7, trailer))
+        self.assertEqual(response(peer, 7), (0x8c, b"invalid_trailer\n"))
+        peer.sock.sendall(request(9, b"/stream") + frame(0, 1, 9, b"yes"))
+        self.assertEqual(response(peer, 9), (0x88, b"stream bytes=3 trailers=0\n"))
+
     def test_routes_and_captures(self):
         for mode in MODES:
             with self.subTest(mode=mode):

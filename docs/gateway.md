@@ -66,6 +66,11 @@ def main : IO Unit := do
 
 `Gate.App.handlers` registers `(name, handler)` pairs for `app NAME`; each handler receives an `Admitted` value and `HTTP1.Request`. `Gate.App.checks` registers head-stage checks returning `Except Gate.Rejection Unit`. Use `Gate.App.onReject` to observe rejections. `Gate.withLive` owns the shared limiter; set `onReload := live.reloadFile path` and `extraMetrics := live.metrics` when loading a policy file in a library application. Rejections become 400/403/404/405/413/415/421/426/429/431 as applicable; upstream failures become 502/503/504.
 
+Gate validates completed request trailers before dispatch. Its HTTP/2 uploads
+therefore use the bounded buffered request path even if `Handlers.streamRequests`
+selects the route; early application upload streaming is available on routes
+without Gate's post-body validation.
+
 Rate limits are per process. `route` and `global` share a budget across workers; keyed limits use a fixed-size table. `by principal` requires a verified client certificate and keys on its subject and SANs. `by header NAME` requires exactly one such header. The separate `connectionRate := some { tokens := 20, periodMs := 1000, burst := 10 }` setting limits completed TCP accepts per peer IP before TLS. It defaults to off and sees the load balancer's source address unless client source IP is preserved.
 
 ## Upstream settings

@@ -24,6 +24,11 @@ bytes. Existing body/count/header/worker budgets still apply. Normal early
 responses discard the remaining upload without resetting the response stream;
 calling incoming.cancel explicitly resets the exchange. HTTP/1 request bodies
 remain bounded buffered requests. Client/bidirectional streaming uses HTTP/2.
+An admission policy with a `postBody` validator, including `LeanNet.Gate`,
+uses the bounded buffered HTTP/2 request path instead. The validator sees the
+complete body and trailers before any application handler or proxy dispatch.
+Use a route without that post-body policy when early bidirectional upload
+handling is required.
 
 WebSocket `Callbacks.onPoll` supplies unsolicited server messages without an
 inbound browser event, using the same bounded physical-write tickets.
