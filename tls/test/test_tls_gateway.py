@@ -100,6 +100,25 @@ def create_ipv6_certificate(directory):
     return chain, key
 
 
+def create_ipv4_certificate(directory, san_kind):
+    directory = Path(directory)
+    prefix = "ipv4-" + san_kind.lower()
+    key, csr, leaf = (directory / (prefix + suffix) for suffix in (".key", ".csr", ".pem"))
+    chain, extensions = directory / (prefix + ".chain.pem"), directory / (prefix + ".ext")
+    extensions.write_text(
+        "basicConstraints=critical,CA:FALSE\n"
+        "keyUsage=critical,digitalSignature,keyEncipherment\n"
+        "extendedKeyUsage=serverAuth\n"
+        f"subjectAltName={san_kind}:127.0.0.1\n")
+    openssl("req", "-new", "-newkey", "rsa:2048", "-noenc", "-sha256",
+            "-keyout", key, "-out", csr, "-subj", "/CN=127.0.0.1")
+    openssl("x509", "-req", "-in", csr, "-CA", directory / "intermediate.pem",
+            "-CAkey", directory / "intermediate.key", "-set_serial", "102" if san_kind == "IP" else "103",
+            "-sha256", "-out", leaf, "-days", "7", "-extfile", extensions)
+    chain.write_bytes(leaf.read_bytes() + (directory / "intermediate.pem").read_bytes())
+    return chain, key
+
+
 class UpstreamTLSClientTest(unittest.TestCase):
     def test_verified_identity_and_trust(self):
         self.assertTrue(BINARY.is_file(), f"build {BINARY} first")
@@ -118,6 +137,21 @@ class UpstreamTLSClientTest(unittest.TestCase):
                             capture_output=True, text=True, timeout=15)
                         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                         self.assertIn("VERIFIED" if outcome == "expected" else "REJECTED", result.stdout)
+
+    def test_ipv4_requires_ip_san_not_dns_name_or_common_name(self):
+        self.assertTrue(BINARY.is_file(), f"build {BINARY} first")
+        with tempfile.TemporaryDirectory(prefix="lean-net-gateway-tls-ipv4-") as directory:
+            certs = create_certificates(directory)
+            for san_kind, name, outcome in (("IP", "127.0.0.1", "expected"),
+                                            ("IP", "127.0.0.2", "rejected"),
+                                            ("DNS", "127.0.0.1", "rejected")):
+                chain, key = create_ipv4_certificate(directory, san_kind)
+                with self.subTest(san_kind=san_kind, name=name), TLSServer(chain, key) as server:
+                    result = subprocess.run(
+                        [BINARY, str(server.port), str(certs.ca), name, outcome],
+                        capture_output=True, text=True, timeout=15)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("VERIFIED" if outcome == "expected" else "REJECTED", result.stdout)
 
     def test_ipv6_ip_san(self):
         self.assertTrue(BINARY.is_file(), f"build {BINARY} first")
