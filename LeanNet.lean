@@ -17,6 +17,7 @@ import LeanNet.HTTP1.Router
 import LeanNet.HTTP1.Machine
 import LeanNet.HTTP1.Handlers
 import LeanNet.HTTP1.Server
+import LeanNet.HTTP.Deferred
 import LeanNet.HTTP.Transport
 import LeanNet.HTTP.Admission
 import LeanNet.HTTP.ReactorServer

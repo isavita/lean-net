@@ -93,6 +93,16 @@ static int tg_ipv4_literal(const char *name) {
   return dots == 3 && digits && value <= 255;
 }
 
+/* OpenSSL 4 separates DNS and IP reference identifiers and deprecates
+ * SSL_set1_host. Numeric IPs take the dedicated verification path below. */
+static int tg_set_dns_name(SSL *ssl, const char *name) {
+#if OPENSSL_VERSION_NUMBER >= 0x40000000L
+  return SSL_set1_dnsname(ssl, name);
+#else
+  return SSL_set1_host(ssl, name);
+#endif
+}
+
 lean_object *lean_tg_session_new(uint64_t raw_context, b_lean_obj_arg verify_name) {
   tg_context *context = (tg_context *)(uintptr_t)raw_context;
   const char *name = lean_string_cstr(verify_name);
@@ -116,7 +126,7 @@ lean_object *lean_tg_session_new(uint64_t raw_context, b_lean_obj_arg verify_nam
   X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
   if (ipv6 || tg_ipv4_literal(name)) {
     if (X509_VERIFY_PARAM_set1_ip_asc(param, name) != 1) goto fail;
-  } else if (SSL_set1_host(session->ssl, name) != 1 ||
+  } else if (tg_set_dns_name(session->ssl, name) != 1 ||
              SSL_set_tlsext_host_name(session->ssl, name) != 1) goto fail;
   static const unsigned char alpn[] = { 8, 'h', 't', 't', 'p', '/', '1', '.', '1' };
   if (SSL_set_alpn_protos(session->ssl, alpn, sizeof(alpn)) != 0) goto fail;

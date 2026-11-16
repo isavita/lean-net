@@ -1,4 +1,5 @@
 import LeanNet.Bytes
+import LeanNet.HTTP.Deferred
 import LeanNet.HTTP1.Machine
 import LeanNet.HTTP1.Router
 import LeanNet.HTTP2.Push
@@ -37,6 +38,13 @@ inductive HeaderResult where
     must not block. The library does not share their mutable state across loops. -/
 structure Handlers where
   onRequest : Request → IO Reply
+  /-- Optional nonblocking application completion. Called on the owner worker;
+      takes precedence over `onRequest`. See `HTTP.Deferred.Job`. -/
+  onRequestDeferred : Option (Request → IO HTTP.Deferred.Result) := none
+  /-- Shared early callback. H2 uses version `HTTP/2`, known Content-Length
+      or `.chunked` for stream-framed unknown length (no wire chunk coding).
+      H2 ignores framing overrides, sends bodyless rejections, and rejects
+      raw upgrades with 501; use `onWebSocket` for RFC8441. -/
   onHeaders : RequestHead → BodyFraming → IO HeaderResult := fun _ _ => pure (.accept none)
   /-- Called only for HTTP/2 when server push is enabled and the peer allows it. -/
   onPush : Request → IO (Array HTTP2.Push) := fun _ => pure #[]

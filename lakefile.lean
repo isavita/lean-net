@@ -315,3 +315,7 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   let logger := logger.zipWith (fun source _ => source) loggerHeader
   let loggerObj ← buildO (pkg.buildDir / "c" / "access_log.o") logger includes options compiler
   buildStaticLib (pkg.staticLibDir / nameToStaticLib "socket_shim") #[obj, nativeObj, groupObj, catalogObj, loggerObj]
+
+/-- Native HTTP/1 and HTTP/2 application-deferred reply acceptance. -/
+lean_exe «lean-net-deferred-reply-fixture» where
+  root := `test.DeferredReplyFixture

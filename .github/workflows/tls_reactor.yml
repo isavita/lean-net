@@ -84,8 +84,10 @@ jobs:
           echo "PYTHONPATH=$RUNNER_TEMP/lean-net-http2-test-deps" >> "$GITHUB_ENV"
       - name: Build public TLS APIs and native fixtures
         run: |
-          lake build lean-net-http1 lean-net-platform-info lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-observability-fixture lean-net-process-metrics-test lean-net-deferred-transport-fixture lean-net-keepalive-transport-fixture
+          lake build lean-net-http1 lean-net-platform-info lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-observability-fixture lean-net-process-metrics-test lean-net-deferred-transport-fixture lean-net-keepalive-transport-fixture lean-net-deferred-reply-fixture
           lake -d tls build lean-net-tls lean-net-tls-fixture lean-net-tls-interruptible-test lean-net-tls-reactor-fixture lean-net-tls-static-fixture lean-net-tls-reload-fixture lean-net-tls-worker-lifetime-test lean-net-tls-admission-fixture lean-net-tls-gateway-test
+      - name: Bounded application replies and HTTP protocol parity
+        run: lake env ${{ matrix.python }} test/test_deferred_replies.py -v
       - name: Public CLI queue configuration
         run: lake env lean --run test/HTTPCLIOptionsTest.lean
       - name: Build runnable library examples

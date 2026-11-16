@@ -24,6 +24,16 @@ structure ClientCertificate where
   subjectAltNames : Array String := #[]
   deriving Repr, Inhabited, BEq
 
+/-- Owned socket-free facts established by the transport, never parsed from
+Forwarded/X-Forwarded-* or any other request header. Plain connections have no
+SNI/ALPN. The binary peer IP has 4 or 16 bytes, or is empty when unknown. -/
+structure TransportInfo where
+  secure : Bool
+  peer : ByteArray
+  sni : Option ByteArray := none
+  alpn : ByteArray := ByteArray.empty
+  deriving Inhabited
+
 /-- The request target and body remain uninterpreted wire bytes. -/
 structure Request where
   method : String
@@ -34,6 +44,8 @@ structure Request where
   trailers : Array Header := #[]
   /-- Set by the server for TLS connections with a verified client certificate. -/
   clientCertificate : Option ClientCertificate := none
+  /-- Populated by ReactorServer from the accepted socket/TLS handshake. -/
+  transport : Option TransportInfo := none
 
 /-- Limits apply independently to the request head, decoded body, and trailers. -/
 structure Limits where
