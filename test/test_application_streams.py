@@ -77,10 +77,32 @@ class ApplicationStreams(unittest.TestCase):
                 if value == remote: self.assertEqual(result[b"x-trace"], remote)
 
     def test_idle_worker_ticks_and_shared_drain_deadline(self):
-        first = int(self.get(b"/stats").headers[b"x-ticks"])
-        time.sleep(.035)
-        second = int(self.get(b"/stats").headers[b"x-ticks"])
-        self.assertGreaterEqual(second - first, 3)
+        stats = self.get(b"/stats").headers
+        first = int(stats[b"x-ticks"])
+        interval = int(stats[b"x-tick-interval-ms"]) / 1000
+        self.assertGreater(interval, 0)
+        # Intervals are nominal, not a count guarantee for one short sleep:
+        # Windows GetTickCount64 normally advances in 10--16ms steps, and the
+        # driver coalesces missed ticks. Require several callbacks during one
+        # quiet window, retrying within a bounded allowance for scheduler jitter.
+        # No HTTP traffic is sent inside a window, and failed samples are not
+        # accumulated, so request-triggered loop iterations cannot supply all
+        # of the required idle progress across repeated observations.
+        deadline = time.monotonic() + max(2.0, interval * 200)
+        quiet = max(.05, interval * 8)
+        samples = []
+        progress = 0
+        while time.monotonic() < deadline:
+            window = min(quiet, deadline - time.monotonic())
+            if window <= 0: break
+            time.sleep(window)
+            second = int(self.get(b"/stats").headers[b"x-ticks"])
+            progress = second - first
+            samples.append((window, progress))
+            if progress >= 3: break
+            first = second
+            quiet = min(.5, quiet * 2)
+        self.assertGreaterEqual(progress, 3, f"idle maintenance did not progress within its bound: {samples}")
         self.stop()
         self.log.seek(0)
         lines = self.log.read().splitlines()

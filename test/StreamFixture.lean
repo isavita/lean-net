@@ -2,6 +2,8 @@ import LeanNet.HTTP.ReactorServer
 
 open LeanNet LeanNet.HTTP1
 
+private def applicationTickIntervalMs : Nat := 5
+
 private def handlers (_ : Nat) : IO Handlers := do
   let produced ← IO.mkRef (0 : Nat)
   let closed ← IO.mkRef (#[] : Array String)
@@ -17,7 +19,7 @@ private def handlers (_ : Nat) : IO Handlers := do
         return some { opcode := kind, payload := if kind == .close then ByteArray.mk #[17, 56] else "unsolicited".toUTF8 } }
   let policy : WebSocket.Handshake.Policy := { originAllowed := fun value => value == some "https://stream.test".toUTF8 }
   return {
-    tickIntervalMs := 5
+    tickIntervalMs := applicationTickIntervalMs
     onTick := fun _ => ticks.modify (· + 1)
     onDrain := fun cutoff => do
       let now ← IO.monoMsNow
@@ -46,6 +48,7 @@ private def handlers (_ : Nat) : IO Handlers := do
       if target == "/stats" then
         return .immediate { response := { headers := #[
           { name := "x-ticks", value := (toString (← ticks.get)).toUTF8 },
+          { name := "x-tick-interval-ms", value := (toString applicationTickIntervalMs).toUTF8 },
           { name := "x-produced", value := (toString (← produced.get)).toUTF8 },
           { name := "x-closed", value := (String.intercalate "," (← closed.get).toList).toUTF8 }] } }
       if target == "/empty" then return .immediate { response := {} }
