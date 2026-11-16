@@ -68,7 +68,9 @@ jobs:
           test: false
           lint: false
       - name: Build reactor and echo
-        run: lake build lean-net-echo lean-net-http1 lean-net-platform-info lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-protocol-fuzz lean-net-gateway-pool-test lean-net-gateway-engine-test lean-net-gateway-h1-streaming-test lean-net-gateway-h2-streaming-test
+        run: lake build lean-net-echo lean-net-http1 lean-net-platform-info lean-net-reactor-native-test lean-net-http1-reactor-fixture lean-net-http2-reactor-fixture lean-net-static-fixture lean-net-protocol-fuzz lean-net-gateway-pool-test lean-net-gateway-engine-test lean-net-gateway-h1-streaming-test lean-net-gateway-h2-streaming-test lean-net-atomic-flag-test
+      - name: Shared atomic flag monotonicity and native reclamation
+        run: .lake/build/bin/lean-net-atomic-flag-test
       - name: Pure HTTP/1 protocol machines
         run: |
           lake env lean --run test/HTTP1ParserV2Test.lean

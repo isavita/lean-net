@@ -256,6 +256,7 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   let groupFFI ← inputTextFile (pkg.dir / "c" / "reactor_group_ffi.h")
   let rateLimit ← inputTextFile (pkg.dir / "c" / "ratelimit.h")
   let counters ← inputTextFile (pkg.dir / "c" / "counters.h")
+  let atomicFlag ← inputTextFile (pkg.dir / "c" / "atomic_flag.h")
   let mut src ← inputTextFile (pkg.dir / "c" / "socket_shim.c")
   src := src.zipWith (fun source _ => source) header
   src := src.zipWith (fun source _ => source) reactorHeader
@@ -267,6 +268,7 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
   src := src.zipWith (fun source _ => source) groupFFI
   src := src.zipWith (fun source _ => source) rateLimit
   src := src.zipWith (fun source _ => source) counters
+  src := src.zipWith (fun source _ => source) atomicFlag
   if System.Platform.isWindows then
     let windows ← inputTextFile (pkg.dir / "c" / "socket_windows.c")
     src := src.zipWith (fun source _ => source) windows
@@ -322,3 +324,6 @@ lean_exe «lean-net-deferred-reply-fixture» where
 
 lean_exe «lean-net-stream-fixture» where
   root := `test.StreamFixture
+
+lean_exe «lean-net-atomic-flag-test» where
+  root := `test.AtomicFlagTest

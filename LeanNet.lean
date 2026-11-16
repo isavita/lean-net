@@ -1,4 +1,5 @@
 /- Public LeanNet API. Raw FFI declarations are implementation details. -/
+import LeanNet.AtomicFlag
 import LeanNet.Bytes
 import LeanNet.Socket.Handle
 import LeanNet.TCP.Listener
