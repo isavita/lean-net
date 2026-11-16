@@ -16,6 +16,16 @@ private def handlers (_worker : Nat) : IO Handlers := do
           body := "refused".toUTF8 } }
       return .accept none
     onRequestDeferred := some fun request => do
+      if request.target == "/transport".toUTF8 || request.target == "/transport-deferred".toUTF8 then
+        let body := match request.transport with
+          | none => "missing"
+          | some facts => s!"{facts.secure}|" ++
+            String.intercalate "." (facts.peer.toList.map toString) ++ "|" ++
+            ((facts.sni.bind String.fromUTF8?).getD "none") ++ "|" ++
+            (String.fromUTF8! facts.alpn)
+        let reply : Reply := { response := { body := body.toUTF8 } }
+        if request.target == "/transport".toUTF8 then return .immediate reply
+        return .deferred { poll := pure (some reply) }
       if request.target == "/stats".toUTF8 then
         return .immediate { response := { body :=
           (s!"completed={← completed.get};started={← started.get};" ++ String.intercalate "," (← cancelled.get).toList).toUTF8 } }

@@ -72,6 +72,19 @@ class DeferredReplies(unittest.TestCase):
         self.addCleanup(peer.close)
         return peer
 
+    def test_owned_transport_facts_ignore_forwarded_headers_and_match_protocols(self):
+        expected = b"false|127.0.0.1|none|"
+        for path in (b"/transport", b"/transport-deferred"):
+            peer = self.connect()
+            peer.sendall(b"GET " + path + b" HTTP/1.1\r\nHost: localhost\r\n"
+                         b"Forwarded: for=198.51.100.20;proto=https\r\n"
+                         b"X-Forwarded-For: 198.51.100.20\r\nX-Forwarded-Proto: https\r\n\r\n")
+            self.assertEqual(Reader(peer).response().body, expected)
+            h2 = self.h2()
+            h2.request(1, path, headers=[(b"forwarded", b"for=198.51.100.20;proto=https"),
+                (b"x-forwarded-for", b"198.51.100.20"), (b"x-forwarded-proto", b"https")])
+            self.assertEqual(h2.response(1), expected)
+
     def test_early_header_checks_precede_body_and_continue_on_both_protocols(self):
         peer = self.connect()
         peer.sendall(b"POST /refuse HTTP/1.1\r\nHost: localhost\r\n"

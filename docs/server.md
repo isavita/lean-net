@@ -86,6 +86,14 @@ ignores framing overrides, returns bodyless header rejections, and rejects raw
 upgrades with 501. Use `onWebSocket` for HTTP/2 extended CONNECT. Server-owned
 health and metrics endpoints bypass application header callbacks.
 
+`Request.transport` contains owned, socket-free `TransportInfo`: `secure`,
+binary `peer` IP (4/16 bytes), optional SNI, and ALPN. ReactorServer fills these
+from the accepted socket or completed TLS handshake before post-body validators,
+admission rewrites and synchronous/deferred application callbacks. Incoming
+Forwarded or X-Forwarded-* headers cannot alter the facts. Applications can use
+the actual peer to decide which proxies are trusted before interpreting those
+headers. `clientCertificate` continues to hold verified mTLS identity separately.
+
 ## Deferred application replies
 
 `Handlers.onRequestDeferred` opts the reactor server into deferred application

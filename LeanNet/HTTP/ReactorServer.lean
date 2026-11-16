@@ -597,12 +597,23 @@ private def Driver.beginDrain (driver : Driver) (id : Reactor.SocketId) : IO Uni
     driver.put id { client with closing := true }
     client.socket.closeAfterWrites
 
+/-- Capture immutable transport facts before post-body validation, admission
+rewrite and application dispatch. Request headers cannot supply these facts. -/
+private def Driver.withTransport (driver : Driver) (id : Reactor.SocketId)
+    (request : Request) : IO Request := do
+  let some client ← driver.client? id | return request
+  let facts : Transport.Facts ← match client.facts.orElse (fun _ => client.socket.facts) with
+    | some facts => pure facts
+    | none => Transport.Facts.plain <$> id.peerBytes driver.reactor
+  if client.facts.isNone then driver.put id { client with facts := some facts }
+  return { request with
+    clientCertificate := client.socket.clientCertificate
+    transport := some { secure := facts.secure, peer := facts.peer, sni := facts.sni, alpn := facts.alpn } }
+
 /-- Establish the request's trace context before application dispatch. -/
 private def Driver.traced (driver : Driver) (id : Reactor.SocketId) (requestId : Nat)
     (request : Request) : IO Request := do
-  let request := match (← driver.client? id) with
-    | some client => { request with clientCertificate := client.socket.clientCertificate }
-    | none => request
+  let request ← driver.withTransport id request
   if !driver.config.tracing then return request
   let state ← driver.state.get
   let (context, headers, traces) := TraceContext.ensure request.headers state.traces
@@ -817,6 +828,7 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
         driver.put id { client with pipe := some pipe }
         driver.applyStep id (machine.decideHead requestId (.upgrade (limitedReply driver.config reply)))
     | .request requestId request =>
+      let request ← driver.withTransport id request
       driver.cancelRequest id
       let some client ← driver.client? id | return
       if client.retired then return
@@ -1315,10 +1327,11 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
           driver.put id { client with protocol := .http2 response.state, kick := true }
           actions := response.actions ++ actions
         continue
+      let request ← driver.withTransport id event.request
       let handler ← driver.takeDispatch id event.streamId.toNat
       let request ← match handler.bind (·.postBody) with
-        | none => pure (some event.request)
-        | some validate => match ← (try validate event.request catch _ =>
+        | none => pure (some request)
+        | some validate => match ← (try validate request catch _ =>
             pure (.error { status := 500 })) with
           | .ok checked => pure (some checked)
           | .error rejection => do

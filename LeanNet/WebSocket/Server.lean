@@ -140,9 +140,13 @@ def rawPipe (callbacks : Callbacks) (config : Connection.Config := {}) : IO RawP
       pure () }
 
 /-- Validate an HTTP/1 WebSocket handshake and create a fresh per-connection
-    codec. Rejections remain normal HTTP responses. -/
+    codec. Rejections remain normal HTTP responses. HTTP/2 heads pass through
+    for the separately configured `Handlers.onWebSocket` selector. -/
 def acceptHTTP1 (head : RequestHead) (policy : Handshake.Policy)
     (callbacks : Callbacks) (config : Connection.Config := {}) : IO HeaderResult := do
+  -- Shared header pipelines also see HTTP/2. Its extended CONNECT handshake
+  -- belongs to onWebSocket; never interpret it as an HTTP/1 GET upgrade.
+  if head.version == "HTTP/2" then return .accept none
   match Handshake.acceptHTTP1 head policy with
   | .error rejection =>
     return .reject { response := { status := rejection.status, headers := rejection.headers,
