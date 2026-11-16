@@ -94,18 +94,21 @@ private def handlers (_ : Nat) : IO Handlers := do
             if let some reason := reason then input.cancel reason } }
       let offset ← IO.mkRef (0 : Nat)
       let started ← Reactor.nowMs
+      let status := if target == "/status204" then 204 else if target == "/status205" then 205
+        else if target == "/status304" then 304 else 200
+      let known := target == "/known" || status != 200
       let data := if target == "/big" then ByteArray.mk (Array.replicate (2 * 1024 * 1024) (65 : UInt8)) else "firstsecond".toUTF8
       let body : HTTP.Stream.Body := {
         retainedBytes := data.size
-        knownLength := if target == "/known" then some data.size else none
-        declaredTrailers := if target == "/known" then #[] else #["x-finished"]
+        knownLength := if known then some data.size else none
+        declaredTrailers := if known then #[] else #["x-finished"]
         idleTimeoutMs := if target == "/timeout" then 80 else 3000
         lifetimeMs := 5000
         poll := fun budget => do
           if target == "/cancel" || target == "/timeout" then return none
           let current ← offset.get
           if current == data.size then
-            return some (.finish (if target == "/known" then #[] else #[{ name := "x-finished", value := (if target == "/bad-trailer" then "yes\r\nx-injected: bad" else "yes").toUTF8 }]))
+            return some (.finish (if known then #[] else #[{ name := "x-finished", value := (if target == "/bad-trailer" then "yes\r\nx-injected: bad" else "yes").toUTF8 }]))
           if budget == 0 then return none
           if target == "/chunks" && current > 0 && (← Reactor.nowMs) - started < 200 then return none
           let count := min budget (if target == "/chunks" && current == 0 then 5 else data.size - current)
@@ -113,7 +116,7 @@ private def handlers (_ : Nat) : IO Handlers := do
           produced.modify (· + 1)
           return some (.data (data.extract current (current + count)))
         close := fun reason => closed.modify (·.push (reason.map reprStr |>.getD "complete")) }
-      return .immediate { response := { headers := #[{ name := "content-type", value := "application/octet-stream".toUTF8 }] }, stream := some body }
+      return .immediate { response := { status,headers := #[{ name := "content-type", value := "application/octet-stream".toUTF8 }] }, stream := some body }
   }
 
 def main (args : List String) : IO Unit := do

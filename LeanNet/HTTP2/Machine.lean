@@ -382,8 +382,9 @@ private def encodeReply (state : State) (id : UInt32) (reply : HTTP1.Reply)
   let previous := connection
   let headLength := match reply.options.framing with
     | some (.contentLength n) => some n | _ => none
+  let omitHeadLength := reply.options.framing == some .none
   let (next, wire) ← match reply.fileRegion with
-    | none => connection.queueResponse id reply.response reply.options.trailers headLength
+    | none => connection.queueResponse id reply.response reply.options.trailers headLength omitHeadLength
     | some region => connection.queueFileResponse id reply.response region reply.options.trailers
   connection := next
   if state.config.trackOutput then

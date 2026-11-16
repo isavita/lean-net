@@ -1078,7 +1078,8 @@ def Connection.informational (connection : Connection) (id : UInt32) (response :
   return (putStream { connection with encoder } { entry with stream }, bytes)
 
 private def queueResponseBody (connection : Connection) (id : UInt32) (response : HTTP1.Response)
-    (body : ResponseBody) (trailers : Array HTTP1.Header) (headLength : Option Nat := none) : Except ProtocolError (Connection × ByteArray) := do
+    (body : ResponseBody) (trailers : Array HTTP1.Header) (headLength : Option Nat := none)
+    (omitHeadLength : Bool := false) : Except ProtocolError (Connection × ByteArray) := do
   let some entry := findStream connection id | throw (streamError id .streamClosed "response stream is closed")
   if !entry.delivered || entry.pending.isSome || entry.streaming then
     throw (streamError id .protocolError "response is not expected")
@@ -1105,8 +1106,10 @@ private def queueResponseBody (connection : Connection) (id : UInt32) (response 
   let noBody := bodyForbidden || body.length == 0
   let endStream := noBody && trailing.isEmpty
   let mut fields ← responseFields connection id response
-  if response.status != 204 && response.status != 304 then
-    let length := if head.method == "HEAD" then headLength.getD body.length else body.length
+  if response.status != 204 && response.status != 304 &&
+      !(head.method == "HEAD" && omitHeadLength && response.status != 205) then
+    let length := if response.status == 205 then 0
+      else if head.method == "HEAD" then headLength.getD body.length else body.length
     fields := fields.push { name := "content-length".toUTF8, value := (toString length).toUTF8 }
   checkPeerHeaders connection id fields
   let (encoder, headers) ← encodedHeaders connection.encoder fields id endStream connection.peerFrameSize
@@ -1116,10 +1119,12 @@ private def queueResponseBody (connection : Connection) (id : UInt32) (response 
   if endStream then return (finishOutput connection entry stream, headers)
   return (putStream connection { entry with stream, pending := some { body, trailers := trailing } }, headers)
 
-/-- Queue a final byte response without scheduling DATA. -/
+/-- Queue a final byte response without scheduling DATA. `omitHeadLength` keeps
+unknown streamed HEAD metadata absent after the producer has been retired. -/
 def Connection.queueResponse (connection : Connection) (id : UInt32) (response : HTTP1.Response)
-    (trailers : Array HTTP1.Header := #[]) (headLength : Option Nat := none) : Except ProtocolError (Connection × ByteArray) :=
-  queueResponseBody connection id response (.bytes response.body) trailers headLength
+    (trailers : Array HTTP1.Header := #[]) (headLength : Option Nat := none)
+    (omitHeadLength : Bool := false) : Except ProtocolError (Connection × ByteArray) :=
+  queueResponseBody connection id response (.bytes response.body) trailers headLength omitHeadLength
 
 /-- Queue file metadata without reading its source or charging resident-body
     memory. Logical file debt has separate per-response/connection limits. -/

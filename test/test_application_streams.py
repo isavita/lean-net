@@ -192,6 +192,61 @@ class ApplicationStreams(unittest.TestCase):
         self.assertEqual(peer.response(3), b"")
         self.assertEqual(dict(peer.headers[3][0].headers)[b"content-length"], b"11")
 
+    def test_unknown_stream_head_omits_length_and_preserves_both_connections(self):
+        get = self.get(b"/chunks")
+        self.assertEqual(get.body, b"firstsecond")
+        self.assertNotIn(b"content-length", get.headers)
+        before = self.get(b"/stats").headers
+        peer = self.connect(); reader = Reader(peer)
+        peer.sendall(b"HEAD /chunks HTTP/1.1\r\nHost: localhost\r\n\r\nGET /immediate HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        # This HEAD deliberately has no length. Reader.response(head=True)
+        # keeps its stricter known-length fixture checks, so read this head
+        # independently without interpreting the next response as body bytes.
+        lines = reader.until(b"\r\n\r\n")[:-4].split(b"\r\n")
+        self.assertTrue(lines[0].startswith(b"HTTP/1.1 200 "))
+        headers = {name.lower(): value.strip() for name, value in (line.split(b":", 1) for line in lines[1:])}
+        self.assertNotIn(b"content-length", headers)
+        self.assertNotIn(b"transfer-encoding", headers)
+        self.assertNotIn(b"trailer", headers)
+        self.assertEqual(reader.response().body, b"ok")
+        after = self.get(b"/stats").headers
+        self.assertEqual(after[b"x-produced"], before[b"x-produced"])
+        self.assertEqual(after[b"x-closed"].count(b"complete"), before[b"x-closed"].count(b"complete") + 1)
+
+        h2 = self.h2(); h2.request(1, b"/chunks")
+        self.assertEqual(h2.response(1), b"firstsecond")
+        self.assertNotIn(b"content-length", dict(h2.headers[1][0].headers))
+        before = self.get(b"/stats").headers
+        h2.request(3, b"/chunks", method=b"HEAD")
+        self.assertEqual(h2.response(3), b"")
+        headers = dict(h2.headers[3][0].headers)
+        self.assertNotIn(b"content-length", headers)
+        self.assertNotIn(b"transfer-encoding", headers)
+        self.assertFalse(any(f.kind == 0 and f.stream == 3 for f in h2.frames))
+        after = self.get(b"/stats").headers
+        self.assertEqual(after[b"x-produced"], before[b"x-produced"])
+        self.assertEqual(after[b"x-closed"].count(b"complete"), before[b"x-closed"].count(b"complete") + 1)
+        h2.request(5, b"/immediate"); self.assertEqual(h2.response(5), b"ok")
+
+        # A known stream length never overrides bodyless status semantics,
+        # including when the request is HEAD.
+        for index, status in enumerate([204, 205, 304]):
+            path = f"/status{status}".encode()
+            for method in [b"GET", b"HEAD"]:
+                response = self.get(path, method)
+                self.assertEqual(response.status, status)
+                self.assertEqual(response.body, b"")
+                self.assertEqual(response.headers.get(b"content-length"), b"0" if status == 205 else None)
+                stream = 7 + index * 4 + (2 if method == b"HEAD" else 0)
+                h2.request(stream, path, method=method)
+                h2.until(lambda: stream in h2.ended or stream in h2.resets or bool(h2.goaways))
+                self.assertIn(stream, h2.ended)
+                self.assertNotIn(stream, h2.resets)
+                self.assertEqual(bytes(h2.bodies[stream]), b"")
+                self.assertEqual(dict(h2.headers[stream][0].headers)[b":status"], str(status).encode())
+                self.assertEqual(dict(h2.headers[stream][0].headers).get(b"content-length"), b"0" if status == 205 else None)
+        self.assertFalse(h2.goaways)
+
     def test_zero_window_prevents_producer_data_and_rst_cancels_once(self):
         peer = self.h2(settings_values=[(4, 0)], auto_window=False)
         peer.request(1, b"/big"); peer.ping_barrier()

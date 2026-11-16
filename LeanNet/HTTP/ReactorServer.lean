@@ -795,9 +795,14 @@ private def Driver.prepareReply (driver : Driver) (id : Reactor.SocketId) (reque
     | _ => none
   if method == some "HEAD" || [204,205,304].contains reply.response.status then
     close none
-    let options := match body.knownLength with
-      | some n => if method == some "HEAD" then { reply.options with framing := some (.contentLength n) } else reply.options
-      | none => reply.options
+    let options := if method == some "HEAD" && ![204,205,304].contains reply.response.status then
+        match body.knownLength with
+        | some n => { reply.options with framing := some (.contentLength n) }
+        -- Dropping the producer must not turn an unknown GET length into the
+        -- buffered empty body's length. Both protocol encoders preserve this
+        -- explicit absence of HEAD representation-length metadata.
+        | none => { reply.options with framing := some .none }
+      else reply.options
     return { reply with stream := none, options }
   let valid := reply.response.validate (method.getD "GET")
   if !valid.isOk then
