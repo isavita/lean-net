@@ -184,6 +184,49 @@ private structure ProxyStream where
   finish : Option (Array HTTP1.ClientResponse.Header) := none
   upstreamPaused : Bool := false
 
+private structure AppStream where
+  body : Stream.Body
+  retained : Nat
+  started : UInt64
+  progressed : UInt64
+  pending : ByteArray := ByteArray.empty
+  offset : Nat := 0
+  sent : Nat := 0
+  ending : Option (Array Header) := none
+
+private structure UploadState where
+  chunks : Array ByteArray := #[]
+  bytes : Nat := 0
+  credit : Nat := 0
+  eof : Option (Array Header) := none
+  cancelled : Option Deferred.CancelReason := none
+  discard : Bool := false
+  consumedEnd : Bool := false
+  progressed : UInt64 := 0
+
+private structure Upload where
+  state : IO.Ref UploadState
+  retained : Nat
+  maxBytes : Nat
+
+private def Upload.source (upload : Upload) : IncomingBody := {
+  poll := fun budget => do
+    let state ← upload.state.get
+    if let some reason := state.cancelled then return some (.cancelled reason)
+    if let some chunk := state.chunks[0]? then
+      let count := min 65536 (min budget chunk.size)
+      if count == 0 then return none
+      let chunks := if count == chunk.size then state.chunks.extract 1 state.chunks.size
+        else state.chunks.set! 0 (chunk.extract count chunk.size)
+      upload.state.set { state with chunks, bytes := state.bytes - count, credit := state.credit + count }
+      return some (.data (chunk.extract 0 count))
+    if let some trailers := state.eof then
+      upload.state.set { state with consumedEnd := true }
+      return some (.finish trailers)
+    return none
+  cancel := fun reason => upload.state.modify fun state => { state with cancelled := some reason }
+}
+
 private structure Client where
   socket : Transport.Endpoint
   protocol : Protocol := .detect 0
@@ -223,6 +266,8 @@ private structure Client where
       HTTP/2 stream ID; consumed when the request is dispatched. -/
   dispatch : Std.HashMap Nat Dispatch := {}
   proxyStreams : Std.HashMap Nat ProxyStream := {}
+  appStreams : Std.HashMap Nat AppStream := {}
+  uploads : Std.HashMap UInt32 Upload := {}
 
 private structure PendingReply where
   owner : Reactor.SocketId
@@ -235,8 +280,13 @@ private structure WorkerState where
   clients : Std.HashMap Reactor.SocketId Client := {}
   pendingReplies : Array PendingReply := #[]
   pendingReplyBytes : Nat := 0
+  appStreamCount : Nat := 0
+  appStreamBytes : Nat := 0
+  uploadCount : Nat := 0
+  uploadBytes : Nat := 0
   slots : Array OutputSlot := #[]
   now : UInt64 := 0
+  nextAppTick : Nat := 0
   dateSecond : UInt64 := 0
   date : ByteArray := ByteArray.empty
   roundRobin : Nat := 0
@@ -430,9 +480,59 @@ private def Driver.cancelReplies (driver : Driver) (id : Reactor.SocketId)
     pendingReplyBytes := state.pendingReplyBytes - selected.foldl (fun n item => n + item.bytes) 0 }
   for item in selected do try item.job.cancel reason catch _ => pure ()
 
+private def Driver.closeUploads (driver : Driver) (id : Reactor.SocketId)
+    (reason : Option Deferred.CancelReason) (streamId : Option UInt32 := none) : IO Unit := do
+  let some client ← driver.client? id | return
+  let selected := client.uploads.toArray.filter (fun item => streamId.all (· == item.1))
+  driver.put id { client with uploads := client.uploads.filter (fun key _ => !streamId.all (· == key)) }
+  driver.state.modify fun state => { state with
+    uploadCount := state.uploadCount - selected.size
+    uploadBytes := state.uploadBytes - selected.foldl (fun n item => n + item.2.retained) 0 }
+  for (_, upload) in selected do
+    upload.state.modify fun state => { state with
+      chunks := #[], bytes := 0, cancelled := reason.orElse (fun _ => state.cancelled) }
+
+private def Driver.discardUpload (driver : Driver) (id : Reactor.SocketId) (key : Nat) : IO Unit := do
+  let some client ← driver.client? id | return
+  let some upload := client.uploads[key.toUInt32]? | return
+  upload.state.modify fun state => { state with
+    chunks := #[], bytes := 0, credit := state.credit + state.bytes, discard := true }
+
+private def Driver.openUpload (driver : Driver) (id : Reactor.SocketId) (key : UInt32)
+    (ended : Bool) : IO Bool := do
+  let some client ← driver.client? id | return false
+  let state ← driver.state.get
+  let maxBytes := max 1 (min 65536 driver.config.http2.initialWindowSize)
+  let retained := maxBytes + driver.config.http2.maxHeaderListBytes + 16384
+  let count := state.pendingReplies.size + state.appStreamCount + state.uploadCount
+  let same := client.uploads.size + client.appStreams.size +
+    state.pendingReplies.foldl (fun n item => n + if item.owner == id then 1 else 0) 0
+  let used := state.pendingReplyBytes + state.appStreamBytes + state.uploadBytes
+  if count >= driver.config.deferred.maxPending || same >= driver.config.deferred.maxPendingPerClient ||
+      retained > driver.config.deferred.maxRetainedBytes - used then return false
+  let source ← IO.mkRef { progressed := state.now, eof := if ended then some #[] else none : UploadState }
+  driver.put id { client with uploads := client.uploads.insert key { state := source, retained, maxBytes } }
+  driver.state.modify fun state => { state with uploadCount := state.uploadCount + 1, uploadBytes := state.uploadBytes + retained }
+  return true
+
+private def Driver.closeAppStreams (driver : Driver) (id : Reactor.SocketId)
+    (reason : Option Deferred.CancelReason) (requestId : Option Nat := none) : IO Unit := do
+  let some client ← driver.client? id | return
+  let removed := client.appStreams.toArray.filter (fun item => requestId.all (· == item.1))
+  let streams := client.appStreams.filter (fun key _ => !requestId.all (· == key))
+  driver.put id { client with appStreams := streams }
+  driver.state.modify fun state => { state with
+    appStreamCount := state.appStreamCount - removed.size
+    appStreamBytes := state.appStreamBytes - removed.foldl (fun n item => n + item.2.retained) 0 }
+  for (key, stream) in removed do
+    if reason.isNone then driver.discardUpload id key
+    try stream.body.close reason catch _ => pure ()
+
 private def Driver.forget (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
   let some client ← driver.client? id | return
   cleanupActions #[
+    driver.closeUploads id (some (if client.retirementOutcome == some .shutdown then .shutdown else .disconnected)),
+    driver.closeAppStreams id (some (if client.retirementOutcome == some .shutdown then .shutdown else .disconnected)),
     driver.cancelReplies id (if client.retirementOutcome == some .shutdown then .shutdown else .disconnected),
     (do if let some gateway := driver.gateway then gateway.cancelDownstream id),
     driver.closeObservations id (client.retirementOutcome.getD .error),
@@ -457,6 +557,8 @@ private def Driver.retire (driver : Driver) (id : Reactor.SocketId)
     outputs := [], outputBytes := 0, queuedFileBytes := 0,
     idleDeadline := none, requestDeadline := none, writeDeadline := none, pingDeadline := none }
   cleanupActions #[
+    driver.closeUploads id (some (if outcome == .shutdown then .shutdown else .disconnected)),
+    driver.closeAppStreams id (some (if outcome == .shutdown then .shutdown else .disconnected)),
     driver.cancelReplies id (if outcome == .shutdown then .shutdown else .disconnected),
     (do if let some gateway := driver.gateway then gateway.cancelDownstream id),
     releaseInput client,
@@ -628,13 +730,15 @@ private def Driver.traced (driver : Driver) (id : Reactor.SocketId) (requestId :
   let request ← driver.withTransport id request
   if !driver.config.tracing then return request
   let state ← driver.state.get
+  let incoming := request.headers.filter (·.name.toLower == "traceparent")
+  let remote := incoming.size == 1 && incoming[0]?.any (fun header => (TraceContext.parse header.value).isSome)
   let (context, headers, traces) := TraceContext.ensure request.headers state.traces
   driver.state.set { state with traces }
   if let some client ← driver.client? id then
     if let some observation := client.requests[requestId]? then
       let observation := { observation with traceId := context.traceId }
       driver.put id { client with requests := client.requests.insert requestId observation }
-  return { request with headers }
+  return { request with headers, traceGenerated := !remote }
 
 private def Driver.takeDispatch (driver : Driver) (id : Reactor.SocketId) (key : Nat) :
     IO (Option Dispatch) := do
@@ -672,18 +776,64 @@ private def Driver.reply (driver : Driver) (id : Reactor.SocketId) (requestId : 
   | some handler => handler request
   | none => driver.handlers.onRequest request
 
+/-- Reserve the producer before committing its response head. -/
+private def Driver.prepareReply (driver : Driver) (id : Reactor.SocketId) (requestId : Nat)
+    (incoming : Reply) : IO Reply := do
+  let fields := driver.config.securityHeaders.fields driver.transport.secure
+  let secured := { incoming with response := applySecurityHeaders fields incoming.response }
+  let reply := limitedReply driver.config secured
+  let some body := incoming.stream | return reply
+  let close := fun reason => do try body.close reason catch _ => pure ()
+  if reply.stream.isNone || !reply.response.body.isEmpty || reply.fileRegion.isSome ||
+      !reply.informational.isEmpty || !(body.validate).isOk then
+    close (some .failed)
+    return { response := { status := 500 } }
+  let some client ← driver.client? id | close (some .disconnected); return { response := { status := 503 } }
+  let method := match client.protocol with
+    | .http1 machine => machine.requestMethod
+    | .http2 machine => machine.requestMethod requestId.toUInt32
+    | _ => none
+  if method == some "HEAD" || [204,205,304].contains reply.response.status then
+    close none
+    let options := if method == some "HEAD" && ![204,205,304].contains reply.response.status then
+        match body.knownLength with
+        | some n => { reply.options with framing := some (.contentLength n) }
+        -- Dropping the producer must not turn an unknown GET length into the
+        -- buffered empty body's length. Both protocol encoders preserve this
+        -- explicit absence of HEAD representation-length metadata.
+        | none => { reply.options with framing := some .none }
+      else reply.options
+    return { reply with stream := none, options }
+  let valid := reply.response.validate (method.getD "GET")
+  if !valid.isOk then
+    close (some .failed)
+    return { response := { status := 500 } }
+  let state ← driver.state.get
+  let perClient := client.appStreams.size + client.uploads.size + state.pendingReplies.foldl (fun n item => n + if item.owner == id then 1 else 0) 0
+  let retained := body.retainedBytes + 65536
+  if state.pendingReplies.size + state.appStreamCount + state.uploadCount >= driver.config.deferred.maxPending ||
+      perClient >= driver.config.deferred.maxPendingPerClient ||
+      retained > driver.config.deferred.maxRetainedBytes - (state.pendingReplyBytes + state.appStreamBytes + state.uploadBytes) then
+    close (some .overloaded)
+    return { response := { status := 503 } }
+  driver.put id { client with appStreams := client.appStreams.insert requestId {
+    body, retained, started := state.now, progressed := state.now } }
+  driver.state.modify fun state => { state with
+    appStreamCount := state.appStreamCount + 1, appStreamBytes := state.appStreamBytes + retained }
+  return reply
+
 /-- Start bounded asynchronous application work without leaving the owner.
 The protocol retains its exchange; HTTP/1 deliberately pauses its pipeline. -/
 private def Driver.requestReply (driver : Driver) (id : Reactor.SocketId) (requestId : Nat)
     (request : Request) (dispatch : Option Dispatch := none) : IO (Option Reply) := do
   if metricTarget driver request.target || (dispatch.bind (·.handler)).isSome then
-    return some (← driver.reply id requestId request dispatch)
+    return some (← driver.prepareReply id requestId (← driver.reply id requestId request dispatch))
   let some callback := driver.handlers.onRequestDeferred |
-    return some (← driver.reply id requestId request dispatch)
+    return some (← driver.prepareReply id requestId (← driver.reply id requestId request dispatch))
   let request ← driver.traced id requestId request
   let request := match dispatch.bind (·.rewrite) with | some rewrite => rewrite request | none => request
   match ← callback request with
-  | .immediate reply => return some reply
+  | .immediate reply => return some (← driver.prepareReply id requestId reply)
   | .deferred job =>
     let state ← driver.state.get
     let config := driver.config.deferred
@@ -692,8 +842,8 @@ private def Driver.requestReply (driver : Driver) (id : Reactor.SocketId) (reque
       request.trailers.foldl (fun size field => size + field.name.utf8ByteSize + field.value.size) 0 +
       job.retainedBytes
     let sameClient := state.pendingReplies.foldl (fun n item => n + if item.owner == id then 1 else 0) 0
-    if state.pendingReplies.size >= config.maxPending || sameClient >= config.maxPendingPerClient ||
-        bytes > config.maxRetainedBytes - state.pendingReplyBytes || job.timeoutMs == 0 then
+    if state.pendingReplies.size + state.appStreamCount + state.uploadCount >= config.maxPending || sameClient + ((state.clients[id]?).map (fun c => c.appStreams.size + c.uploads.size)).getD 0 >= config.maxPendingPerClient ||
+        bytes > config.maxRetainedBytes - (state.pendingReplyBytes + state.appStreamBytes + state.uploadBytes) || job.timeoutMs == 0 then
       try job.cancel .overloaded catch _ => pure ()
       return some { response := { status := 503 } }
     let expiresAt ← deadline state.now (min job.timeoutMs config.maxTimeoutMs)
@@ -767,7 +917,7 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
     let some client ← driver.client? id | return
     if client.retired then return
     match action with
-    | .readEnabled enabled => driver.setReading id enabled
+    | .readEnabled enabled => driver.setReading id (enabled || !client.appStreams.isEmpty)
     | .write outputId parts barrier => driver.appendOutput id (parts.map ByteSlice.full) (some outputId) barrier
     | .writeObserved outputId output barrier => driver.appendObserved id output (some outputId) barrier
     | .streamFinished requestId =>
@@ -1222,7 +1372,26 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
       driver.appendParts id #[.bytes (ByteSlice.full wire)]
         (some (tunnelTicket streamId ticket)) true observation
     | .tunnelData event =>
-      actions := (← driver.h2FeedPipe id event.streamId event.data event.endStream) ++ actions
+      if let some upload := client.uploads[event.streamId]? then
+        let state ← upload.state.get
+        let overflow := !state.discard &&
+          (state.chunks.size >= 256 || event.data.size > upload.maxBytes - state.bytes)
+        if overflow then
+          driver.closeUploads id (some .overloaded) (some event.streamId)
+          let .http2 machine := client.protocol | return
+          let step := machine.cancelTunnel event.streamId
+          driver.put id { client with protocol := .http2 step.state, uploads := client.uploads.erase event.streamId }
+          actions := step.actions ++ actions
+        else
+          let chunks := if state.discard || event.data.isEmpty then state.chunks else state.chunks.push event.data
+          upload.state.set { state with
+            chunks
+            bytes := if state.discard then 0 else state.bytes + event.data.size
+            credit := state.credit + if state.discard then event.data.size else 0
+            eof := if event.endStream then some event.trailers else state.eof
+            progressed := ← driver.now }
+      else
+        actions := (← driver.h2FeedPipe id event.streamId event.data event.endStream) ++ actions
     | .tunnelReset streamId =>
       driver.dropTunnel id streamId
     | .writePing nonce pingBytes =>
@@ -1240,6 +1409,10 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
     | .requestStarted streamId head startedAt =>
       if !(← driver.startObservation id streamId.toNat (some head) startedAt) then driver.closeNow id
     | .responseAborted streamId reason =>
+      driver.closeUploads id (some (match reason with
+        | .timeout => .timeout | .cancelled => .streamReset | .error => .failed)) (some streamId)
+      driver.closeAppStreams id (some (match reason with
+        | .timeout => .timeout | .cancelled => .streamReset | .error => .failed)) (some streamId.toNat)
       driver.cancelReplies id (match reason with
         | .timeout => .timeout | .cancelled => .streamReset | .error => .failed) (some streamId.toNat)
       let outcome := match reason with
@@ -1278,7 +1451,13 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
               else driver.handlers.onHeaders plainHead framing
             catch _ => pure (.reject { response := { status := 500 } })
           match decision with
-          | .accept _ => pure (machine.admitHead streamId limit)
+          | .accept _ =>
+            let streaming ← if head.protocol.isNone then driver.handlers.streamRequests plainHead else pure false
+            if streaming then
+              if ← driver.openUpload id streamId (machine.requestEnded streamId) then
+                pure (machine.admitStreamingHead streamId limit)
+              else pure (machine.rejectHead streamId 503)
+            else pure (machine.admitHead streamId limit)
           | .upgrade _ pipe =>
             try pipe.onClose catch _ => pure ()
             pure (machine.rejectHead streamId 501 (driver.config.securityHeaders.fields driver.transport.secure))
@@ -1341,6 +1520,9 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
           actions := response.actions ++ actions
         continue
       let request ← driver.withTransport id event.request
+      let request := match client.uploads[event.streamId]? with
+        | some upload => { request with incoming := some upload.source }
+        | none => request
       let handler ← driver.takeDispatch id event.streamId.toNat
       let request ← match handler.bind (·.postBody) with
         | none => pure (some request)
@@ -1383,6 +1565,7 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
       let some current ← driver.client? id | return
       if current.retired then return
       let .http2 machine := current.protocol | return
+      if reply.stream.isNone then driver.discardUpload id event.streamId.toNat
       let response := machine.respond event.streamId
         (limitedReply driver.config (driver.secureReply reply)) pushes
       driver.put id { current with protocol := .http2 response.state, kick := true }
@@ -1407,10 +1590,12 @@ private def Driver.setProxyStream (driver : Driver) (id : Reactor.SocketId)
 
 private def Driver.proxyReply (driver : Driver) (id : Reactor.SocketId)
     (requestId : Nat) (reply : Reply) : IO Unit := do
+  let reply ← driver.prepareReply id requestId reply
   let some client ← driver.client? id | return
   let secured := applySecurityHeaders (driver.config.securityHeaders.fields driver.transport.secure)
     reply.response
   let reply := limitedReply driver.config { reply with response := secured }
+  if reply.stream.isNone then driver.discardUpload id requestId
   match client.protocol with
   | .http1 machine => driver.applyStep id (machine.respond requestId reply)
   | .http2 machine =>
@@ -1459,6 +1644,125 @@ private def Driver.abortProxyStream (driver : Driver) (id : Reactor.SocketId)
     if requestId <= 2147483647 then
       driver.applyH2Step id ((machine.setTime (← driver.now).toNat).abortResponseStream requestId.toUInt32)
   | _ => pure ()
+
+private def Driver.pumpUploads (driver : Driver) : IO Unit := do
+  for (id, snapshot) in (← driver.state.get).clients.toArray do
+    for (key, upload) in snapshot.uploads.toArray do
+      let source ← upload.state.get
+      let now ← driver.now
+      let reason := source.cancelled.orElse fun _ =>
+        if source.eof.isNone && now.toNat - source.progressed.toNat >= driver.config.server.requestTimeoutMs then some .timeout else none
+      if let some reason := reason then
+        driver.closeUploads id (some reason) (some key)
+        driver.closeAppStreams id (some reason) (some key.toNat)
+        driver.cancelReplies id reason (some key.toNat)
+        if let some client ← driver.client? id then
+          if let .http2 machine := client.protocol then driver.applyH2Step id (machine.cancelTunnel key)
+        continue
+      if source.credit > 0 then
+        upload.state.set { source with credit := 0 }
+        if let some client ← driver.client? id then
+          if let .http2 machine := client.protocol then
+            driver.applyH2Step id (machine.consumeTunnel key source.credit)
+      let source ← upload.state.get
+      if (source.discard || source.consumedEnd) && source.eof.isSome && source.bytes == 0 then
+        driver.closeUploads id none (some key)
+
+private def Driver.setAppStream (driver : Driver) (id : Reactor.SocketId) (key : Nat)
+    (stream : AppStream) : IO Unit := do
+  if let some client ← driver.client? id then
+    if client.appStreams.contains key then
+      driver.put id { client with appStreams := client.appStreams.insert key stream }
+
+private def Driver.abortAppStream (driver : Driver) (id : Reactor.SocketId) (key : Nat)
+    (reason : Deferred.CancelReason) : IO Unit := do
+  driver.closeAppStreams id (some reason) (some key)
+  driver.abortProxyStream id key
+
+/-- At most one producer event and one DATA write per stream per worker turn.
+No producer runs ahead of bounded output or HTTP/2 stream flow control. -/
+private def Driver.pumpAppStreams (driver : Driver) : IO Unit := do
+  for (id, snapshot) in (← driver.state.get).clients.toArray do
+    if snapshot.retired || snapshot.closing then continue
+    for (key, _) in snapshot.appStreams.toArray do
+      let some client ← driver.client? id | continue
+      let some stream := client.appStreams[key]? | continue
+      let now ← driver.now
+      if now.toNat - stream.started.toNat >= stream.body.lifetimeMs ||
+          now.toNat - stream.progressed.toNat >= stream.body.idleTimeoutMs then
+        driver.abortAppStream id key .timeout
+        continue
+      let available := driver.config.maxOutputBytes - min client.outputBytes driver.config.maxOutputBytes
+      let ceiling := min driver.config.maxOutputBytes 262144
+      if client.outputBytes >= ceiling || available < 256 then continue
+      let budget := min 65536 (available - 256)
+      let budget := match client.protocol with
+        | .http1 machine => if machine.canStreamChunk key then budget else 0
+        | .http2 machine => min budget (machine.streamSendBudget key.toUInt32)
+        | _ => 0
+      if let .http1 machine := client.protocol then
+        if !machine.canStreamChunk key then continue
+      if stream.pending.size == stream.offset && stream.ending.isNone then
+        let event ← try bodyPoll stream.body budget catch _ => do
+          driver.abortAppStream id key .failed
+          pure none
+        if let some event := event then
+          match event with
+          | .data bytes =>
+            if bytes.isEmpty || bytes.size > budget ||
+                stream.body.knownLength.any (fun length => stream.sent + bytes.size > length) then
+              driver.abortAppStream id key .failed
+              continue
+            driver.setAppStream id key { stream with pending := bytes, offset := 0, progressed := now }
+          | .finish trailers =>
+            if trailers.size > driver.config.server.maxResponseHeaders ||
+                trailers.foldl (fun n h => n + h.name.utf8ByteSize + h.value.size + 4) 0 > driver.config.server.maxResponseHeaderBytes ||
+                trailers.any (fun h => !stream.body.declaredTrailers.any (·.toLower == h.name.toLower) ||
+                  h.value.data.any (fun b => (b < 32 && b != 9) || b == 127)) ||
+                stream.body.knownLength.any (· != stream.sent) then
+              driver.abortAppStream id key .failed
+              continue
+            driver.setAppStream id key { stream with ending := some trailers }
+      let some client ← driver.client? id | continue
+      let some stream := client.appStreams[key]? | continue
+      if stream.pending.size > stream.offset then
+        let bytes := stream.pending.extract stream.offset stream.pending.size
+        match client.protocol with
+        | .http1 machine =>
+          if !machine.canStreamChunk key then continue
+          driver.setAppStream id key { stream with
+            pending := ByteArray.empty
+            offset := 0
+            sent := stream.sent + bytes.size
+            progressed := now }
+          driver.applyStep id (machine.streamChunk key bytes)
+        | .http2 machine =>
+          match machine.tryStreamData key.toUInt32 bytes with
+          | .error _ => driver.abortAppStream id key .failed
+          | .ok none => pure ()
+          | .ok (some (count, step)) =>
+            let offset := stream.offset + count
+            driver.setAppStream id key { stream with
+              pending := if offset == stream.pending.size then ByteArray.empty else stream.pending
+              offset := if offset == stream.pending.size then 0 else offset
+              sent := stream.sent + count, progressed := now }
+            driver.applyH2Step id step
+        | _ => driver.abortAppStream id key .failed
+      else if let some trailers := stream.ending then
+        match client.protocol with
+        | .http1 machine =>
+          if !machine.canEndStream key then continue
+          driver.closeAppStreams id none (some key)
+          driver.applyStep id (machine.endStream key trailers)
+        | .http2 machine =>
+          match machine.endResponseStream key.toUInt32 trailers with
+          | .error _ => driver.abortAppStream id key .failed
+          | .ok step =>
+            driver.closeAppStreams id none (some key)
+            driver.applyH2Step id step
+        | _ => driver.abortAppStream id key .failed
+where
+  bodyPoll (body : Stream.Body) (budget : Nat) : IO (Option Stream.Event) := body.poll budget
 
 private def Driver.proxyOutcomes (driver : Driver) (outcomes : Array Gateway.Outcome) : IO Unit := do
   for outcome in outcomes do
@@ -1854,7 +2158,7 @@ private def Driver.read (driver : Driver) (id : Reactor.SocketId)
     return
   let state ← driver.state.get
   let paused := match client.protocol with
-    | .http1 _ => state.pendingReplies.any (fun pending => pending.owner == id)
+    | .http1 _ => !client.appStreams.isEmpty || state.pendingReplies.any (fun pending => pending.owner == id)
     | _ => false
   let chunk ← if paused then do
       let owned := view.copy
@@ -2117,20 +2421,43 @@ private def Driver.serveReloads (driver : Driver) : IO Unit := do
     try driver.config.onReload
     catch error => IO.eprintln s!"lean-net: reload hook failed: {error}"
 
+private def Driver.pumpPipes (driver : Driver) : IO Unit := do
+  for (id, snapshot) in (← driver.state.get).clients.toArray do
+    if snapshot.retired || snapshot.closing then continue
+    if let some pipe := snapshot.pipe then
+      let result ← try pipe.onPoll catch _ => pure { abortNow := true }
+      driver.rawResult id result
+    for (key, pipe) in snapshot.h2Pipes.toArray do
+      let result ← try pipe.onPoll catch _ => pure { abortNow := true }
+      let actions ← driver.h2RawResult id key result
+      if !actions.isEmpty then
+        if let some client ← driver.client? id then
+          if let .http2 machine := client.protocol then driver.applyH2Step id { state := machine, actions }
+
+private def Driver.tickApplication (driver : Driver) : IO Unit := do
+  let state ← driver.state.get
+  if state.now.toNat < state.nextAppTick then return
+  driver.state.modify fun current => { current with nextAppTick := state.now.toNat + driver.handlers.tickIntervalMs }
+  driver.handlers.onTick (← IO.monoMsNow)
+
 private partial def Driver.loop (driver : Driver) : IO Unit := do
   if ← driver.group.stopping then return
   driver.serveReloads
   driver.refresh
+  driver.tickApplication
   driver.events (← driver.transport.poll)
   if let some gateway := driver.gateway then
     driver.proxyOutcomes (← gateway.pump (← driver.now))
   driver.pumpReplies
+  driver.pumpAppStreams
+  driver.pumpPipes
+  driver.pumpUploads
   driver.pumpAll
   driver.pumpProxyStreams
   let ready ← driver.hasWork
   let providerReady ← driver.transport.hasWork
-  let pending := !(← driver.state.get).pendingReplies.isEmpty
-  driver.pollEvents (if ready || providerReady then 0 else if pending then driver.config.deferred.pollIntervalMs.toUInt32.toInt32 else 100)
+  let pending := !(← driver.state.get).pendingReplies.isEmpty || (← driver.state.get).appStreamCount > 0
+  driver.pollEvents (if ready || providerReady then 0 else if pending then driver.config.deferred.pollIntervalMs.toUInt32.toInt32 else (min 100 driver.handlers.tickIntervalMs).toUInt32.toInt32)
   driver.loop
 
 /-- Stop admission, finish current HTTP/1 requests and queued output, and send
@@ -2141,18 +2468,26 @@ private def Driver.drain (driver : Driver) : IO Unit := do
   let reserve := min (driver.config.shutdownDrainMs / 4) driver.transport.shutdownReserveMs.toNat
   let applicationCutoff := cutoff - reserve.toUInt64
   driver.state.modify fun state => { state with draining := true }
+  -- Public application deadlines use Lean's monotonic clock. Its epoch can
+  -- differ from CLOCK_MONOTONIC/GetTickCount64 used by native socket timers.
+  let remaining := (cutoff - min cutoff (← Reactor.nowMs)).toNat
+  driver.handlers.onDrain ((← IO.monoMsNow) + remaining)
   driver.transport.shutdownBefore cutoff
   for (id, _) in (← driver.state.get).clients.toArray do driver.shutdownClient id
   let mut active := true
   while active && (← Reactor.nowMs) < applicationCutoff do
     driver.refresh
+    driver.tickApplication
     driver.events (← driver.transport.poll)
     if let some gateway := driver.gateway then
       driver.proxyOutcomes (← gateway.pump (← driver.now))
     driver.pumpReplies
+    driver.pumpAppStreams
+    driver.pumpPipes
+    driver.pumpUploads
     driver.pumpAll
     driver.pumpProxyStreams
-    active := !(← driver.state.get).clients.isEmpty
+    active := !(← driver.state.get).clients.isEmpty || !(← driver.handlers.isDrained)
     if active then
       let ready ← driver.hasWork
       let providerReady ← driver.transport.hasWork
@@ -2167,8 +2502,9 @@ private def Driver.drain (driver : Driver) : IO Unit := do
     let mut transportActive := true
     while transportActive && (← Reactor.nowMs) < cutoff do
       driver.refresh
+      driver.tickApplication
       driver.events (← driver.transport.poll)
-      transportActive := !(← driver.state.get).clients.isEmpty || !(← driver.transport.shutdownComplete)
+      transportActive := !(← driver.state.get).clients.isEmpty || !(← driver.transport.shutdownComplete) || !(← driver.handlers.isDrained)
       if transportActive then
         let ready ← driver.transport.hasWork
         driver.pollEvents (if ready then 0 else 10) false
@@ -2203,6 +2539,8 @@ private def runWorker (resources : WithWorkerResources) (config : ReactorServerC
     let _ ← Reactor.pinCurrentThread workerId
   resources workerId clientLimit reactor fun transport handlers => do
    let handlers := config.securityHeaders.wrap transport.secure handlers
+   if handlers.tickIntervalMs == 0 || handlers.tickIntervalMs > 60000 then
+     throw (IO.userError "application tick interval must be between 1 and 60000ms")
    let pool := config.native.buffers4k.toNat + config.native.buffers16k.toNat + config.native.buffers64k.toNat
    let available := pool - transport.reservedBuffers
    let count := min config.outputBuffers (min (clientLimit * 4) (min config.native.maxWrites.toNat (available - 1)))
@@ -2233,6 +2571,7 @@ private def runWorker (resources : WithWorkerResources) (config : ReactorServerC
       let cleanup := cleanup.push (do
         if let some observer := driver.observer then observer.lane.publish (← driver.state.get).counters)
       let cleanup := cleanup.push (do if let some engine := gateway then engine.close)
+      let cleanup := cleanup.push handlers.onShutdown
       cleanupActions cleanup
 
 /-- Run the optional local admin port on its own dedicated thread for the

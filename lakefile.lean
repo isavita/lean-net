@@ -319,3 +319,6 @@ extern_lib socket_shim (pkg : NPackage __name__) := do
 /-- Native HTTP/1 and HTTP/2 application-deferred reply acceptance. -/
 lean_exe «lean-net-deferred-reply-fixture» where
   root := `test.DeferredReplyFixture
+
+lean_exe «lean-net-stream-fixture» where
+  root := `test.StreamFixture

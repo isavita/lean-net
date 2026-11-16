@@ -1,3 +1,5 @@
+import LeanNet.HTTP.Cancel
+
 namespace LeanNet.HTTP1
 
 /-- Header names are validated ASCII tokens and normalized to lowercase.
@@ -34,6 +36,18 @@ structure TransportInfo where
   alpn : ByteArray := ByteArray.empty
   deriving Inhabited
 
+/-- Owned incremental upload events; no borrowed native buffer leaves its owner. -/
+inductive IncomingEvent where
+  | data (bytes : ByteArray)
+  | finish (trailers : Array Header := #[])
+  | cancelled (reason : HTTP.Deferred.CancelReason)
+
+/-- A worker-local bounded request source. Reading returns HTTP/2 flow credit.
+`none` means pending. EOF is sticky; cancellation is terminal. -/
+structure IncomingBody where
+  poll : Nat → IO (Option IncomingEvent)
+  cancel : HTTP.Deferred.CancelReason → IO Unit
+
 /-- The request target and body remain uninterpreted wire bytes. -/
 structure Request where
   method : String
@@ -46,6 +60,11 @@ structure Request where
   clientCertificate : Option ClientCertificate := none
   /-- Populated by ReactorServer from the accepted socket/TLS handshake. -/
   transport : Option TransportInfo := none
+  /-- Present only for an explicitly selected native streaming upload. -/
+  incoming : Option IncomingBody := none
+  /-- True only when ReactorServer replaced missing/invalid incoming traceparent.
+      Owned provenance, never read from an HTTP header; SDKs may sample a local root. -/
+  traceGenerated : Bool := false
 
 /-- Limits apply independently to the request head, decoded body, and trailers. -/
 structure Limits where

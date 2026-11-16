@@ -25,6 +25,7 @@ structure TunnelDataEvent where
   streamId : UInt32
   data : ByteArray
   endStream : Bool := false
+  trailers : Array HTTP1.Header := #[]
 
 /-- Opt-in metadata at validated header completion, before an upload body. -/
 structure RequestStarted where
@@ -76,6 +77,9 @@ private structure Exchange where
   tunnel : Bool := false
   tunnelAccepted : Bool := false
   tunnelDebt : Nat := 0
+  requestStream : Bool := false
+  requestSeen : Nat := 0
+  responseEnded : Bool := false
   /-- Paused by `Config.headGate` until `admitHead` or `rejectHead`. DATA and
       trailers may be buffered (within flow control) but are never delivered. -/
   awaitingAdmission : Bool := false
@@ -294,7 +298,7 @@ private def removeStream (connection : Connection) (id : UInt32) : Connection :=
     read. Routers should dispatch only while this predicate remains true. -/
 def Connection.canRespond (connection : Connection) (id : UInt32) : Bool :=
   connection.failure.isNone && match findStream connection id with
-  | some entry => entry.delivered && entry.pending.isNone && !entry.streaming
+  | some entry => entry.delivered && !entry.responseEnded && entry.pending.isNone && !entry.streaming
   | none => false
 
 private def markReset (connection : Connection) (id : UInt32) :
@@ -404,6 +408,7 @@ private def requestPriority (headers : Array HTTP1.Header) : Priority := Id.run 
 
 private inductive Expectation where
   | none | continue | unsupported
+  deriving BEq
 
 private def expectation (headers : Array HTTP1.Header) : Expectation := Id.run do
   let mut result := Expectation.none
@@ -489,12 +494,16 @@ private def finishHeaders (connection : Connection) (assembly : HeaderAssembly) 
               gateOpen := !assembly.endStream }])
       return ← afterHead connection entry head assembly.endStream
   else
-    if !assembly.endStream || entry.delivered then
+    if !assembly.endStream || (entry.delivered && !entry.requestStream) then
       return ← resetStream connection assembly.streamId .protocolError
     match validateTrailers headers with
     | .error _ => return ← resetStream connection assembly.streamId .protocolError
     | .ok trailers =>
       let entry := { entry with trailers }
+      if entry.requestStream then
+        if entry.head.any (fun head => head.contentLength.any (· != entry.requestSeen)) then
+          return ← resetStream connection assembly.streamId .protocolError
+        return (putStream connection entry, ByteArray.empty, #[])
       -- A paused stream keeps its trailers until admission completes it.
       if entry.awaitingAdmission then return (putStream connection entry, ByteArray.empty, #[])
       match finishRequest (putStream connection entry) entry with
@@ -692,9 +701,14 @@ private def receiveData (connection : Connection) (frame : Frame) :
   let data := frame.payload.extract start (frame.payload.size - padding)
   if entry.tunnel then
     if !entry.tunnelAccepted then return ← discardData connection id .protocolError frame.payload.size
+    let seen := entry.requestSeen + data.size
+    if entry.requestStream && (seen > connection.config.maxRequestBodyBytes ||
+        entry.bodyLimit.any (· < seen) || entry.head.any (fun head => head.contentLength.any (· < seen)) ||
+        (ended && entry.head.any (fun head => head.contentLength.any (· != seen)))) then
+      return ← discardData connection id .enhanceYourCalm frame.payload.size
     let (connection, connectionOutput) ← consumeConnection connection frame.payload.size
     let (entry, paddingOutput) ← consumeStream connection { entry with stream } (frame.payload.size - data.size) ended
-    let entry := { entry with tunnelDebt := entry.tunnelDebt + data.size }
+    let entry := { entry with tunnelDebt := entry.tunnelDebt + data.size, requestSeen := seen }
     let connection := putStream connection entry
     return (if stream.state == .closed && entry.tunnelDebt == 0 then removeStream connection id else connection,
       connectionOutput.append paddingOutput, #[])
@@ -736,6 +750,44 @@ def Connection.admitHead (connection : Connection) (id : UInt32) (bodyLimit : Op
     if entry.bodySize > limit || head.contentLength.any (· > limit) then
       return ← expectationResponse connection entry 413 true remoteEnded
   afterHead (putStream connection entry) entry head remoteEnded
+
+/-- Deliver a conventional HTTP/2 request immediately after its validated head,
+using the existing bounded duplex lane and withholding stream credit until read. -/
+def Connection.admitStreamingHead (connection : Connection) (id : UInt32)
+    (bodyLimit : Option Nat := none) : Except ProtocolError (Connection × ByteArray × Array RequestEvent) := do
+  let some entry := findStream connection id | return (connection, ByteArray.empty, #[])
+  if !entry.awaitingAdmission then throw (streamError id .internalError "stream is not awaiting admission")
+  let some head := entry.head | throw (streamError id .internalError "streaming request has no head")
+  if head.protocol.isSome then throw (streamError id .protocolError "extended CONNECT uses its own tunnel")
+  let ended := entry.stream.state == .halfClosedRemote || entry.stream.state == .closed
+  if ended && head.contentLength.any (· != 0) then
+    throw (streamError id .protocolError "streamed Content-Length mismatch")
+  if bodyLimit.any (fun limit => head.contentLength.any (· > limit)) then
+    return ← expectationResponse connection entry 413 true ended
+  if expectation head.headers == .unsupported then
+    return ← expectationResponse connection entry 417 true ended
+  let entry := { entry with
+    awaitingAdmission := false
+    delivered := true
+    tunnel := true
+    tunnelAccepted := true
+    requestStream := true
+    bodyLimit }
+  let request : HTTP1.Request := {
+    method := head.method
+    version := "HTTP/2"
+    target := head.target
+    headers := head.headers
+    body := ByteArray.empty }
+  let mut output := ByteArray.empty
+  if expectation head.headers == .continue && !ended then
+    let (next, bytes, _) ← expectationResponse (putStream connection entry) entry 100 false false
+    output := bytes
+    return (next, output, #[{ streamId := id, request, startedAt := entry.startedAt }])
+  return (putStream connection entry, output, #[{ streamId := id, request, startedAt := entry.startedAt }])
+
+def Connection.requestEnded (connection : Connection) (id : UInt32) : Bool :=
+  (findStream connection id).any (fun entry => entry.stream.state == .halfClosedRemote || entry.stream.state == .closed)
 
 /-- Refuse a paused stream with a bodyless final response (`content-length: 0`)
     carrying `headers` (e.g. `retry-after`, `allow`). An unfinished upload is
@@ -900,6 +952,11 @@ private def choosePending (connection : Connection) : Option Exchange := Id.run 
   let roundRobin := incremental.find? (fun entry => entry.stream.id > connection.incrementalCursors[urgency.toNat]!)
   return roundRobin.orElse (fun _ => incremental[0]?)
 
+private def finishOutput (connection : Connection) (entry : Exchange) (stream : Stream) : Connection :=
+  if entry.requestStream && (stream.state != .closed || entry.tunnelDebt > 0) then
+    putStream connection { entry with stream, pending := none, streaming := false, responseEnded := true }
+  else removeStream connection stream.id
+
 /-- Emit bounded DATA using urgency, serial non-incremental bodies, and round-robin
     incremental bodies. Each 64 KiB serial burst yields to an incremental peer. -/
 def Connection.drainParts (connection : Connection) : Except ProtocolError (Connection × Array WirePart) := do
@@ -923,8 +980,8 @@ def Connection.drainParts (connection : Connection) : Except ProtocolError (Conn
     if pending.offset == pending.body.length then
       let (encoder, bytes) ← encodedHeaders connection.encoder pending.trailers entry.stream.id true connection.peerFrameSize
       if outputSize + bytes.size > connection.config.maxOutputBatchBytes then break
-      let _ ← entry.stream.apply .server (.headers .outbound true)
-      connection := removeStream { connection with encoder } entry.stream.id
+      let (stream, _) ← entry.stream.apply .server (.headers .outbound true)
+      connection := finishOutput { connection with encoder } entry stream
       output := output.push (.bytes bytes)
       outputSize := outputSize + bytes.size
       continue
@@ -947,7 +1004,7 @@ def Connection.drainParts (connection : Connection) : Except ProtocolError (Conn
     outputSize := outputSize + size + 9
     let burst := if entry.priority.incremental then 0 else min 65536 (connection.nonIncrementalBytes[entry.priority.urgency.toNat]! + size)
     connection := { connection with flow, incrementalCursors := if entry.priority.incremental then connection.incrementalCursors.set! entry.priority.urgency.toNat stream.id else connection.incrementalCursors, nonIncrementalBytes := connection.nonIncrementalBytes.set! entry.priority.urgency.toNat burst }
-    if final then connection := removeStream connection stream.id
+    if final then connection := finishOutput connection entry stream
     else connection := putStream connection { entry with stream, pending := some { pending with offset := pending.offset + size } }
     budget := budget - size
   return (connection, output)
@@ -1021,7 +1078,8 @@ def Connection.informational (connection : Connection) (id : UInt32) (response :
   return (putStream { connection with encoder } { entry with stream }, bytes)
 
 private def queueResponseBody (connection : Connection) (id : UInt32) (response : HTTP1.Response)
-    (body : ResponseBody) (trailers : Array HTTP1.Header) : Except ProtocolError (Connection × ByteArray) := do
+    (body : ResponseBody) (trailers : Array HTTP1.Header) (headLength : Option Nat := none)
+    (omitHeadLength : Bool := false) : Except ProtocolError (Connection × ByteArray) := do
   let some entry := findStream connection id | throw (streamError id .streamClosed "response stream is closed")
   if !entry.delivered || entry.pending.isSome || entry.streaming then
     throw (streamError id .protocolError "response is not expected")
@@ -1048,20 +1106,25 @@ private def queueResponseBody (connection : Connection) (id : UInt32) (response 
   let noBody := bodyForbidden || body.length == 0
   let endStream := noBody && trailing.isEmpty
   let mut fields ← responseFields connection id response
-  if response.status != 204 && response.status != 304 then
-    fields := fields.push { name := "content-length".toUTF8, value := (toString body.length).toUTF8 }
+  if response.status != 204 && response.status != 304 &&
+      !(head.method == "HEAD" && omitHeadLength && response.status != 205) then
+    let length := if response.status == 205 then 0
+      else if head.method == "HEAD" then headLength.getD body.length else body.length
+    fields := fields.push { name := "content-length".toUTF8, value := (toString length).toUTF8 }
   checkPeerHeaders connection id fields
   let (encoder, headers) ← encodedHeaders connection.encoder fields id endStream connection.peerFrameSize
   if headers.size > connection.config.maxOutputBatchBytes then throw (streamError id .internalError "response output limit exceeded")
   let (stream, _) ← entry.stream.apply .server (.headers .outbound endStream)
   let connection := { connection with encoder }
-  if endStream then return (removeStream connection id, headers)
+  if endStream then return (finishOutput connection entry stream, headers)
   return (putStream connection { entry with stream, pending := some { body, trailers := trailing } }, headers)
 
-/-- Queue a final byte response without scheduling DATA. -/
+/-- Queue a final byte response without scheduling DATA. `omitHeadLength` keeps
+unknown streamed HEAD metadata absent after the producer has been retired. -/
 def Connection.queueResponse (connection : Connection) (id : UInt32) (response : HTTP1.Response)
-    (trailers : Array HTTP1.Header := #[]) : Except ProtocolError (Connection × ByteArray) :=
-  queueResponseBody connection id response (.bytes response.body) trailers
+    (trailers : Array HTTP1.Header := #[]) (headLength : Option Nat := none)
+    (omitHeadLength : Bool := false) : Except ProtocolError (Connection × ByteArray) :=
+  queueResponseBody connection id response (.bytes response.body) trailers headLength omitHeadLength
 
 /-- Queue file metadata without reading its source or charging resident-body
     memory. Logical file debt has separate per-response/connection limits. -/
@@ -1073,9 +1136,9 @@ def Connection.queueFileResponse (connection : Connection) (id : UInt32) (respon
 omits Content-Length and remains open for bounded DATA. HEAD and bodyless
 statuses finish in their HEADERS frame. -/
 def Connection.beginResponseStream (connection : Connection) (id : UInt32)
-    (response : HTTP1.Response) : Except ProtocolError (Connection × ByteArray) := do
+    (response : HTTP1.Response) (knownLength : Option Nat := none) : Except ProtocolError (Connection × ByteArray) := do
   let some entry := findStream connection id | throw (streamError id .streamClosed "response stream is closed")
-  if !entry.delivered || entry.pending.isSome || entry.streaming || entry.tunnel ||
+  if !entry.delivered || entry.pending.isSome || entry.streaming || (entry.tunnel && !entry.requestStream) ||
       connection.failure.isSome then
     throw (streamError id .protocolError "streaming response is not expected")
   let some head := entry.head | throw (streamError id .internalError "missing request head")
@@ -1088,14 +1151,25 @@ def Connection.beginResponseStream (connection : Connection) (id : UInt32)
   let mut fields ← responseFields connection id response
   if response.status == 205 then
     fields := fields.push { name := "content-length".toUTF8, value := "0".toUTF8 }
+  else if response.status != 204 && response.status != 304 then
+    if let some length := knownLength then
+      fields := fields.push { name := "content-length".toUTF8, value := (toString length).toUTF8 }
   checkPeerHeaders connection id fields
   let (encoder, headers) ← encodedHeaders connection.encoder fields id bodyForbidden connection.peerFrameSize
   if headers.size > connection.config.maxOutputBatchBytes then
     throw (streamError id .internalError "streaming response head exceeds output budget")
   let (stream, _) ← entry.stream.apply .server (.headers .outbound bodyForbidden)
   let next := { connection with encoder }
-  if bodyForbidden then return (removeStream next id, headers)
+  if bodyForbidden then return (finishOutput next entry stream, headers)
   return (putStream next { entry with stream, streaming := true, streamedBytes := 0 }, headers)
+
+/-- Current DATA credit without producing a chunk. Zero still permits trailers. -/
+def Connection.streamSendBudget (connection : Connection) (id : UInt32) : Nat :=
+  match findStream connection id with
+  | none => 0
+  | some entry => if !entry.streaming then 0 else min 16384 (min connection.peerFrameSize
+      (min (connection.config.maxOutputBatchBytes - 9)
+        (min connection.flow.sendWindow.toNat entry.stream.sendWindow.toNat)))
 
 /-- Emit at most one DATA frame. The caller retains `bytes.drop consumed` and
 retries it after WINDOW_UPDATE. `none` is ordinary flow-control backpressure
@@ -1130,15 +1204,13 @@ def Connection.endResponseStream (connection : Connection) (id : UInt32)
     throw (streamError id .protocolError "streaming response is not active")
   if trailers.isEmpty then
     let (stream, _) ← entry.stream.apply .server (.data .outbound true)
-    let _ := stream
-    return (removeStream connection id, ← wire ⟨0, 1, id, ByteArray.empty⟩)
+    return (finishOutput connection entry stream, ← wire ⟨0, 1, id, ByteArray.empty⟩)
   let fields ← encodedTrailers connection id trailers
   let (encoder, output) ← encodedHeaders connection.encoder fields id true connection.peerFrameSize
   if output.size > connection.config.maxOutputBatchBytes then
     throw (streamError id .internalError "streaming trailers exceed output budget")
   let (stream, _) ← entry.stream.apply .server (.headers .outbound true)
-  let _ := stream
-  return (removeStream { connection with encoder } id, output)
+  return (finishOutput { connection with encoder } entry stream, output)
 
 /-- Commit an RFC8441 extended CONNECT response without END_STREAM. -/
 def Connection.acceptTunnel (connection : Connection) (id : UInt32)
@@ -1366,6 +1438,7 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
       consumed := consumed + used
       connection := { connection with parser := FrameParser.new connection.config.maxFrameSize }
       let priorTunnel := (findStream connection frame.streamId).any (·.tunnel)
+      let priorRequestStream := (findStream connection frame.streamId).any (·.requestStream)
       let priorAccepted := (findStream connection frame.streamId).any (·.tunnelAccepted)
       let priorRequest := (findStream connection frame.streamId).any (·.head.isSome)
       let previousMetadata := if connection.config.trackOutput && (frame.kind == 1 || frame.kind == 9) then
@@ -1386,6 +1459,14 @@ def Connection.feedSlice (connection : Connection) (input : ByteArray) (offset l
           let padding := if flag frame.flags 8 then (frame.payload[0]!).toNat else 0
           let start := if flag frame.flags 8 then 1 else 0
           tunnelData := tunnelData.push { streamId := frame.streamId, data := frame.payload.extract start (frame.payload.size - padding), endStream := flag frame.flags 1 }
+        if priorRequestStream && (frame.kind == 1 || frame.kind == 9) && connection.assembly.isNone then
+          if let some entry := findStream connection frame.streamId then
+            if entry.stream.state == .halfClosedRemote || entry.stream.state == .closed then
+              tunnelData := tunnelData.push {
+                streamId := frame.streamId
+                data := ByteArray.empty
+                endStream := true
+                trailers := entry.trailers }
         if frame.kind == 3 && priorTunnel then tunnelResets := tunnelResets.push frame.streamId
         -- A peer reset is a lifecycle event even without output observation.
         -- Closed/reset streams cannot issue a second cancellation.
@@ -1425,7 +1506,7 @@ def Connection.finish (connection : Connection) : Connection.Step := Id.run do
   let mut connection := { connection with inputEnded := true }
   let mut output := #[]
   for entry in connection.streams do
-    if !entry.delivered then
+    if !entry.delivered || (entry.requestStream && entry.stream.state != .halfClosedRemote && entry.stream.state != .closed) then
       match resetStream connection entry.stream.id .cancel with
       | .ok (next, bytes, _) => connection := next; output := output.push bytes
       | .error error => return failedStep connection error 0 output

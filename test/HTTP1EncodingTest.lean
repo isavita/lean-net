@@ -100,6 +100,8 @@ private def framingTests : IO Unit := do
   wire "HEAD" response { requestMethod := "HEAD" } {} header
   wire "HEAD external representation length" {} { requestMethod := "HEAD" }
     { framing := some (.contentLength 12345) } "HTTP/1.1 200 OK\r\nContent-Length: 12345\r\n\r\n".toUTF8
+  wire "HEAD unknown representation length" response { requestMethod := "HEAD" }
+    { framing := some .none } "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n".toUTF8
   wire "HTTP/1.0 default" { body := "ok".toUTF8 } { version := .http10 } {}
     "HTTP/1.0 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".toUTF8 (.nextRequest .close)
   wire "HTTP/1.0 persistent" { body := "ok".toUTF8 }

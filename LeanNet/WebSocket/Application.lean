@@ -10,6 +10,10 @@ structure Reply where
     promptly; a returned message is subject to bounded output backpressure. -/
 structure Callbacks where
   onMessage : Opcode → ByteArray → IO (Option Reply)
+  /-- Pull one bounded server message without an inbound browser event.
+      Text/binary, control-sized Ping/Pong, and Close replies are supported.
+      Close payload is empty or a network-order code followed by UTF-8 reason. -/
+  onPoll : IO (Option Reply) := pure none
   onPing : ByteArray → IO Unit := fun _ => pure ()
   onPong : ByteArray → IO Unit := fun _ => pure ()
   onClosed : Connection.CloseInfo → IO Unit := fun _ => pure ()

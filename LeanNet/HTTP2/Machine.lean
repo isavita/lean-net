@@ -65,6 +65,12 @@ def State.canRespond (state : State) (id : UInt32) : Bool :=
 def State.hasAdmittedStream (state : State) (id : UInt32) : Bool :=
   !state.closing && state.connection.hasAdmittedStream id
 
+def State.requestMethod (state : State) (id : UInt32) : Option String :=
+  (state.connection.outputMetadata id).map (fun item => item.1.method)
+
+def State.streamSendBudget (state : State) (id : UInt32) : Nat :=
+  state.connection.streamSendBudget id
+
 def State.canPush (state : State) : Bool := !state.closing && state.connection.canPush
 
 def State.canDrain (state : State) : Bool := !state.closing && state.connection.canDrain
@@ -269,6 +275,17 @@ def State.admitHead (state : State) (id : UInt32) (bodyLimit : Option Nat := non
     | .ok (connection, bytes) => outputStep state connection #[bytes]
     | .error error => fatal state error
 
+def State.admitStreamingHead (state : State) (id : UInt32) (bodyLimit : Option Nat := none) : Step :=
+  match state.connection.admitStreamingHead id bodyLimit with
+  | .ok (connection, bytes, requests) =>
+    connectionStep state { connection, output := if bytes.isEmpty then #[] else #[bytes], requests }
+  | .error _ =>
+    match state.connection.cancel id .internalError with
+    | .ok (connection, bytes) => outputStep state connection #[bytes]
+    | .error error => fatal state error
+
+def State.requestEnded (state : State) (id : UInt32) : Bool := state.connection.requestEnded id
+
 /-- Refuse a paused stream with a bodyless final response. -/
 def State.rejectHead (state : State) (id : UInt32) (status : Nat)
     (headers : Array HTTP1.Header := #[]) : Step :=
@@ -363,8 +380,11 @@ private def encodeReply (state : State) (id : UInt32) (reply : HTTP1.Reply)
           observations := observations ++ (← observedParts previous connection #[.bytes wire] push.response.status)
         if !wire.isEmpty then output := output.push wire
   let previous := connection
+  let headLength := match reply.options.framing with
+    | some (.contentLength n) => some n | _ => none
+  let omitHeadLength := reply.options.framing == some .none
   let (next, wire) ← match reply.fileRegion with
-    | none => connection.queueResponse id reply.response reply.options.trailers
+    | none => connection.queueResponse id reply.response reply.options.trailers headLength omitHeadLength
     | some region => connection.queueFileResponse id reply.response region reply.options.trailers
   connection := next
   if state.config.trackOutput then
@@ -380,12 +400,28 @@ private def encodeReply (state : State) (id : UInt32) (reply : HTTP1.Reply)
     throw ⟨.internalError, .stream id, "application headers exceed output batch budget"⟩
   return (connection, output, observations)
 
+/-- Commit response HEADERS without retaining the body. A bodyless status or
+HEAD request is finished by the HEADERS frame. Errors are returned to the
+gateway so it can reset only this stream before any bytes are committed. -/
+def State.beginResponseStream (state : State) (id : UInt32) (response : HTTP1.Response)
+    (knownLength : Option Nat := none) :
+    Except ProtocolError Step := do
+  if !state.canRespond id then
+    throw ⟨.protocolError, .stream id, "streaming response is not expected"⟩
+  let (connection, headers) ← state.connection.beginResponseStream id response knownLength
+  return outputStep state connection #[headers] response.status
+
 /-- Application errors become a local 500 response without corrupting HPACK
     state or terminating independent streams. No bytes are committed until the
     complete pure encoding step succeeds. -/
 def State.respond (state : State) (id : UInt32) (reply : HTTP1.Reply)
     (pushes : Array Push := #[]) : Step := Id.run do
   if !state.canRespond id then return { state }
+  if let some body := reply.stream then
+    match state.beginResponseStream id reply.response body.knownLength with
+    | .ok step => return step
+    | .error _ => pure ()
+  let reply := if reply.stream.isSome then { response := { status := 500 } } else reply
   match encodeReply state id reply pushes with
   | .ok (connection, output, observations) =>
     return progress state connection output #[] 0 (if state.config.trackOutput then some observations else none)
@@ -397,16 +433,6 @@ def State.respond (state : State) (id : UInt32) (reply : HTTP1.Reply)
       match state.connection.cancel id .internalError with
       | .ok (connection, wire) => return outputStep state connection #[wire]
       | .error failure => return fatal state failure
-
-/-- Commit response HEADERS without retaining the body. A bodyless status or
-HEAD request is finished by the HEADERS frame. Errors are returned to the
-gateway so it can reset only this stream before any bytes are committed. -/
-def State.beginResponseStream (state : State) (id : UInt32) (response : HTTP1.Response) :
-    Except ProtocolError Step := do
-  if !state.canRespond id then
-    throw ⟨.protocolError, .stream id, "streaming response is not expected"⟩
-  let (connection, headers) ← state.connection.beginResponseStream id response
-  return outputStep state connection #[headers] response.status
 
 /-- Emit one flow-controlled DATA frame and report the accepted prefix. `none`
 does not change the machine; the gateway must hold its bounded pending chunk. -/

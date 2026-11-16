@@ -80,6 +80,7 @@ def State.setDate (state : State) (date : ByteArray) : State :=
 def State.setTime (state : State) (now : Nat) : State := { state with now }
 
 def State.startedAt (state : State) : Nat := state.requestStartedAt
+def State.requestMethod (state : State) : Option String := state.head.map (·.method)
 
 def State.wantsInput (state : State) : Bool := state.phase == .head || state.phase == .body
 def State.isIdle (state : State) : Bool := state.phase == .head && !state.started
@@ -283,18 +284,6 @@ def State.decideHead (state : State) (requestId : Nat) (decision : HeadDecision)
             | .ok wire => output state wire.parts .body true 100 false
           else { state, actions := [.readEnabled true] }
 
-/-- Supply exactly one final response for the outstanding request. Framing and
-    application errors produce a bounded 500 and close this connection. -/
-def State.respond (state : State) (requestId : Nat) (reply : Reply) : Step :=
-  if state.phase != .application || requestId != state.requestId then abort state "unexpected HTTP response"
-  else match encodeReply state reply with
-    | .error _ => fail state 500
-    | .ok wire =>
-      match wire.next with
-      | .nextRequest .keepAlive => outputReply state wire .nextRequest false reply.response.status reply.response.body.size
-      | .nextRequest .close => outputReply state wire .close false reply.response.status reply.response.body.size
-      | _ => fail state 500
-
 /-- Commit only a validated final response head. Upstream body slices can be
 offered one at a time after each output is accepted by the ordered driver.
 Known lengths keep Content-Length; otherwise HTTP/1.1 uses chunked framing. -/
@@ -311,6 +300,20 @@ def State.beginStream (state : State) (requestId : Nat) (response : Response)
     | .ok plan =>
       streamOutput { state with streamPlan := some plan, streamBytes := 0 }
         #[plan.head] .streaming response.status false
+
+/-- Supply exactly one final response for the outstanding request. Framing and
+    application errors produce a bounded 500 and close this connection. -/
+def State.respond (state : State) (requestId : Nat) (reply : Reply) : Step :=
+  if let some body := reply.stream then
+    state.beginStream requestId reply.response body.knownLength body.declaredTrailers
+  else if state.phase != .application || requestId != state.requestId then abort state "unexpected HTTP response"
+  else match encodeReply state reply with
+    | .error _ => fail state 500
+    | .ok wire =>
+      match wire.next with
+      | .nextRequest .keepAlive => outputReply state wire .nextRequest false reply.response.status reply.response.body.size
+      | .nextRequest .close => outputReply state wire .close false reply.response.status reply.response.body.size
+      | _ => fail state 500
 
 /-- One bounded body slice. The machine admits no next slice until the prior
 slice's output ticket has entered the driver's ordered queue. -/

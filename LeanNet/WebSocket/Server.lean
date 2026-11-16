@@ -17,7 +17,20 @@ private structure Session where
 
 private def queueReply (session : Session) (reply : Reply) :
     IO (Session × List Connection.Action) := do
-  match session.connection.trySend reply.opcode reply.payload with
+  if reply.opcode == .close then
+    if reply.payload.size == 1 || reply.payload.size > 125 then
+      throw (IO.userError "invalid application WebSocket close payload")
+    let code := if reply.payload.isEmpty then none else
+      some (reply.payload[0]!.toNat * 256 + reply.payload[1]!.toNat)
+    let reason := reply.payload.extract (min 2 reply.payload.size) reply.payload.size
+    let step ← match session.connection.beginClose code reason with
+      | .ok step => pure step
+      | .error error => throw (IO.userError error.message)
+    return ({ session with connection := step.state, pending := none }, step.actions)
+  let accepted := if reply.opcode == .ping || reply.opcode == .pong then
+      session.connection.tryControl reply.opcode reply.payload
+    else session.connection.trySend reply.opcode reply.payload
+  match accepted with
   | .ok (.queued step) => return ({ session with connection := step.state, pending := none }, step.actions)
   | .ok .wouldBlock => return ({ session with pending := some reply }, [])
   | .error _ =>
@@ -105,6 +118,14 @@ def rawPipe (callbacks : Callbacks) (config : Connection.Config := {}) : IO RawP
       if session.pending.isSome then return { consumed := some 0, readEnabled := some false }
       let step := session.connection.feedSlice view.bytes view.offset view.length
       process reference callbacks step (some step.consumed)
+    onPoll := do
+      let session ← reference.get
+      if session.pending.isSome || session.connection.isClosing || session.connection.isClosed then return {}
+      let reply ← callbacks.onPoll
+      let some reply := reply | return {}
+      let (next, actions) ← queueReply session reply
+      reference.set next
+      process reference callbacks { state := next.connection, actions }
     onWritten := fun ticket => do
       let session ← reference.get
       let result ← process reference callbacks (session.connection.outputWritten ticket)

@@ -1,4 +1,5 @@
 import LeanNet.FileRegion
+import LeanNet.HTTP.Stream
 import LeanNet.HTTP1.Protocol
 import LeanNet.HTTP1.Response
 
@@ -16,6 +17,8 @@ structure EncodeContext where
     constructor used by existing HTTP/2 and TLS consumers. -/
 structure ResponseOptions where
   reason : Option String := none
+  /-- `some .none` omits representation-length metadata on HEAD when the
+      corresponding GET length is unknown. Ordinary responses require framing. -/
   framing : Option BodyFraming := none
   trailers : Array Header := #[]
   forceClose : Bool := false
@@ -40,6 +43,8 @@ structure Reply where
   options : ResponseOptions := {}
   informational : Array (Response × ResponseOptions) := #[]
   fileRegion : Option FileRegion := none
+  /-- Owner-worker cooperative response body; mutually exclusive with body/file. -/
+  stream : Option HTTP.Stream.Body := none
 
 private def fieldTokenByte (b : UInt8) : Bool :=
   let n := b.toNat
@@ -166,8 +171,9 @@ private def responseFraming (response : Response) (context : EncodeContext)
     if !options.trailers.isEmpty then throw "HEAD responses cannot contain trailers"
     match options.framing with
     | none => return .contentLength response.body.size
+    | some .none => return .none
     | some (.contentLength length) => return .contentLength length
-    | _ => throw "HEAD responses require the corresponding GET Content-Length"
+    | _ => throw "HEAD responses require the corresponding GET Content-Length or omitted framing"
   let framing := options.framing.getD (.contentLength response.body.size)
   match framing with
   | .none => throw "ordinary responses require length, chunked, or close framing"
