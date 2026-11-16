@@ -17,7 +17,10 @@ private structure Session where
 
 private def queueReply (session : Session) (reply : Reply) :
     IO (Session × List Connection.Action) := do
-  match session.connection.trySend reply.opcode reply.payload with
+  let accepted := if reply.opcode == .ping || reply.opcode == .pong then
+      session.connection.tryControl reply.opcode reply.payload
+    else session.connection.trySend reply.opcode reply.payload
+  match accepted with
   | .ok (.queued step) => return ({ session with connection := step.state, pending := none }, step.actions)
   | .ok .wouldBlock => return ({ session with pending := some reply }, [])
   | .error _ =>

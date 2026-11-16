@@ -730,13 +730,15 @@ private def Driver.traced (driver : Driver) (id : Reactor.SocketId) (requestId :
   let request ← driver.withTransport id request
   if !driver.config.tracing then return request
   let state ← driver.state.get
+  let incoming := request.headers.filter (·.name.toLower == "traceparent")
+  let remote := incoming.size == 1 && incoming[0]?.any (fun header => (TraceContext.parse header.value).isSome)
   let (context, headers, traces) := TraceContext.ensure request.headers state.traces
   driver.state.set { state with traces }
   if let some client ← driver.client? id then
     if let some observation := client.requests[requestId]? then
       let observation := { observation with traceId := context.traceId }
       driver.put id { client with requests := client.requests.insert requestId observation }
-  return { request with headers }
+  return { request with headers, traceGenerated := !remote }
 
 private def Driver.takeDispatch (driver : Driver) (id : Reactor.SocketId) (key : Nat) :
     IO (Option Dispatch) := do

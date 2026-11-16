@@ -62,6 +62,9 @@ structure Request where
   transport : Option TransportInfo := none
   /-- Present only for an explicitly selected native streaming upload. -/
   incoming : Option IncomingBody := none
+  /-- True only when ReactorServer replaced missing/invalid incoming traceparent.
+      Owned provenance, never read from an HTTP header; SDKs may sample a local root. -/
+  traceGenerated : Bool := false
 
 /-- Limits apply independently to the request head, decoded body, and trailers. -/
 structure Limits where

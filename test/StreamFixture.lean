@@ -7,14 +7,14 @@ private def handlers (_ : Nat) : IO Handlers := do
   let closed ← IO.mkRef (#[] : Array String)
   let ticks ← IO.mkRef (0 : Nat)
   let drain ← IO.mkRef (none : Option (Nat × Nat))
-  let callbacks : IO WebSocket.Callbacks := do
+  let callbacks (ping : Bool := false) : IO WebSocket.Callbacks := do
     let sent ← IO.mkRef false
     return {
       onMessage := fun _ _ => pure none
       onPoll := do
         if ← sent.get then return none
         sent.set true
-        return some { opcode := .text, payload := "unsolicited".toUTF8 } }
+        return some { opcode := if ping then .ping else .text, payload := "unsolicited".toUTF8 } }
   let policy : WebSocket.Handshake.Policy := { originAllowed := fun value => value == some "https://stream.test".toUTF8 }
   return {
     tickIntervalMs := 5
@@ -29,16 +29,20 @@ private def handlers (_ : Nat) : IO Handlers := do
       | some (started, _) => return (← IO.monoMsNow) >= started + 40
     onShutdown := do IO.println s!"SHUTDOWN {(← IO.monoMsNow)} TICKS {(← ticks.get)}"
     onHeaders := fun head _ => do
-      if head.target == "/ws".toUTF8 then
-        WebSocket.Server.acceptHTTP1 head policy (← callbacks)
+      if ["/ws".toUTF8, "/ws-ping".toUTF8].contains head.target then
+        WebSocket.Server.acceptHTTP1 head policy (← callbacks (head.target == "/ws-ping".toUTF8))
       else pure (.accept none)
     onWebSocket := fun head => do
-      if head.target == "/ws".toUTF8 then return some (policy, ← callbacks)
+      if ["/ws".toUTF8, "/ws-ping".toUTF8].contains head.target then return some (policy, ← callbacks)
       return none
     streamRequests := fun head => pure (["/upload", "/bidi", "/early"].contains (String.fromUTF8! head.target))
     onRequest := fun _ => pure { response := { status := 500 } }
     onRequestDeferred := some fun request => do
       let target := String.fromUTF8! request.target
+      if target == "/trace" then
+        return .immediate { response := { headers := #[
+          { name := "x-generated", value := (toString request.traceGenerated).toUTF8 },
+          { name := "x-trace", value := (request.headers.find? (·.name == "traceparent")).map (·.value) |>.getD ByteArray.empty }] } }
       if target == "/stats" then
         return .immediate { response := { headers := #[
           { name := "x-ticks", value := (toString (← ticks.get)).toUTF8 },

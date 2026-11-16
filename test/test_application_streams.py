@@ -59,6 +59,23 @@ class ApplicationStreams(unittest.TestCase):
         self.addCleanup(peer.close)
         return peer
 
+    def test_trace_provenance_cannot_be_spoofed_and_matches_protocols(self):
+        remote = b"00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
+        for value, generated in [(None, b"true"), (b"invalid", b"true"), (remote, b"false")]:
+            for protocol in [1, 2]:
+                headers = [(b"trace-generated", b"false")]
+                if value is not None: headers.append((b"traceparent", value))
+                if protocol == 1:
+                    peer = self.connect()
+                    peer.sendall(b"GET /trace HTTP/1.1\r\nHost: localhost\r\n" + b"".join(k+b": "+v+b"\r\n" for k,v in headers) + b"\r\n")
+                    result = Reader(peer).response().headers
+                else:
+                    peer = self.h2(); peer.request(1, b"/trace", headers=headers); peer.response(1)
+                    result = dict(peer.headers[1][0].headers)
+                self.assertEqual(result[b"x-generated"], generated)
+                self.assertEqual(len(result[b"x-trace"]), 55)
+                if value == remote: self.assertEqual(result[b"x-trace"], remote)
+
     def test_idle_worker_ticks_and_shared_drain_deadline(self):
         first = int(self.get(b"/stats").headers[b"x-ticks"])
         time.sleep(.035)
@@ -83,6 +100,11 @@ class ApplicationStreams(unittest.TestCase):
         self.assertIn(b"101", headers.split(b"\r\n", 1)[0])
         opcode, payload = read_ws(peer)
         self.assertEqual((opcode, payload), (0x81, b"unsolicited"))
+        ping = self.connect()
+        ping.sendall(b"GET /ws-ping HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nOrigin: https://stream.test\r\n\r\n")
+        head = b""
+        while not head.endswith(b"\r\n\r\n"): head += ping.recv(1)
+        self.assertEqual(read_ws(ping), (0x89, b"unsolicited"))
         h2 = self.h2()
         h2.request(1, b"/ws", method=b"CONNECT", end_stream=False,
                    headers=[(b":protocol", b"websocket"), (b"sec-websocket-version", b"13"),
