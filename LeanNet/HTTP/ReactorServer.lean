@@ -25,6 +25,8 @@ structure ReactorServerConfig where
   machine : Machine.Config := {}
   native : Reactor.Config := {}
   workers : Nat := 0
+  /-- Bounded owner-worker application jobs and completion deadlines. -/
+  deferred : Deferred.Config := {}
   /-- Optional per-peer-IP GCRA budget checked on completed TCP accepts,
       before worker handoff and any TLS handshake. -/
   connectionRate : Option Reactor.AcceptRateConfig := none
@@ -222,8 +224,17 @@ private structure Client where
   dispatch : Std.HashMap Nat Dispatch := {}
   proxyStreams : Std.HashMap Nat ProxyStream := {}
 
+private structure PendingReply where
+  owner : Reactor.SocketId
+  requestId : Nat
+  job : Deferred.Job
+  deadline : UInt64
+  bytes : Nat
+
 private structure WorkerState where
   clients : Std.HashMap Reactor.SocketId Client := {}
+  pendingReplies : Array PendingReply := #[]
+  pendingReplyBytes : Nat := 0
   slots : Array OutputSlot := #[]
   now : UInt64 := 0
   dateSecond : UInt64 := 0
@@ -394,9 +405,23 @@ private def Driver.setReading (driver : Driver) (id : Reactor.SocketId) (enabled
     client.socket.setReadEnabled enabled
     driver.put id { client with reading := enabled }
 
+/-- Remove jobs before callbacks: cancellation exceptions cannot retain work
+or cause a second cancellation during transport retirement. -/
+private def Driver.cancelReplies (driver : Driver) (id : Reactor.SocketId)
+    (reason : Deferred.CancelReason) (requestId : Option Nat := none) : IO Unit := do
+  let state ← driver.state.get
+  let selected := state.pendingReplies.filter fun item =>
+    item.owner == id && requestId.all (· == item.requestId)
+  driver.state.modify fun state => { state with
+    pendingReplies := state.pendingReplies.filter fun item =>
+      !(item.owner == id && requestId.all (· == item.requestId))
+    pendingReplyBytes := state.pendingReplyBytes - selected.foldl (fun n item => n + item.bytes) 0 }
+  for item in selected do try item.job.cancel reason catch _ => pure ()
+
 private def Driver.forget (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
   let some client ← driver.client? id | return
   cleanupActions #[
+    driver.cancelReplies id (if client.retirementOutcome == some .shutdown then .shutdown else .disconnected),
     (do if let some gateway := driver.gateway then gateway.cancelDownstream id),
     driver.closeObservations id (client.retirementOutcome.getD .error),
     driver.state.modify fun state => { state with clients := state.clients.erase id },
@@ -420,6 +445,7 @@ private def Driver.retire (driver : Driver) (id : Reactor.SocketId)
     outputs := [], outputBytes := 0, queuedFileBytes := 0,
     idleDeadline := none, requestDeadline := none, writeDeadline := none, pingDeadline := none }
   cleanupActions #[
+    driver.cancelReplies id (if outcome == .shutdown then .shutdown else .disconnected),
     (do if let some gateway := driver.gateway then gateway.cancelDownstream id),
     releaseInput client,
     (do
@@ -623,6 +649,40 @@ private def Driver.reply (driver : Driver) (id : Reactor.SocketId) (requestId : 
   | some handler => handler request
   | none => driver.handlers.onRequest request
 
+/-- Start bounded asynchronous application work without leaving the owner.
+The protocol retains its exchange; HTTP/1 deliberately pauses its pipeline. -/
+private def Driver.requestReply (driver : Driver) (id : Reactor.SocketId) (requestId : Nat)
+    (request : Request) (dispatch : Option Dispatch := none) : IO (Option Reply) := do
+  if metricTarget driver request.target || (dispatch.bind (·.handler)).isSome then
+    return some (← driver.reply id requestId request dispatch)
+  let some callback := driver.handlers.onRequestDeferred |
+    return some (← driver.reply id requestId request dispatch)
+  let request ← driver.traced id requestId request
+  let request := match dispatch.bind (·.rewrite) with | some rewrite => rewrite request | none => request
+  match ← callback request with
+  | .immediate reply => return some reply
+  | .deferred job =>
+    let state ← driver.state.get
+    let config := driver.config.deferred
+    let bytes := request.body.size + request.target.size + request.method.utf8ByteSize +
+      request.headers.foldl (fun size field => size + field.name.utf8ByteSize + field.value.size) 0 +
+      request.trailers.foldl (fun size field => size + field.name.utf8ByteSize + field.value.size) 0 +
+      job.retainedBytes
+    let sameClient := state.pendingReplies.foldl (fun n item => n + if item.owner == id then 1 else 0) 0
+    if state.pendingReplies.size >= config.maxPending || sameClient >= config.maxPendingPerClient ||
+        bytes > config.maxRetainedBytes - state.pendingReplyBytes || job.timeoutMs == 0 then
+      try job.cancel .overloaded catch _ => pure ()
+      return some { response := { status := 503 } }
+    let expiresAt ← deadline state.now (min job.timeoutMs config.maxTimeoutMs)
+    driver.state.modify fun state => { state with
+      pendingReplies := state.pendingReplies.push { owner := id, requestId, job, deadline := expiresAt, bytes }
+      pendingReplyBytes := state.pendingReplyBytes + bytes }
+    -- Keep transport reads armed so a reset is observable while HTTP/1
+    -- parsing is application-paused. Pipeline bytes remain bounded by
+    -- maxInputBytes and are never parsed ahead of this response.
+    driver.setReading id true
+    return none
+
 private def Driver.factsOf (driver : Driver) (id : Reactor.SocketId) : IO Transport.Facts := do
   let some client ← driver.client? id | return default
   if let some facts := client.facts then return facts
@@ -789,9 +849,8 @@ private partial def Driver.applyStep (driver : Driver) (id : Reactor.SocketId) (
               | some outcome? => outcome?.map (·.reply)
               | none => some { response := { status := 502 } }
         | none => do
-          let reply ← try driver.reply id requestId request handler
-            catch _ => pure { response := { status := 500 }, options := { forceClose := true } }
-          pure (some reply)
+          try driver.requestReply id requestId request handler
+          catch _ => pure (some { response := { status := 500 }, options := { forceClose := true } })
       let some reply := reply? | return
       let some client ← driver.client? id | return
       if client.retired then return
@@ -1156,6 +1215,8 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
     | .requestStarted streamId head startedAt =>
       if !(← driver.startObservation id streamId.toNat (some head) startedAt) then driver.closeNow id
     | .responseAborted streamId reason =>
+      driver.cancelReplies id (match reason with
+        | .timeout => .timeout | .cancelled => .streamReset | .error => .failed) (some streamId.toNat)
       let outcome := match reason with
         | .cancelled => Observability.Outcome.cancelled
         | .error => .error
@@ -1176,13 +1237,40 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
       match verdict with
       | .reject rejection => driver.labelObservation id streamId.toNat none rejection.label
       | .accept _ _ _ label _ _ => driver.labelObservation id streamId.toNat label ""
-      let step := match verdict with
+      let step ← match verdict with
         | .reject rejection =>
-          if rejection.drop then machine.rejectHead streamId 421 #[]
+          if rejection.drop then pure (machine.rejectHead streamId 421 #[])
           else
             let rejection := driver.secureRejection rejection
-            machine.rejectHead streamId rejection.status rejection.headers
-        | .accept limit _ _ _ _ _ => machine.admitHead streamId limit
+            pure (machine.rejectHead streamId rejection.status rejection.headers)
+        | .accept limit _ _ _ _ _ => do
+          let framing := match head.contentLength with
+            | some n => BodyFraming.contentLength n | none => .chunked
+          let plainHead : RequestHead := {
+            method := head.method, version := "HTTP/2", target := head.target, headers := head.headers }
+          let decision ← try
+              if metricTarget driver head.target then pure (.accept none)
+              else driver.handlers.onHeaders plainHead framing
+            catch _ => pure (.reject { response := { status := 500 } })
+          match decision with
+          | .accept _ => pure (machine.admitHead streamId limit)
+          | .upgrade _ pipe =>
+            try pipe.onClose catch _ => pure ()
+            pure (machine.rejectHead streamId 501 (driver.config.securityHeaders.fields driver.transport.secure))
+          | .reject reply =>
+            let reply := limitedReply driver.config (driver.secureReply reply)
+            -- A refused H2 upload receives a bodyless final response and
+            -- RST_STREAM(NO_ERROR), just like server admission rejection.
+            let checked := if reply.response.status < 200 || reply.response.status > 599 then
+                { reply.response with status := 500, headers := #[], body := ByteArray.empty }
+              else reply.response
+            let response := match checked.validate head.method with
+              | .ok () => checked
+              | .error _ => (driver.secureReply { response := { status := 500 } }).response
+            let forbidden := ["content-length", "connection", "transfer-encoding",
+              "keep-alive", "proxy-connection", "upgrade", "te"]
+            let headers := response.headers.filter fun field => !forbidden.contains field.name.toLower
+            pure (machine.rejectHead streamId response.status headers)
       if let .accept _ handler rewrite _ proxy postBody := verdict then
         if step.state.hasAdmittedStream streamId &&
             (handler.isSome || rewrite.isSome || proxy.isSome || postBody.isSome) then
@@ -1260,9 +1348,8 @@ private def Driver.applyH2Step (driver : Driver) (id : Reactor.SocketId)
               | some outcome? => outcome?.map (·.reply)
               | none => some { response := { status := 502 } }
         | none => do
-          let reply ← try driver.reply id event.streamId.toNat request handler
-            catch _ => pure { response := { status := 500 } }
-          pure (some reply)
+          try driver.requestReply id event.streamId.toNat request handler
+          catch _ => pure (some { response := { status := 500 } })
       let some reply := reply? | continue
       let pushes ← if (handler.bind (·.proxy)).isNone && machine.canPush && !metricTarget driver request.target then
         try driver.handlers.onPush request catch _ => pure #[]
@@ -1304,6 +1391,37 @@ private def Driver.proxyReply (driver : Driver) (id : Reactor.SocketId)
     if requestId <= 2147483647 then
       driver.applyH2Step id (machine.respond requestId.toUInt32 reply #[])
   | _ => pure ()
+
+/-- Poll every job once per turn. A slow HTTP/2 stream never prevents a later
+stream from completing. All response publication stays on the socket owner. -/
+private def Driver.pumpReplies (driver : Driver) : IO Unit := do
+  let snapshot := (← driver.state.get).pendingReplies
+  for pending in snapshot do
+    let current ← driver.state.get
+    unless current.pendingReplies.any (fun item => item.owner == pending.owner &&
+        item.requestId == pending.requestId) do continue
+    let some client ← driver.client? pending.owner | do
+      driver.cancelReplies pending.owner .disconnected
+      continue
+    if client.retired then
+      driver.cancelReplies pending.owner .disconnected
+      continue
+    let now ← driver.now
+    let (reply, reason) ← if now >= pending.deadline then
+        pure (some { response := { status := 504 } }, some Deferred.CancelReason.timeout)
+      else try
+        let reply ← pending.job.poll
+        pure (reply, none)
+      catch _ => pure (some { response := { status := 500 } }, some Deferred.CancelReason.failed)
+    let some reply := reply | continue
+    -- Commit removal before cancellation or publication; both can retire a
+    -- connection and recursively run lifecycle cleanup.
+    driver.state.modify fun state => { state with
+      pendingReplies := state.pendingReplies.filter fun item =>
+        !(item.owner == pending.owner && item.requestId == pending.requestId)
+      pendingReplyBytes := state.pendingReplyBytes - pending.bytes }
+    if let some reason := reason then try pending.job.cancel reason catch _ => pure ()
+    driver.proxyReply pending.owner pending.requestId reply
 
 private def Driver.abortProxyStream (driver : Driver) (id : Reactor.SocketId)
     (requestId : Nat) : IO Unit := do
@@ -1973,11 +2091,13 @@ private partial def Driver.loop (driver : Driver) : IO Unit := do
   driver.events (← driver.transport.poll)
   if let some gateway := driver.gateway then
     driver.proxyOutcomes (← gateway.pump (← driver.now))
+  driver.pumpReplies
   driver.pumpAll
   driver.pumpProxyStreams
   let ready ← driver.hasWork
   let providerReady ← driver.transport.hasWork
-  driver.pollEvents (if ready || providerReady then 0 else 100)
+  let pending := !(← driver.state.get).pendingReplies.isEmpty
+  driver.pollEvents (if ready || providerReady then 0 else if pending then driver.config.deferred.pollIntervalMs.toUInt32.toInt32 else 100)
   driver.loop
 
 /-- Stop admission, finish current HTTP/1 requests and queued output, and send
@@ -1996,6 +2116,7 @@ private def Driver.drain (driver : Driver) : IO Unit := do
     driver.events (← driver.transport.poll)
     if let some gateway := driver.gateway then
       driver.proxyOutcomes (← gateway.pump (← driver.now))
+    driver.pumpReplies
     driver.pumpAll
     driver.pumpProxyStreams
     active := !(← driver.state.get).clients.isEmpty
@@ -2120,6 +2241,9 @@ def serveWorkerFactory (resources : WithWorkerResources) (config : ReactorServer
       config.maxQueuedFileBytes < config.server.maxFileResponseBytes || config.maxQueuedFileBytes > 9223372036854775807 ||
       config.workPerClient == 0 || config.shutdownDrainMs == 0 ||
       config.shutdownDrainMs > 9223372036854775807 then throw (IO.userError "HTTP limits and timeouts must be positive")
+  match config.deferred.validate with
+  | .error message => throw (IO.userError message)
+  | .ok () => pure ()
   match config.http2.validate with
   | .error message => throw (IO.userError message)
   | .ok () => pure ()
@@ -2128,8 +2252,8 @@ def serveWorkerFactory (resources : WithWorkerResources) (config : ReactorServer
         path.data.any (fun byte => byte <= 32 || byte >= 127 || byte == 63 || byte == 35) then
       throw (IO.userError "metrics path must be a bounded origin path without query or fragment")
   let workers ← workerCount config.workers config.server.maxClients
-  -- Admission pauses every HTTP/2 stream at its validated head.
-  let config := { config with http2 := { config.http2 with headGate := config.http2.headGate || config.admission.isSome } }
+  -- Both shared onHeaders middleware and admission run before H2 bodies.
+  let config := { config with http2 := { config.http2 with headGate := true } }
   let observing := config.metricsPath.isSome || config.accessLog.isSome || config.adminPort.isSome
   let config := { config with
     workers

@@ -37,3 +37,13 @@ python3 test/fuzz_protocols.py --profile short --output /tmp/lean-net-fuzz-short
 ```
 
 For the separate full-duration HTTP/2 capacity and resource soak, build both public executables and use `test/soak24.py --config test/soak24.example.json --source-sha COMMIT --output REPORT_DIRECTORY`. `--smoke-seconds N` checks orchestration and cannot pass the 24-hour acceptance gate. The controller records its JSON result and raw metrics in the output directory. See `python3 test/soak24.py --help` for options.
+
+Deferred application replies have a separate native HTTP/1+HTTP/2 acceptance
+suite. It uses the pinned HPACK dependency above and exercises ordering,
+independent completion, bounded count/bytes, timeouts, adapter failure,
+connection/stream cancellation and shutdown:
+
+```sh
+lake build lean-net-deferred-reply-fixture
+python3 test/test_deferred_replies.py -v
+```

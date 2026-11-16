@@ -35,6 +35,8 @@ ALPN use HTTP/1.1. Protocol selection belongs to each connection.
 
 ## Feature APIs
 
+- [Deferred replies](LeanNet/HTTP/Deferred.html): bounded owner-worker
+  application completions, deadlines and cancellation.
 - [Static files](LeanNet/HTTP/Static.html): immutable catalogs, compression,
   ranges, and validators.
 - [Request gate](LeanNet/Gate.html): host routing, validation, mTLS identity,
