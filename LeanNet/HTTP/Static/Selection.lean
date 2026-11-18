@@ -82,11 +82,13 @@ private def qvalue? (value : String) : Option Nat := do
 private def encodingWeights (value : ByteArray) (limit : Nat) : Except String (Array (String × Nat)) := do
   let some text := ascii? value | throw "Accept-Encoding must be ASCII"
   let mut result := #[]
-  for member in text.splitOn "," do
-    let member := textTrim member
+  let mut members := 0
+  for slice in text.split ',' do
+    let member := slice.dropWhile (fun c : Char => c == ' ' || c == '\t')
     if member.isEmpty then continue
-    if result.size >= limit then throw "too many content codings"
-    let parts := member.splitOn ";"
+    if members >= limit then throw "too many content codings"
+    members := members + 1
+    let parts := member.copy.splitOn ";"
     let name := (textTrim parts.head!).toLower
     if !token name then throw "invalid content coding"
     let weight ← match parts.tail with

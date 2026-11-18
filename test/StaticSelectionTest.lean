@@ -45,6 +45,12 @@ def main : IO Unit := do
   check ((plan [("accept-encoding","br, identity;q=0")] "GET" { entry with gzip := none, brotli := none }).response.status == 406) "omitted variants cannot satisfy q0 identity"
   for encoding in ["gzip;q=1.1", "gzip;q=.5", "gzip;q=0.1234", "gzip;q=0, gzip;q=1"] do
     check ((plan [("accept-encoding",encoding)]).response.status == 400) "invalid or conflicting encoding weight"
+  let limited := fun headers => Selection.plan entry (request headers) { nowSeconds := 1767225600 }
+    { maxEncodingMembers := 2 }
+  check ((limited [("Accept-Encoding", ", gzip, \t,"), ("Accept-Encoding", "gzip")]).response.status == 200)
+    "repeated codings count toward the limit and empty members do not"
+  check ((limited [("Accept-Encoding", "gzip, gzip"), ("Accept-Encoding", "gzip")]).response.status == 400)
+    "repeated codings cannot exceed the configured member limit"
   check ((plan [("if-none-match","W/\"identity\"")]).response.status == 304) "weak If-None-Match"
   check ((plan [("if-none-match","\"other\""),("if-modified-since","Sun, 06 Nov 1994 08:49:37 GMT")]).response.status == 200) "ETag precedence over date"
   check ((plan [("if-none-match","*"),("range","bytes=99-")]).response.status == 304) "conditional before range"
