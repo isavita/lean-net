@@ -18,6 +18,21 @@ private def handlers (worker : Nat) : IO Handlers := do
           onBytes := fun view => pure { output := #[view] }
           onEOF := pure { output := #[ByteSlice.full "raw-eof".toUTF8], closeAfterWrites := true } }
         return .upgrade { response := { status := 101, headers := #[header "Upgrade" "test-echo"] } } pipe
+      if head.target == "/upgrade-written-error".toUTF8 then
+        let pipe : RawPipe := {
+          onBytes := fun view => pure { output := #[view], ticket := some 1 }
+          onWritten := fun _ => throw (IO.userError "fixture onWritten failure") }
+        return .upgrade { response := { status := 101, headers := #[header "Upgrade" "test-echo"] } } pipe
+      if head.target == "/upgrade-timeout-error".toUTF8 then
+        let pipe : RawPipe := {
+          onBytes := fun view => pure { output := #[view], closeStarted := true }
+          onTimeout := throw (IO.userError "fixture onTimeout failure") }
+        return .upgrade { response := { status := 101, headers := #[header "Upgrade" "test-echo"] } } pipe
+      if head.target == "/upgrade-shutdown-error".toUTF8 then
+        let pipe : RawPipe := {
+          onBytes := fun view => pure { output := #[view] }
+          onShutdown := throw (IO.userError "fixture onShutdown failure") }
+        return .upgrade { response := { status := 101, headers := #[header "Upgrade" "test-echo"] } } pipe
       return .accept none
     onRequest := fun request => do
       if request.target == "/echo".toUTF8 || request.target == "/legacy".toUTF8 then
@@ -64,10 +79,12 @@ private def handlers (worker : Nat) : IO Handlers := do
   }
 
 def main (args : List String) : IO UInt32 := do
-  let some port := args.head?.bind String.toNat? | throw (IO.userError "usage: fixture PORT [normal|tiny|deadlines|fold|bench|bad-budget] [WORKERS]")
+  let some port := args.head?.bind String.toNat?
+    | throw (IO.userError "usage: fixture PORT [normal|tiny|deadlines|fold|bench|bad-budget|bad-deadline] [WORKERS] [TIMEOUT]")
   if port == 0 || port > 65535 then throw (IO.userError "invalid port")
   let mode := (args.drop 1).head?.getD "normal"
-  if !["normal", "tiny", "deadlines", "fold", "bench", "bad-budget"].contains mode then throw (IO.userError "invalid mode")
+  if !["normal", "tiny", "deadlines", "fold", "bench", "bad-budget", "bad-deadline"].contains mode then
+    throw (IO.userError "invalid mode")
   let workers := ((args.drop 2).head?.bind String.toNat?).getD 1
   if workers == 0 || workers > 256 then throw (IO.userError "invalid worker count")
   if (mode == "tiny" || mode == "bad-budget") && workers != 1 then throw (IO.userError "bounded-pool fixture uses one worker")
@@ -84,5 +101,16 @@ def main (args : List String) : IO UInt32 := do
   let machine : Machine.Config := if mode == "fold" then { parserOptions := { allowObsFold := true } } else {}
   let config : HTTP.ReactorServerConfig := {
     server, native, machine, workers, outputBuffers := if mode == "tiny" || mode == "bad-budget" then 1 else if mode == "bench" then 512 else 128 }
+  let config ← if mode != "bad-deadline" then pure config else do
+    let oversized := 9223372036854775808
+    match (args.drop 3).head? with
+    | some "idleTimeoutMs" => pure { config with server := { server with idleTimeoutMs := oversized } }
+    | some "requestTimeoutMs" => pure { config with server := { server with requestTimeoutMs := oversized } }
+    | some "writeTimeoutMs" => pure { config with server := { server with writeTimeoutMs := oversized } }
+    | some "shutdownDrainMs" => pure { config with shutdownDrainMs := oversized }
+    | some "deferred.maxTimeoutMs" => pure { config with deferred := { config.deferred with maxTimeoutMs := oversized } }
+    | some "http2.pingIntervalMs" => pure { config with http2 := { config.http2 with pingIntervalMs := oversized } }
+    | some "http2.pingTimeoutMs" => pure { config with http2 := { config.http2 with pingIntervalMs := 100, pingTimeoutMs := oversized } }
+    | _ => throw (IO.userError "invalid fixture timeout name")
   HTTP.ReactorServer.serveFactory handlers config "127.0.0.1" (UInt16.ofNat port)
   return 0

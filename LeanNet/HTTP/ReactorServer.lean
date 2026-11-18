@@ -622,10 +622,14 @@ private def Driver.closeNow (driver : Driver) (id : Reactor.SocketId)
 
 private def Driver.now (driver : Driver) : IO UInt64 := do return (← driver.state.get).now
 
-private def deadline (now : UInt64) (duration : Nat) : IO UInt64 := do
-  let result := now.toNat + duration
-  if result > 9223372036854775807 then throw (IO.userError "HTTP timeout exceeds native clock range")
-  return UInt64.ofNat result
+private def maxNativeDeadline : Nat := 9223372036854775807
+
+/-- A duration validated at startup can outlive the remaining native clock range. -/
+private def deadline (now : UInt64) (duration : Nat) : UInt64 :=
+  UInt64.ofNat (min maxNativeDeadline (now.toNat + duration))
+
+private def runRawCallback (callback : IO RawResult) : IO RawResult :=
+  try callback catch _ => pure { abortNow := true }
 
 private def Driver.cancelRequest (driver : Driver) (id : Reactor.SocketId) : IO Unit := do
   unless ← id.isLive driver.reactor do
@@ -653,9 +657,7 @@ private def Driver.syncWriteTimer (driver : Driver) (id : Reactor.SocketId) : IO
       if let some flight := slot.flight then
         if flight.owner == id then
           earliest := some (min (earliest.getD flight.started) flight.started)
-  let wanted ← match earliest with
-    | none => pure none
-    | some start => some <$> deadline start driver.config.server.writeTimeoutMs
+  let wanted := earliest.map (fun start => deadline start driver.config.server.writeTimeoutMs)
   if wanted != client.writeDeadline then
     match wanted with
     | none => client.socket.cancelTimer 2
@@ -667,7 +669,7 @@ private def Driver.syncWriteTimer (driver : Driver) (id : Reactor.SocketId) : IO
       client.socket.cancelTimer 0
       driver.put id { client with idleDeadline := none }
   else if !client.closing && client.idleDeadline.isNone then
-    let value ← deadline state.now driver.config.server.idleTimeoutMs
+    let value := deadline state.now driver.config.server.idleTimeoutMs
     client.socket.armTimer 0 value
     driver.put id { client with idleDeadline := some value }
 
@@ -890,7 +892,7 @@ private def Driver.requestReply (driver : Driver) (id : Reactor.SocketId) (reque
         job.timeoutMs == 0 then
       try job.cancel .overloaded catch _ => pure ()
       return some { response := { status := 503 } }
-    let expiresAt ← deadline state.now (min job.timeoutMs config.maxTimeoutMs)
+    let expiresAt := deadline state.now (min job.timeoutMs config.maxTimeoutMs)
     driver.state.modify fun state => { state with
       pendingReplies := state.pendingReplies.add id requestId { job, deadline := expiresAt, bytes } }
     -- Release native receive credits before rearming reads. The HTTP/1
@@ -1177,7 +1179,7 @@ private def Driver.startRequest (driver : Driver) (id : Reactor.SocketId) (start
   let some client ← driver.client? id | return
   if client.retired then return
   if client.requestDeadline.isNone then
-    let value ← deadline started driver.config.server.requestTimeoutMs
+    let value := deadline started driver.config.server.requestTimeoutMs
     client.socket.armTimer 1 value
     driver.put id { client with requestDeadline := some value }
 
@@ -1222,9 +1224,7 @@ private def Driver.syncPingTimer (driver : Driver) (id : Reactor.SocketId) : IO 
     driver.nativeGone id
     return
   let .http2 machine := client.protocol | return
-  let wanted ← match machine.keepaliveDeadline with
-    | none => pure none
-    | some value => some <$> deadline 0 value
+  let wanted := machine.keepaliveDeadline.map (deadline 0)
   if wanted == client.pingDeadline then return
   match wanted with
   | none => client.socket.cancelTimer 3
@@ -1267,7 +1267,7 @@ private def Driver.h2RawResult (driver : Driver) (id : Reactor.SocketId)
     return step.actions
   let mut actions := []
   if result.closeStarted then
-    let value ← deadline (← driver.now) 5000
+    let value := deadline (← driver.now) 5000
     driver.put id { client with h2CloseDeadlines := client.h2CloseDeadlines.insert streamId value }
     driver.syncTunnelTimer id
   if !result.output.isEmpty then
@@ -1336,7 +1336,7 @@ private def Driver.h2FeedPipe (driver : Driver) (id : Reactor.SocketId)
         actions := actions ++ step.actions
   actions := actions ++ (← driver.h2RawResult id streamId result)
   if remaining.isEmpty && ended && !result.abortNow then
-    actions := actions ++ (← driver.h2RawResult id streamId (← pipe.onEOF))
+    actions := actions ++ (← driver.h2RawResult id streamId (← runRawCallback pipe.onEOF))
     if let some current ← driver.client? id then
       if let .http2 machine := current.protocol then
         if !machine.canRespond streamId then
@@ -1978,7 +1978,7 @@ private def Driver.rawResult (driver : Driver) (id : Reactor.SocketId) (result :
   if let some enabled := result.readEnabled then driver.setReading id enabled
   if result.closeStarted then
     if let some client ← driver.client? id then
-      client.socket.armTimer 4 (← deadline (← driver.now) 5000)
+      client.socket.armTimer 4 (deadline (← driver.now) 5000)
   if result.closeAfterWrites then
     if let some client ← driver.client? id then
       driver.put id { client with closeWhenQueued := true }
@@ -1994,12 +1994,12 @@ private def Driver.shutdownClient (driver : Driver) (id : Reactor.SocketId) : IO
   | .http2 machine =>
     driver.applyH2Step id machine.goAway
     for (streamId, pipe) in client.h2Pipes.toArray do
-      let more ← driver.h2RawResult id streamId (← pipe.onShutdown)
+      let more ← driver.h2RawResult id streamId (← runRawCallback pipe.onShutdown)
       if let some current ← driver.client? id then
         if let .http2 next := current.protocol then
           driver.applyH2Step id { state := next, actions := more }
   | .raw =>
-    if let some pipe := client.pipe then driver.rawResult id (← pipe.onShutdown)
+    if let some pipe := client.pipe then driver.rawResult id (← runRawCallback pipe.onShutdown)
     else driver.beginDrain id
   | .detect _ =>
     driver.setReading id false
@@ -2190,7 +2190,7 @@ private def Driver.accepted (driver : Driver) (socket : Transport.Endpoint)
   unless ← id.isLive driver.reactor do return
   let state ← driver.state.get
   if state.clients.contains id then throw (IO.userError "duplicate native HTTP accept identity")
-  let value ← deadline state.now driver.config.server.idleTimeoutMs
+  let value := deadline state.now driver.config.server.idleTimeoutMs
   socket.armTimer 0 value
   let protocol := match protocol with
     | .detect => driver.config.cleartextProtocol
@@ -2237,7 +2237,7 @@ private def Driver.read (driver : Driver) (id : Reactor.SocketId)
     kick := true }
   if let some client ← driver.client? id then
     if client.idleDeadline.isSome then
-      let value ← deadline state.now driver.config.server.idleTimeoutMs
+      let value := deadline state.now driver.config.server.idleTimeoutMs
       client.socket.armTimer 0 value
       driver.put id { client with idleDeadline := some value }
   driver.pump id
@@ -2309,13 +2309,13 @@ private def Driver.written (driver : Driver) (id : Reactor.SocketId)
           let streamId := UInt32.ofNat (outputId / 18446744073709551616)
           let ticket := outputId % 18446744073709551616
           if let some pipe := client.h2Pipes[streamId]? then
-            let more ← driver.h2RawResult id streamId (← pipe.onWritten ticket)
+            let more ← driver.h2RawResult id streamId (← runRawCallback (pipe.onWritten ticket))
             let more := more ++ (← driver.h2FeedPipe id streamId ByteArray.empty false)
             if let some current ← driver.client? id then
               if let .http2 machine := current.protocol then
                 driver.applyH2Step id { state := machine, actions := more }
         else if let some pipe := client.pipe then
-          driver.rawResult id (← pipe.onWritten outputId)
+          driver.rawResult id (← runRawCallback (pipe.onWritten outputId))
   driver.syncWriteTimer id
 
 private def Driver.timer (driver : Driver) (id : Reactor.SocketId) (kind : UInt32) : IO Unit := do
@@ -2333,13 +2333,13 @@ private def Driver.timer (driver : Driver) (id : Reactor.SocketId) (kind : UInt3
     return
   if kind == 4 then
     if !client.closing then
-      if let some pipe := client.pipe then driver.rawResult id (← pipe.onTimeout)
+      if let some pipe := client.pipe then driver.rawResult id (← runRawCallback pipe.onTimeout)
       else
         for (streamId, due) in client.h2CloseDeadlines.toArray do
           if due <= state.now then
             if let some current ← driver.client? id then
               if let some pipe := current.h2Pipes[streamId]? then
-                let more ← driver.h2RawResult id streamId (← pipe.onTimeout)
+                let more ← driver.h2RawResult id streamId (← runRawCallback pipe.onTimeout)
                 if let some latest ← driver.client? id then
                   if let .http2 machine := latest.protocol then
                     driver.applyH2Step id { state := machine, actions := more }
@@ -2491,10 +2491,10 @@ private def Driver.pumpPipes (driver : Driver) : IO Unit := do
   for (id, snapshot) in (← driver.state.get).clients.toArray do
     if snapshot.retired || snapshot.closing then continue
     if let some pipe := snapshot.pipe then
-      let result ← try pipe.onPoll catch _ => pure { abortNow := true }
+      let result ← runRawCallback pipe.onPoll
       driver.rawResult id result
     for (key, pipe) in snapshot.h2Pipes.toArray do
-      let result ← try pipe.onPoll catch _ => pure { abortNow := true }
+      let result ← runRawCallback pipe.onPoll
       let actions ← driver.h2RawResult id key result
       if !actions.isEmpty then
         if let some client ← driver.client? id then
@@ -2531,7 +2531,7 @@ private partial def Driver.loop (driver : Driver) : IO Unit := do
     HTTP/2 GOAWAY while accepted streams retain their flow-control traffic.
     Providers share the same absolute deadline for their close-notify work. -/
 private def Driver.drain (driver : Driver) : IO Unit := do
-  let cutoff ← deadline (← Reactor.nowMs) driver.config.shutdownDrainMs
+  let cutoff := deadline (← Reactor.nowMs) driver.config.shutdownDrainMs
   let reserve := min (driver.config.shutdownDrainMs / 4) driver.transport.shutdownReserveMs.toNat
   let applicationCutoff := cutoff - reserve.toUInt64
   driver.state.modify fun state => { state with draining := true }
@@ -2678,8 +2678,20 @@ def serveWorkerFactory (resources : WithWorkerResources) (config : ReactorServer
       config.outputBuffers == 0 || config.maxInputBytes == 0 || config.maxOutputBytes < 4096 ||
       config.server.maxFileResponseBytes == 0 || config.server.maxFileResponseBytes > 9223372036854775807 ||
       config.maxQueuedFileBytes < config.server.maxFileResponseBytes || config.maxQueuedFileBytes > 9223372036854775807 ||
-      config.workPerClient == 0 || config.shutdownDrainMs == 0 ||
-      config.shutdownDrainMs > 9223372036854775807 then throw (IO.userError "HTTP limits and timeouts must be positive")
+      config.workPerClient == 0 || config.shutdownDrainMs == 0 then
+    throw (IO.userError "HTTP limits and timeouts must be positive")
+  let remainingClock := maxNativeDeadline - (← Reactor.nowMs).toNat
+  let timeouts := #[
+    ("idleTimeoutMs", config.server.idleTimeoutMs),
+    ("requestTimeoutMs", config.server.requestTimeoutMs),
+    ("writeTimeoutMs", config.server.writeTimeoutMs),
+    ("shutdownDrainMs", config.shutdownDrainMs),
+    ("deferred.maxTimeoutMs", config.deferred.maxTimeoutMs),
+    ("http2.pingIntervalMs", config.http2.pingIntervalMs),
+    ("http2.pingTimeoutMs", config.http2.pingTimeoutMs)]
+  for (name, duration) in timeouts do
+    if duration > remainingClock then
+      throw (IO.userError s!"HTTP {name} exceeds native clock range")
   match config.deferred.validate with
   | .error message => throw (IO.userError message)
   | .ok () => pure ()

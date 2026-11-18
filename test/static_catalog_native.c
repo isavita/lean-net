@@ -338,6 +338,11 @@ static void check_enumeration(sc_builder *b) {
   REQUIRE(!list.entries && !list.count);
   REQUIRE(sc_builder_read_directory(b, (const uint8_t *)"sub", 3, 0, &list) == 0);
   REQUIRE(!list.entries && !list.count);
+  REQUIRE(sc_builder_read_directory(b, (const uint8_t *)"sub", 3, 16, &list) == 0);
+  REQUIRE(!list.entries && !list.count);
+  REQUIRE(sc_builder_read_directory(b, NULL, 0, expected_count, &list) == 0);
+  REQUIRE(list.count == expected_count);
+  sc_directory_list_free(&list);
   REQUIRE(sc_builder_read_directory(b, (const uint8_t *)"overflow", 8, 3, &list) == -ENOSPC);
   REQUIRE(!list.entries && !list.count);
   REQUIRE(sc_builder_read_directory(b, (const uint8_t *)"../outside", 10, 16, &list) == -EINVAL);

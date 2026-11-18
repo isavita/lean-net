@@ -850,14 +850,24 @@ void sc_directory_list_free(sc_directory_list *list) {
   list->entries = NULL;
   list->count = 0;
 }
-static int sc_directory_add(sc_directory_list *list, uint32_t limit, const uint8_t *name,
-                            size_t length, uint32_t kind) {
+static int sc_directory_add(sc_directory_list *list, uint32_t *capacity, uint32_t limit,
+                            const uint8_t *name, size_t length, uint32_t kind) {
   /* Count before allocating a name, even when this kind will later be skipped.
      1024 bytes also bounds names which the portable path policy will reject. */
   if (list->count == limit)
     return -ENOSPC;
   if (!length || length > 1024)
     return -ENAMETOOLONG;
+  if (list->count == *capacity) {
+    uint32_t next = *capacity ? *capacity * 2 : 4;
+    if (next > limit)
+      next = limit;
+    sc_directory_entry *entries = realloc(list->entries, next * sizeof(*entries));
+    if (!entries)
+      return -ENOMEM;
+    list->entries = entries;
+    *capacity = next;
+  }
   uint8_t *copy = malloc(length);
   if (!copy)
     return -ENOMEM;
@@ -925,11 +935,7 @@ int sc_builder_read_directory(sc_builder *b, const uint8_t *path, size_t length,
   if (error)
     return error;
   sc_directory_list list = {NULL, 0};
-  if (limit) {
-    list.entries = calloc(limit, sizeof(*list.entries));
-    if (!list.entries)
-      error = -ENOMEM;
-  }
+  uint32_t capacity = 0;
 #ifdef _WIN32
   union {
     uint64_t alignment;
@@ -983,7 +989,7 @@ int sc_builder_read_directory(sc_builder *b, const uint8_t *path, size_t length,
                         : item->FileAttributes & FILE_ATTRIBUTE_DIRECTORY   ? SC_DIRECTORY
                         : item->FileAttributes & FILE_ATTRIBUTE_DEVICE      ? SC_OTHER
                                                                             : SC_REGULAR;
-        error = sc_directory_add(&list, limit, name, (size_t)needed, kind);
+        error = sc_directory_add(&list, &capacity, limit, name, (size_t)needed, kind);
         if (error)
           break;
       }
@@ -1030,8 +1036,8 @@ int sc_builder_read_directory(sc_builder *b, const uint8_t *path, size_t length,
                     : S_ISDIR(status.st_mode) ? SC_DIRECTORY
                     : S_ISREG(status.st_mode) ? SC_REGULAR
                                               : SC_OTHER;
-    error =
-        sc_directory_add(&list, limit, (const uint8_t *)item->d_name, strlen(item->d_name), kind);
+    error = sc_directory_add(&list, &capacity, limit, (const uint8_t *)item->d_name,
+                             strlen(item->d_name), kind);
   }
   int closed;
   if (stream) {
