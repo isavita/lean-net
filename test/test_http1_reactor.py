@@ -481,7 +481,50 @@ class FourWorkers(ServerCase, NormalAcceptance, unittest.TestCase):
     workers = 4
 
 
+class RawCallbackFailure(ServerCase, unittest.TestCase):
+    def upgrade(self, callback):
+        sock = connect(self.port)
+        self.addCleanup(sock.close)
+        sock.sendall(b"GET /upgrade-" + callback + b"-error HTTP/1.1\r\nHost: x\r\n"
+                     b"Connection: Upgrade\r\nUpgrade: test-echo\r\n\r\n")
+        reader = Reader(sock)
+        self.assertEqual(reader.response().status, 101)
+        sock.sendall(b"hello")
+        self.assertEqual(reader.take(5), b"hello")
+        return reader
+
+    def test_write_callback_failure_closes_only_the_tunnel(self):
+        reader = self.upgrade(b"written")
+        reader.eof()
+        self.assertEqual(self.request().body, b"ok")
+
+    def test_timeout_callback_failure_closes_only_the_tunnel(self):
+        reader = self.upgrade(b"timeout")
+        reader.sock.settimeout(8)
+        reader.eof()
+        self.assertEqual(self.request().body, b"ok")
+
+    def test_shutdown_callback_failure_preserves_clean_shutdown(self):
+        reader = self.upgrade(b"shutdown")
+        self.stop_server()
+        reader.eof()
+
+
 class StartupContract(unittest.TestCase):
+    def test_oversized_deadlines_fail_before_binding(self):
+        self.assertTrue(BINARY.is_file(), f"missing fixture: {BINARY}")
+        with socket.socket() as listener:
+            listener.bind((HOST, 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            for name in ("idleTimeoutMs", "requestTimeoutMs", "writeTimeoutMs", "shutdownDrainMs",
+                         "deferred.maxTimeoutMs", "http2.pingIntervalMs", "http2.pingTimeoutMs"):
+                with self.subTest(timeout=name):
+                    rejected = subprocess.run([str(BINARY), str(port), "bad-deadline", "1", name],
+                                              capture_output=True, text=True, timeout=5)
+                    self.assertNotEqual(rejected.returncode, 0)
+                    self.assertIn(f"HTTP {name} exceeds native clock range", rejected.stderr)
+
     def test_output_credits_cover_admission_and_failure_releases_endpoint(self):
         self.assertTrue(BINARY.is_file(), f"missing fixture: {BINARY}")
         port = unused_port()
