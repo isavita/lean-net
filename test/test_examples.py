@@ -185,6 +185,27 @@ class RunnableExamples(unittest.TestCase):
                         break
                 self.assertTrue(limited, "the configured client budget did not reject a burst")
 
+    def test_05_cooperative_report_streams_and_keeps_head_length(self):
+        report = b"first line\nsecond line\n"
+        with server("cooperative-server", lambda port: [port]) as port:
+            self.assertEqual(request(port, "/report")[0::2], (200, report))
+            status, headers, body = request(port, "/report", method="HEAD")
+            length = str(len(report))
+            self.assertEqual((status, headers.get("content-length"), body), (200, length, b""))
+            peer = h2_peer(port)
+            try:
+                peer.send(frame(1, 5, 1, peer.encode_request(b"/report")) +
+                          frame(1, 5, 3, peer.encode_request(b"/")))
+                self.assertEqual(peer.response(3), b"ready\n")
+                self.assertEqual(peer.response(1), report)
+                self.assertEqual(peer.data_order[0][0], 3)
+                self.assertGreaterEqual(sum(stream == 1 and size > 0 for stream, size, _ in peer.data_order), 2)
+                peer.request(5, b"/report", method=b"HEAD")
+                self.assertEqual(peer.response(5), b"")
+                self.assertEqual(dict(peer.headers[5][0].headers)[b"content-length"], length.encode())
+            finally:
+                peer.close()
+
 
 if __name__ == "__main__":
     unittest.main()

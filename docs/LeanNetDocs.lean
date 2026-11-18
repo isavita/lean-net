@@ -11,7 +11,8 @@ Import `LeanNet` for the [core API](LeanNet.html), or `LeanNetTLS` for the
 ## Start a server
 
 The [runnable examples](https://github.com/isavita/lean-net/blob/main/examples/README.md)
-progress from basic HTTP to a routed API, TLS static files, and a rate-limited gateway.
+cover basic HTTP, a routed API, TLS static files, a rate-limited gateway, and
+cooperative replies and streaming.
 
 - [LeanNet.HTTP.ReactorServer.serveFactory](LeanNet/HTTP/ReactorServer.html#LeanNet.HTTP.ReactorServer.serveFactory)
   creates application handlers once per reactor worker.
@@ -37,6 +38,8 @@ ALPN use HTTP/1.1. Protocol selection belongs to each connection.
 
 - [Deferred replies](LeanNet/HTTP/Deferred.html): bounded owner-worker
   application completions, deadlines and cancellation.
+- [Streaming bodies](LeanNet/HTTP/Stream.html): incremental output with
+  flow control, byte budgets, and trailers.
 - [Static files](LeanNet/HTTP/Static.html): immutable catalogs, compression,
   ranges, and validators.
 - [Request gate](LeanNet/Gate.html): host routing, validation, mTLS identity,

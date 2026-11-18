@@ -1,5 +1,7 @@
 # Cooperative application streaming
 
+Start with the [runnable cooperative server](../examples/README.md#5-cooperative-replies-and-streaming). It combines a deferred job with incremental response output and runs on both HTTP/1 and HTTP/2. See the [quickstart](../README.md#start-a-lean-project) for the required dependency revision.
+
 `HTTP1.Reply.stream` owns an `HTTP.Stream.Body`. All callbacks run synchronously
 on the reactor worker that created them. Producers must return promptly and
 retain at most their declared `retainedBytes`. They never receive sockets,
