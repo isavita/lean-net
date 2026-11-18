@@ -13,15 +13,19 @@ brew install openssl@3 zlib brotli pkgconf
 export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 ```
 
-In a consumer `lakefile.lean`:
+Follow the [core quickstart](../README.md#start-a-lean-project) to create a
+Lake executable. Add the TLS package to `lakefile.lean`.
 
 ```lean
 require «lean-net-tls» from git "https://github.com/isavita/lean-net" @ "v0.1.2" / "tls"
 ```
 
-The TLS package depends on the core package. Build it in this repository with `lake -d tls build lean-net-tls`.
+The TLS package brings in `lean-net` as a dependency. Use the same release or
+source commit for both packages if you declare both explicitly.
 
 ## Use
+
+Put the following in `Main.lean`.
 
 ```lean
 import LeanNetTLS
@@ -39,7 +43,9 @@ def main : IO Unit :=
     "127.0.0.1" 8443
 ```
 
-`certificateChain` is a PEM certificate chain and `privateKey` is its matching unencrypted PEM key. The default minimum protocol is TLS 1.2. TLS ALPN selects `h2` or `http/1.1`; clients without ALPN use HTTP/1.1.
+`certificateChain` is a PEM certificate chain and `privateKey` is its matching unencrypted PEM key. Put both files in the project directory. Run `lake update` followed by `lake exe hello-net`, using your executable name. Test with `curl --cacert roots.pem --http2 https://localhost:8443/`, where `roots.pem` is the issuing CA and the server certificate covers `localhost`. The [TLS static example](../examples/README.md#3-tls-static-server) includes a local certificate setup.
+
+The default minimum protocol is TLS 1.2. TLS ALPN selects `h2` or `http/1.1`. Clients without ALPN use HTTP/1.1.
 
 One TLS listener serves both protocols with the same handlers. Pass HTTP/1 settings in `http.machine` and HTTP/2 settings in `http.http2`, where `http` is the HTTP configuration argument. See the [combined configuration example](../docs/server.md#http1-and-http2-on-one-listener).
 

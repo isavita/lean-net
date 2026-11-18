@@ -85,6 +85,12 @@ def State.requestMethod (state : State) : Option String := state.head.map (·.me
 def State.wantsInput (state : State) : Bool := state.phase == .head || state.phase == .body
 def State.isIdle (state : State) : Bool := state.phase == .head && !state.started
 def State.isClosing (state : State) : Bool := state.phase == .closing
+
+/-- The stream head was accepted, including while its output ticket is queued. -/
+def State.responseStreamOpen (state : State) (requestId : Nat) : Bool :=
+  state.requestId == requestId && state.streamPlan.isSome &&
+    (state.phase == .streaming || (state.phase == .output && state.afterOutput == .streaming))
+
 def State.canStreamChunk (state : State) (requestId : Nat) : Bool :=
   state.phase == .streaming && state.requestId == requestId && state.streamPlan.isSome
 

@@ -94,7 +94,42 @@ Forwarded or X-Forwarded-* headers cannot alter the facts. Applications can use
 the actual peer to decide which proxies are trusted before interpreting those
 headers. `clientCertificate` continues to hold verified mTLS identity separately.
 
+## WebSocket handlers
+
+The echo handler below accepts `/ws` from the configured page origin. Use it
+as the factory argument to `serveFactory` and set `http2 := {
+enableConnectProtocol := true }` to also accept extended CONNECT. A browser
+page served from `pageOrigin` can open `new WebSocket("ws://127.0.0.1:8080/ws")`.
+Use `wss://` with a TLS listener.
+
+```lean
+import LeanNet
+
+open LeanNet
+
+def echoFactory (pageOrigin : String) (_worker : Nat) : IO HTTP1.Handlers := do
+  let policy : WebSocket.Handshake.Policy := {
+    originAllowed := (· == some pageOrigin.toUTF8)
+  }
+  let path := "/ws".toUTF8
+  return {
+    onRequest := fun _ => pure { response := { status := 404 } }
+    onHeaders := fun head _ =>
+      if head.target == path then WebSocket.Server.acceptHTTP1 head policy WebSocket.Server.echo
+      else pure (.accept none)
+    onWebSocket := fun head =>
+      pure (if head.target == path then some (policy, WebSocket.Server.echo) else none)
+  }
+```
+
+For example, `echoFactory "http://127.0.0.1:3000"` admits a page served on
+port 3000. The callbacks also work with native clients that send the matching
+Origin header. Applications that require authentication must check it before
+accepting the WebSocket handshake.
+
 ## Deferred application replies
+
+The [cooperative server example](../examples/README.md#5-cooperative-replies-and-streaming) shows a deferred job followed by a streamed body. It runs over HTTP/1 and HTTP/2.
 
 `Handlers.onRequestDeferred` opts the reactor server into deferred application
 responses and takes precedence over `onRequest`. Return

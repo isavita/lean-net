@@ -1,7 +1,7 @@
 name = "lean-net-examples"
 version = "0.1.2"
 reservoir = false
-defaultTargets = ["hello-server", "api-server", "tls-static-server", "gateway-server"]
+defaultTargets = ["hello-server", "api-server", "tls-static-server", "gateway-server", "cooperative-server"]
 
 [[require]]
 name = "lean-net-tls"
@@ -22,3 +22,7 @@ root = "TlsStatic"
 [[lean_exe]]
 name = "gateway-server"
 root = "Gateway"
+
+[[lean_exe]]
+name = "cooperative-server"
+root = "Cooperative"

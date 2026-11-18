@@ -1163,6 +1163,10 @@ def Connection.beginResponseStream (connection : Connection) (id : UInt32)
   if bodyForbidden then return (finishOutput next entry stream, headers)
   return (putStream next { entry with stream, streaming := true, streamedBytes := 0 }, headers)
 
+/-- A committed response stream can remain open with zero DATA credit. -/
+def Connection.responseStreamOpen (connection : Connection) (id : UInt32) : Bool :=
+  (findStream connection id).any (·.streaming)
+
 /-- Current DATA credit without producing a chunk. Zero still permits trailers. -/
 def Connection.streamSendBudget (connection : Connection) (id : UInt32) : Nat :=
   match findStream connection id with

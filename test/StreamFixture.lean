@@ -37,7 +37,11 @@ private def handlers (_ : Nat) : IO Handlers := do
     onWebSocket := fun head => do
       if ["/ws".toUTF8, "/ws-ping".toUTF8, "/ws-close".toUTF8].contains head.target then return some (policy, ← callbacks (if head.target == "/ws-ping".toUTF8 then .ping else if head.target == "/ws-close".toUTF8 then .close else .text))
       return none
-    streamRequests := fun head => pure (["/upload", "/bidi", "/early"].contains (String.fromUTF8! head.target))
+    streamRequests := fun head => do
+      let target := String.fromUTF8! head.target
+      if target == "/stream-selection-failure" then
+        throw (IO.userError "injected stream selection failure")
+      return ["/upload", "/bidi", "/early", "/large-stream-head"].contains target
     onRequest := fun _ => pure { response := { status := 500 } }
     onRequestDeferred := some fun request => do
       let target := String.fromUTF8! request.target
@@ -100,8 +104,9 @@ private def handlers (_ : Nat) : IO Handlers := do
       let data := if target == "/big" then ByteArray.mk (Array.replicate (2 * 1024 * 1024) (65 : UInt8)) else "firstsecond".toUTF8
       let body : HTTP.Stream.Body := {
         retainedBytes := data.size
-        knownLength := if known then some data.size else none
-        declaredTrailers := if known then #[] else #["x-finished"]
+        knownLength := if target == "/overlong-stream" then some (17 * 1024 * 1024)
+          else if known then some data.size else none
+        declaredTrailers := if known || target == "/overlong-stream" then #[] else #["x-finished"]
         idleTimeoutMs := if target == "/timeout" then 80 else 3000
         lifetimeMs := 5000
         poll := fun budget => do
@@ -116,7 +121,13 @@ private def handlers (_ : Nat) : IO Handlers := do
           produced.modify (· + 1)
           return some (.data (data.extract current (current + count)))
         close := fun reason => closed.modify (·.push (reason.map reprStr |>.getD "complete")) }
-      return .immediate { response := { status,headers := #[{ name := "content-type", value := "application/octet-stream".toUTF8 }] }, stream := some body }
+      let headers := #[{ name := "content-type", value := "application/octet-stream".toUTF8 }]
+      let headers := if target == "/large-stream-head" then
+        headers.push { name := "x-large-field", value := ByteArray.mk (Array.replicate 2048 65) }
+        else headers
+      let reply : Reply := { response := { status, headers }, stream := some body }
+      if target == "/large-stream-head" then return .deferred { poll := pure (some reply) }
+      return .immediate reply
   }
 
 def main (args : List String) : IO Unit := do

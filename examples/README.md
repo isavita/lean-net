@@ -2,6 +2,8 @@
 
 These examples use the repository's Lean toolchain and the [core](../README.md#install) and [TLS](../tls/README.md#install) native dependencies. Run commands from the repository root. Every listener binds to `127.0.0.1`; edit the bind address to expose it. Server commands run in the foreground; run `curl` in another terminal.
 
+Use a curl build that lists `HTTP2` in `curl --version` for the HTTP/2 commands. On Windows the executable files have an `.exe` suffix.
+
 ```sh
 lake -d examples build
 ```
@@ -12,8 +14,9 @@ lake -d examples build
 | 2 | [Api.lean](Api.lean) | Routes, JSON, binary uploads, separate protocol limits, health and metrics | 8081 |
 | 3 | [TlsStatic.lean](TlsStatic.lean) | TLS/ALPN, static files, compression, ranges and validators | 8443 |
 | 4 | [Gateway.lean](Gateway.lean) | Host policy, header validation, rate limits and upstream pools | 8083 |
+| 5 | [Cooperative.lean](Cooperative.lean) | Deferred replies and budgeted response streaming | 8084 |
 
-For a separate Lake project, copy the chosen source to `Main.lean` and add the dependency from the [core installation guide](../README.md#install). `TlsStatic.lean` uses the [TLS dependency](../tls/README.md#install) instead. Each source file is self-contained.
+For a separate Lake project, follow the [quickstart](../README.md#start-a-lean-project) and copy the chosen source to `Main.lean`. `TlsStatic.lean` uses the [TLS dependency](../tls/README.md#install). `Cooperative.lean` needs the newer revision described in the quickstart. Each source file is self-contained.
 
 ## 1. Basic HTTP server
 
@@ -81,4 +84,20 @@ The gateway accepts `Host: localhost` with an optional port. Other hosts receive
 
 Both `PORT` and `UPSTREAM_PORT` are optional. This example uses plain HTTP to its loopback upstream; [TLS configuration](../tls/README.md) covers verified HTTPS targets.
 
-Stop servers with Ctrl-C. The [live example tests](../test/test_examples.py) build on the same programs and check both protocols, TLS verification, API limits, static-file handling, proxying and rate rejection.
+## 5. Cooperative replies and streaming
+
+```sh
+examples/.lake/build/bin/cooperative-server 8084
+```
+
+In another terminal, fetch the report with unbuffered output.
+
+```sh
+curl --no-buffer --http1.1 http://127.0.0.1:8084/report
+curl --no-buffer --http2-prior-knowledge http://127.0.0.1:8084/report
+curl --head http://127.0.0.1:8084/report
+```
+
+`/report` defers the response briefly, then writes `first line` and `second line` separately. While a report is pending, another connection or HTTP/2 stream can fetch `/` immediately. HEAD reports the complete body length and sends no body. The timer stands in for a nonblocking backend. The [streaming guide](../docs/application-streams.md) describes output credits, deadlines, and cancellation.
+
+Stop servers with Ctrl-C. The [live example tests](../test/test_examples.py) check both protocols, TLS verification, API limits, static files, proxying, rate limits, and cooperative replies.
