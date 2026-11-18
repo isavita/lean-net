@@ -68,6 +68,9 @@ def State.hasAdmittedStream (state : State) (id : UInt32) : Bool :=
 def State.requestMethod (state : State) (id : UInt32) : Option String :=
   (state.connection.outputMetadata id).map (fun item => item.1.method)
 
+def State.responseStreamOpen (state : State) (id : UInt32) : Bool :=
+  !state.closing && state.connection.responseStreamOpen id
+
 def State.streamSendBudget (state : State) (id : UInt32) : Nat :=
   state.connection.streamSendBudget id
 

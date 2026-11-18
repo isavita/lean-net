@@ -144,6 +144,44 @@ class ApplicationStreams(unittest.TestCase):
         h2.until(lambda: len(h2.bodies[3]) >= 4)
         self.assertEqual(h2.bodies[3], b"\x88\x02\x11\x38")
 
+    def test_deferred_reply_can_start_a_stream_on_both_protocols(self):
+        reply = self.get(b"/large-stream-head")
+        self.assertEqual((reply.status, reply.body), (200, b"firstsecond"))
+        peer = self.h2()
+        peer.request(1, b"/large-stream-head")
+        self.assertEqual(peer.response(1), b"firstsecond")
+        self.assertEqual(self.get(b"/stats").headers[b"x-closed"], b"complete,complete")
+
+    def test_uncommitted_stream_heads_release_producers_immediately(self):
+        self.assertEqual(self.get(b"/overlong-stream").status, 500)
+        failed = b"LeanNet.HTTP.Deferred.CancelReason.failed"
+        self.assertEqual(self.get(b"/stats").headers[b"x-closed"], failed)
+
+        peer = self.h2(settings_values=[(6, 1024)])
+        peer.request(1, b"/large-stream-head", method=b"POST", end_stream=False)
+        peer.send(frame(0, 1, 1, b"body"))
+        peer.until(lambda: 1 in peer.ended or bool(peer.resets) or bool(peer.goaways))
+        self.assertEqual(bytes(peer.bodies[1]), b"")
+        self.assertEqual(dict(peer.headers[1][0].headers)[b":status"], b"500")
+        peer.request(3, b"/immediate")
+        self.assertEqual(peer.response(3), b"ok")
+        self.assertFalse(peer.resets)
+        self.assertFalse(peer.goaways)
+        stats = self.get(b"/stats").headers
+        self.assertEqual(stats[b"x-produced"], b"0")
+        self.assertEqual(stats[b"x-closed"].split(b","), [failed, failed])
+
+    def test_stream_selection_failure_stays_local_to_its_request(self):
+        peer = self.h2()
+        peer.request(1, b"/stream-selection-failure")
+        peer.request(3, b"/immediate")
+        self.assertEqual(peer.response(3), b"ok")
+        peer.until(lambda: 1 in peer.ended or bool(peer.resets) or bool(peer.goaways))
+        self.assertIn(1, peer.ended)
+        self.assertEqual(dict(peer.headers[1][0].headers)[b":status"], b"500")
+        self.assertFalse(peer.resets)
+        self.assertFalse(peer.goaways)
+
     def test_http1_chunks_arrive_before_producer_finishes_and_trailers_follow(self):
         peer = self.connect(); reader = Reader(peer)
         started = time.monotonic()

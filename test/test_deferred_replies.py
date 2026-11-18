@@ -198,6 +198,10 @@ class DeferredReplies(unittest.TestCase):
         self.assertEqual(dict(other.headers[1][0].headers)[b":status"], b"503")
         peer.send(frame(3, stream=1, payload=struct.pack(">I", 8)))
         peer.ping_barrier(b"released")
+        # The two connections both have a pending stream 1. A reset must
+        # only release the job owned by the connection that sent it.
+        stats = self.get(b"/stats").body
+        self.assertEqual(stats.count(b"streamReset"), 1, stats)
         other.request(3, b"/fast")
         self.assertEqual(other.response(3), b"/fast")
 

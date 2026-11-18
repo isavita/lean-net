@@ -52,6 +52,7 @@ def main (args : List String) : IO Unit := do
   let some port := args.head?.bind String.toNat? | throw (IO.userError "usage: fixture PORT")
   if port == 0 || port > 65535 then throw (IO.userError "invalid port")
   let tiny := args[1]? == some "tiny"
+  let bulk := args[1]? == some "bulk"
   HTTP.ReactorServer.serveFactory handlers {
     workers := 1
     server := { maxClients := if tiny then 2 else 16 }
@@ -62,9 +63,9 @@ def main (args : List String) : IO Unit := do
       buffers4k := 4, buffers16k := 0, buffers64k := 0 } else {}
     shutdownDrainMs := 100
     deferred := {
-      maxPending := 3
-      maxPendingPerClient := 2
-      maxRetainedBytes := 8192
-      maxTimeoutMs := 1000
+      maxPending := if bulk then 1024 else 3
+      maxPendingPerClient := if bulk then 128 else 2
+      maxRetainedBytes := if bulk then 1024 * 1024 else 8192
+      maxTimeoutMs := if bulk then 10000 else 1000
       pollIntervalMs := 2 } }
     "127.0.0.1" port.toUInt16
