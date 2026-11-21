@@ -132,6 +132,10 @@ target «lean-net-winsock» _pkg : System.FilePath := do
 @[default_target]
 lean_lib LeanNet
 
+/-- Machine-checked specifications of components whose implementation is
+native or effectful (see docs/verification.md). Not linked into LeanNet. -/
+lean_lib LeanNetSpec
+
 @[default_target]
 lean_exe «lean-net-echo» where
   root := `Main
@@ -170,6 +174,9 @@ lean_exe «lean-net-gateway-pool-test» where
 
 lean_exe «lean-net-gateway-engine-test» where
   root := `test.GatewayEngineTest
+
+lean_exe «lean-net-ratelimit-differential» where
+  root := `test.RateLimitDifferential
 
 lean_exe «lean-net-gateway-h2-streaming-test» where
   root := `test.GatewayH2StreamingTest

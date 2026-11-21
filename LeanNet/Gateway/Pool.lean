@@ -62,12 +62,29 @@ inductive Acquire where
   | connecting (id : Reactor.SocketId)
   | atCapacity
 
+/-- Evidence that read interest was re-enabled on socket `id` when it went
+idle. A streamed response may have disabled reads for downstream backpressure;
+an idle socket must still observe upstream EOF or stray bytes, and its next
+lease must receive a response. Only `armReads` and `armSecureReads` construct
+it, so every idle entry was armed (see `LeanNetSpec.UpstreamLifecycle`). -/
+structure ReadArmed (id : Reactor.SocketId) : Type where
+  private mk ::
+
+private def armReads (socket : Reactor.Socket .connected) : IO (ReadArmed socket.id) := do
+  socket.setReadEnabled true
+  return ⟨⟩
+
+private def armSecureReads (session : TLSSession) : IO (ReadArmed session.id) := do
+  session.setReadEnabled true
+  return ⟨⟩
+
 private inductive Phase where
   | connecting (socket : Reactor.Connecting) (since : UInt64)
   | busy (socket : Reactor.Socket .connected) (sequence : Nat)
   | secureBusy (socket : Reactor.Socket .connected) (session : TLSSession) (sequence : Nat)
-  | idle (socket : Reactor.Socket .connected) (since : UInt64)
+  | idle (socket : Reactor.Socket .connected) (since : UInt64) (armed : ReadArmed socket.id)
   | secureIdle (socket : Reactor.Socket .connected) (session : TLSSession) (since : UInt64)
+      (armed : ReadArmed session.id)
 
 private structure Entry where
   target : Target
@@ -119,9 +136,9 @@ private def closeEntry (entry : Entry) : IO Unit := do
   try
     match entry.phase with
     | .connecting socket _ => socket.close
-    | .busy socket _ | .idle socket _ =>
+    | .busy socket _ | .idle socket _ _ =>
       let _ ← socket.close (by decide)
-    | .secureBusy _ session _ | .secureIdle _ session _ => session.close
+    | .secureBusy _ session _ | .secureIdle _ session _ _ => session.close
   catch _ => pure ()
 
 /-- Prune idle timeouts and pending connect timeouts. Call from the worker's
@@ -131,7 +148,7 @@ def Pool.reap (pool : Pool) (nowMs : UInt64) : IO Unit := do
   let mut state ← pool.state.get
   for (id, entry) in state.entries.toList do
     let expired := match entry.phase with
-      | .idle _ since | .secureIdle _ _ since => elapsed nowMs since pool.config.idleTimeoutMs
+      | .idle _ since _ | .secureIdle _ _ since _ => elapsed nowMs since pool.config.idleTimeoutMs
       | .connecting _ since => elapsed nowMs since pool.config.connectTimeoutMs
       | .busy .. | .secureBusy .. => false
     if expired then
@@ -154,7 +171,7 @@ def Pool.acquire (pool : Pool) (target : Target) (nowMs : UInt64) : IO (Except E
       else state.idle.insert target idleIds }
     let some entry := state.entries[id]? | continue
     match entry.phase with
-    | .idle socket since =>
+    | .idle socket since _ =>
       -- The index is only a hint; the authoritative entry must still match.
       if entry.target != target then continue
       if target.security != .plain then
@@ -170,7 +187,7 @@ def Pool.acquire (pool : Pool) (target : Target) (nowMs : UInt64) : IO (Except E
       state := { state with entries, nextSequence := sequence }
       pool.state.set state
       return .ok (.ready ⟨socket, sequence, target⟩)
-    | .secureIdle socket session since =>
+    | .secureIdle socket session since _ =>
       if entry.target != target || target.security == .plain ||
           elapsed nowMs since pool.config.idleTimeoutMs || !(← id.isLive pool.reactor) then
         state := remove state id
@@ -286,21 +303,22 @@ def Pool.finishResponse (pool : Pool) (lease : Lease) (head : HTTP1.ClientRespon
   | .busy socket _ =>
     if lease.target.security != .plain then return ← pool.discard lease
     -- A streamed response can finish from input held while downstream
-    -- backpressure disabled reads. Idle sockets must observe EOF and stray
-    -- bytes, and the next lease must receive its response.
-    try socket.setReadEnabled true catch _ => return ← pool.discard lease
+    -- backpressure disabled reads; `.idle` requires re-armed reads.
+    let armed? ← try some <$> armReads socket catch _ => pure none
+    let some armed := armed? | return ← pool.discard lease
     pool.state.set { state with
-      entries := state.entries.insert lease.id ({ entry with phase := .idle socket nowMs }),
+      entries := state.entries.insert lease.id ({ entry with phase := .idle socket nowMs armed }),
       idle := state.idle.insert entry.target (ids.push lease.id) }
     return .ok ()
   | .secureBusy socket session _ =>
     if lease.target.security == .plain then return ← pool.discard lease
     let clean ← try session.cleanForReuse catch _ => pure false
     if !clean then return ← pool.discard lease
-    try session.setReadEnabled true catch _ => return ← pool.discard lease
+    let armed? ← try some <$> armSecureReads session catch _ => pure none
+    let some armed := armed? | return ← pool.discard lease
     pool.state.set { state with
       entries := state.entries.insert lease.id
-        ({ entry with phase := .secureIdle socket session nowMs }),
+        ({ entry with phase := .secureIdle socket session nowMs armed }),
       idle := state.idle.insert entry.target (ids.push lease.id) }
     return .ok ()
   | _ => return .error .staleLease

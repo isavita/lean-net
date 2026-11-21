@@ -7,9 +7,13 @@
  * with no window-boundary bursts and an exact retry delay.
  *
  * Unkeyed buckets (`global`, or per route) reserve leases of up to L cells
- * with one CAS and spend them on the worker without atomics. Reservation
- * happens before spending, so admissions never exceed the limit; unused
- * leased cells expire (at most workers x L cells per lease period are lost).
+ * with one CAS and spend them on the worker without atomics. Every leased
+ * cell passes the GCRA test when it is reserved, so the long-run rate holds;
+ * unused leased cells expire (at most workers x L cells per lease period are
+ * lost). A leased cell is spent up to L x T after its reservation, so a short
+ * window can admit up to the outstanding leased cells beyond the burst; with
+ * L = 1 the bucket is exact GCRA. See LeanNetSpec/RateLimit.lean
+ * (`admitted_window`, `leases_exceed_burst`) and test/RateLimitDifferential.lean.
  *
  * Keyed buckets (client IP, principal, header value) live in one fixed table
  * of 64-bit words: a 24-bit key tag and a 40-bit TAT in 100 microsecond units.

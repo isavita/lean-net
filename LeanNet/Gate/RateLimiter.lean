@@ -4,8 +4,16 @@ import LeanNet.FFI.Errno
 /-! Native lock-free GCRA rate limiter (`c/ratelimit.h`), shared by all
     workers. Unkeyed rules (`global`, per `route`) use per-worker leases
     reserved with one CAS; keyed rules (`client-ip`, `principal`,
-    `header NAME`) use a fixed-size, SipHash-indexed table. Admissions never
-    exceed a rule's rate and burst; unused leased cells may expire. -/
+    `header NAME`) use a fixed-size, SipHash-indexed table. Unused leased cells
+    may expire.
+
+    Guarantees (proved in `LeanNetSpec.RateLimit`, checked against this
+    native code by `test/RateLimitDifferential.lean`): keyed rules, and
+    unkeyed rules whose lease is one cell, admit at most `burst + ⌊w / T⌋`
+    cells in any window of length `w`. A leased unkeyed rule reserves each
+    lease through the same bucket, but spends it up to one lease lifetime
+    (`lease × T`, about 5 ms) later, so a short window can see up to the
+    outstanding leased cells above the burst (`leases_exceed_burst`). -/
 
 namespace LeanNet.Gate.RateLimiter
 
