@@ -436,4 +436,117 @@ def step (input : Input) (state : State) : Step :=
   | .timeout kind => state.timeout kind
   | .date date => { state := state.setDate date }
 
+
+/-! ## Verified streamed-response framing
+
+A streamed HTTP/1 response commits its head (with any Content-Length) before
+the body exists. If the server then wrote more or fewer bytes than declared,
+the client would parse the surplus as the next response on the keep-alive
+connection (response splitting). The theorems below show the stream
+operations keep the committed byte count within the declared length and the
+server-wide stream limit, and refuse to finish a stream whose count differs
+from the declared length. No other transition assigns these two fields. -/
+
+section Proofs
+
+/-- The bytes committed for the current streamed response never exceed its
+declared Content-Length or the configured stream limit. -/
+def State.streamWithinLength (state : State) : Prop :=
+  state.streamBytes ≤ state.config.maxStreamResponseBytes ∧
+  ∀ plan, state.streamPlan = some plan →
+    ∀ n, plan.framing = .contentLength n → state.streamBytes ≤ n
+
+private theorem abort_within {state : State} {reason : String}
+    (h : state.streamWithinLength) : (abort state reason).state.streamWithinLength := h
+
+private theorem output_within {state : State} {parts after wait status final}
+    (h : state.streamWithinLength) :
+    (output state parts after wait status final).state.streamWithinLength := h
+
+private theorem streamOutput_within {state : State} {parts after status final ranges}
+    (h : state.streamWithinLength) :
+    (streamOutput state parts after status final ranges).state.streamWithinLength := h
+
+private theorem fail_within {state : State} {status : Nat} (h : state.streamWithinLength) :
+    (fail state status).state.streamWithinLength := by
+  unfold fail
+  dsimp only
+  split
+  · exact abort_within h
+  · exact output_within h
+
+theorem State.new_within (config : Config) : (State.new config).streamWithinLength :=
+  ⟨Nat.zero_le _, fun _ h => by cases h⟩
+
+/-- Starting a stream resets the committed count for the new head. -/
+theorem State.beginStream_within (state : State) (requestId : Nat) (response : Response)
+    (knownLength : Option Nat) (declared : Array String) (h : state.streamWithinLength) :
+    (state.beginStream requestId response knownLength declared).state.streamWithinLength := by
+  unfold State.beginStream
+  split
+  · exact abort_within h
+  split
+  · exact fail_within h
+  dsimp only
+  split
+  · exact fail_within h
+  · exact streamOutput_within ⟨Nat.zero_le _, fun _ _ _ _ => Nat.zero_le _⟩
+
+/-- **No body overrun.** A body slice that would pass the declared
+Content-Length or the stream limit aborts the connection instead. -/
+theorem State.streamChunk_within (state : State) (requestId : Nat) (bytes : ByteArray)
+    (h : state.streamWithinLength) : (state.streamChunk requestId bytes).state.streamWithinLength := by
+  obtain ⟨hmax, hlen⟩ := h
+  unfold State.streamChunk
+  simp only [Id.run]
+  repeat' split
+  all_goals (first | exact abort_within ⟨hmax, hlen⟩ | skip)
+  -- Content-Length plan: both the stream limit and the declared length hold.
+  next _ _ plan hplan hfitMax _ length hframing hfit _ _ _ =>
+    have hle := hlen plan hplan length hframing
+    rw [Nat.min_eq_left hmax] at hfitMax
+    rw [Nat.min_eq_left hle] at hfit
+    refine streamOutput_within ⟨?_, ?_⟩
+    · dsimp only; omega
+    · intro p hp n hn
+      rw [hplan] at hp
+      cases hp
+      rw [hframing] at hn
+      cases hn
+      dsimp only; omega
+  -- Chunked or close-delimited plan: only the stream limit applies.
+  next _ _ plan hplan hfitMax _ hnot _ _ _ =>
+    rw [Nat.min_eq_left hmax] at hfitMax
+    refine streamOutput_within ⟨?_, ?_⟩
+    · dsimp only; omega
+    · intro p hp n hn
+      rw [hplan] at hp
+      cases hp
+      exact (hnot n hn).elim
+
+/-- **No short or long streamed body.** Ending a Content-Length stream whose
+committed count differs from the declared length aborts the connection. -/
+theorem State.endStream_rejects_mismatch (state : State) (requestId : Nat)
+    (trailers : Array Header) (plan : Streaming.Plan) (n : Nat)
+    (hplan : state.streamPlan = some plan) (hn : plan.framing = .contentLength n)
+    (hne : state.streamBytes ≠ n) :
+    ∃ reason, (state.endStream requestId trailers).actions =
+      [.readEnabled false, .abort reason] := by
+  unfold State.endStream
+  simp only [Id.run]
+  split
+  · exact ⟨_, rfl⟩
+  rw [hplan]
+  dsimp only
+  split
+  · rename_i length hlength
+    rw [hn] at hlength
+    cases hlength
+    rw [ite_eq_left (by simpa using hne)]
+    exact ⟨_, rfl⟩
+  · rename_i hnot
+    exact (hnot n hn).elim
+
+end Proofs
+
 end LeanNet.HTTP1.Machine

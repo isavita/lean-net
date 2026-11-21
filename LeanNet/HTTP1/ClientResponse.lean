@@ -236,43 +236,100 @@ private def forbiddenTrailer (name : ByteArray) : Bool :=
     "www-authenticate".toUTF8, "cookie".toUTF8, "set-cookie".toUTF8,
     "expect".toUTF8].contains name
 
-private def Parser.finalHead (p : Parser) : Except Error (Head × Stage × Bool) := do
-  let mut contentLength : Option Nat := none
-  let mut transferEncoding := false
-  let mut close := false
-  let mut keepAlive := false
-  for h in p.headers do
-    if h.name == "content-length".toUTF8 then
-      if contentLength.isSome then throw .invalidFraming
-      contentLength := some (← decimal h.value)
-    else if h.name == "transfer-encoding".toUTF8 then
-      if transferEncoding || p.version == .http10 ||
-          !equalFold h.value "chunked".toUTF8 then throw .invalidFraming
-      transferEncoding := true
-    else if h.name == "connection".toUTF8 then
-      let tokens ← connectionOptions h.value
-      if tokens.contains "close".toUTF8 then close := true
-      if tokens.contains "keep-alive".toUTF8 then keepAlive := true
-  if transferEncoding && contentLength.isSome then throw .invalidFraming
-  let status := p.status.toNat
-  if (status < 200 || status == 204) && (transferEncoding || contentLength.isSome) then
-    throw .invalidFraming
-  let tunnel := status == 101 || (p.requestMethod == "CONNECT".toUTF8 && status >= 200 && status < 300)
-  let bodyless := p.requestMethod == "HEAD".toUTF8 || status < 200 || status == 204 ||
+/-- Framing-relevant facts gathered from one response head (RFC 9112 §6.3). -/
+structure FramingFacts where
+  contentLength : Option Nat := none
+  chunked : Bool := false
+  close : Bool := false
+  keepAlive : Bool := false
+  deriving Inhabited
+
+/-- Fold one header into the framing facts. A second Content-Length, any
+Transfer-Encoding other than one `chunked` coding, and Transfer-Encoding in an
+HTTP/1.0 response are framing errors. -/
+def FramingFacts.add (version : Version) (facts : FramingFacts) (h : Header) :
+    Except Error FramingFacts :=
+  if h.name == "content-length".toUTF8 then
+    if facts.contentLength.isSome then .error .invalidFraming
+    else match decimal h.value with
+      | .ok n => .ok { facts with contentLength := some n }
+      | .error e => .error e
+  else if h.name == "transfer-encoding".toUTF8 then
+    if facts.chunked || version == .http10 || !equalFold h.value "chunked".toUTF8 then
+      .error .invalidFraming
+    else .ok { facts with chunked := true }
+  else if h.name == "connection".toUTF8 then
+    match connectionOptions h.value with
+    | .ok tokens => .ok { facts with
+        close := facts.close || tokens.contains "close".toUTF8
+        keepAlive := facts.keepAlive || tokens.contains "keep-alive".toUTF8 }
+    | .error e => .error e
+  else .ok facts
+
+def scanFraming (version : Version) (headers : Array Header) : Except Error FramingFacts :=
+  headers.foldlM (FramingFacts.add version) {}
+
+/-- The message-length decision for one response head. -/
+structure Framing where
+  framing : BodyFraming
+  /-- The connection may return to a pool after the complete response. -/
+  reusable : Bool
+  /-- Remaining bytes belong to a protocol switch, never to HTTP. -/
+  tunnel : Bool
+
+def delimitedByClose : BodyFraming → Bool
+  | .closeDelimited => true
+  | _ => false
+
+/-- RFC 9112 §6.3 message-length selection for a head, before validation. -/
+def selectFraming (requestMethod : ByteArray) (version : Version) (status : Nat)
+    (facts : FramingFacts) : Framing :=
+  let tunnel := status == 101 ||
+    (requestMethod == "CONNECT".toUTF8 && status >= 200 && status < 300)
+  let bodyless := requestMethod == "HEAD".toUTF8 || status < 200 || status == 204 ||
     status == 304
-  if tunnel && (transferEncoding || contentLength.isSome) then throw .invalidFraming
-  if status == 205 && contentLength.any (· != 0) then throw .invalidFraming
   let framing : BodyFraming :=
     if bodyless || tunnel then .none
-    else if transferEncoding then .chunked
-    else if let some n := contentLength then .contentLength n
-    else .closeDelimited
-  if let .contentLength n := framing then
-    if n > p.limits.maxBodyBytes then throw .bodyLimit
-  let reusable := !tunnel && framing != .closeDelimited && !close &&
-    (p.version == .http11 || keepAlive)
+    else if facts.chunked then .chunked
+    else match facts.contentLength with
+      | some n => .contentLength n
+      | none => .closeDelimited
+  { framing, tunnel,
+    reusable := !tunnel && !delimitedByClose framing && !facts.close &&
+      (version == .http11 || facts.keepAlive) }
+
+/-- The first framing rule a head violates, if any: both TE and CL, a framed
+1xx/204, a framed tunnel, content on 205, or a length over the body limit. -/
+def framingViolation (limits : Limits) (status : Nat) (facts : FramingFacts)
+    (d : Framing) : Option Error :=
+  let framed := facts.chunked || facts.contentLength.isSome
+  if facts.chunked && facts.contentLength.isSome then some .invalidFraming
+  else if (status < 200 || status == 204) && framed then some .invalidFraming
+  else if d.tunnel && framed then some .invalidFraming
+  else if status == 205 && facts.contentLength.any (· != 0) then some .invalidFraming
+  else match d.framing with
+    | .contentLength n => if n > limits.maxBodyBytes then some .bodyLimit else none
+    | _ => none
+
+def decideFraming (limits : Limits) (requestMethod : ByteArray) (version : Version)
+    (status : Nat) (facts : FramingFacts) : Except Error Framing :=
+  let d := selectFraming requestMethod version status facts
+  match framingViolation limits status facts d with
+  | some e => .error e
+  | none => .ok d
+
+/-- Framing of a complete response head: scan its fields, then decide. -/
+def frameHead (limits : Limits) (requestMethod : ByteArray) (version : Version)
+    (status : Nat) (headers : Array Header) : Except Error Framing :=
+  match scanFraming version headers with
+  | .ok facts => decideFraming limits requestMethod version status facts
+  | .error e => .error e
+
+private def Parser.finalHead (p : Parser) : Except Error (Head × Stage × Bool) := do
+  let { framing, reusable, tunnel } ←
+    frameHead p.limits p.requestMethod p.version p.status.toNat p.headers
   let head : Head := { version := p.version, status := p.status, reason := p.reason, headers := p.headers, framing, reusable }
-  let stage := if tunnel || bodyless || framing == .contentLength 0 then .done
+  let stage := if tunnel || framing == .contentLength 0 then .done
     else match framing with
       | .contentLength n => .fixed n
       | .chunked => .chunkLine
@@ -282,28 +339,45 @@ private def Parser.finalHead (p : Parser) : Except Error (Head × Stage × Bool)
   -- must not be returned to a pooled HTTP parser as another response.
   return (head, stage, tunnel)
 
-private def parseChunkSize (line : ByteArray) (remaining : Nat) : Except Error Nat := do
-  let mut stop := line.size
+private def hexDigit (c : UInt8) : Nat :=
+  if c >= 48 && c <= 57 then c.toNat - 48
+  else if c >= 65 && c <= 70 then c.toNat - 55
+  else if c >= 97 && c <= 102 then c.toNat - 87
+  else 16
+
+/-- Accumulate hex digits `line[i:stop]`, failing as soon as the running size
+exceeds `remaining`. -/
+private def hexDigits (line : ByteArray) (remaining stop : Nat) (i acc : Nat) :
+    Except Error Nat :=
+  if i < stop then
+    let digit := hexDigit line[i]!
+    if digit == 16 then .error .invalidChunk
+    else
+      let next := acc * 16 + digit
+      if next > remaining then .error .bodyLimit
+      else hexDigits line remaining stop (i + 1) next
+  else .ok acc
+termination_by stop - i
+
+private def semicolonIndex (line : ByteArray) : Nat := Id.run do
   for i in [:line.size] do
-    if line[i]! == 59 then
-      stop := i
-      break
-  if stop == 0 then throw .invalidChunk
-  let mut size := 0
-  for i in [:stop] do
-    let c := line[i]!
-    let digit := if c >= 48 && c <= 57 then c.toNat - 48
-      else if c >= 65 && c <= 70 then c.toNat - 55
-      else if c >= 97 && c <= 102 then c.toNat - 87
-      else 16
-    if digit == 16 then throw .invalidChunk
-    size := size * 16 + digit
-    if size > remaining then throw .bodyLimit
+    if line[i]! == 59 then return i
+  return line.size
+
+/-- Chunk extensions after `;` must be a token-led sequence of safe bytes. -/
+private def chunkExtensionOk (line : ByteArray) (stop : Nat) : Bool := Id.run do
   if stop < line.size then
-    if stop + 1 == line.size || !token line[stop + 1]! then throw .invalidChunk
+    if stop + 1 == line.size || !token line[stop + 1]! then return false
     for i in [stop + 1:line.size] do
-      if !safeValue line[i]! then throw .invalidChunk
-  return size
+      if !safeValue line[i]! then return false
+  return true
+
+private def parseChunkSize (line : ByteArray) (remaining : Nat) : Except Error Nat :=
+  let stop := semicolonIndex line
+  if stop == 0 then .error .invalidChunk
+  else match hexDigits line remaining stop 0 0 with
+    | .error e => .error e
+    | .ok size => if chunkExtensionOk line stop then .ok size else .error .invalidChunk
 
 private def Parser.connectionNominates (p : Parser) (name : ByteArray) : Bool := Id.run do
   for h in p.headers do
@@ -414,5 +488,312 @@ def Parser.eof (parser : Parser) : Except Error Step :=
   | .closeDelimited => .ok { parser := { parser with stage := .done }, consumed := 0, events := #[.complete] }
   | .done => .ok { parser, consumed := 0, events := #[] }
   | _ => .error .truncated
+
+
+/-! ## Verified framing rules (RFC 9112 §6.3)
+
+`Parser.finalHead` frames every final upstream response head with
+`frameHead`, and chunk sizes are read with `parseChunkSize`. The theorems below
+are about those production functions. They are the gateway's defence against
+response smuggling: an upstream cannot make one connection carry an ambiguous
+message length, or get a desynchronized connection returned to the pool. -/
+
+section Proofs
+
+private abbrev CL : ByteArray := "content-length".toUTF8
+private abbrev TE : ByteArray := "transfer-encoding".toUTF8
+
+/-- Close every branch of an unfolded `FramingFacts.add` equation. -/
+local macro "add_cases" hadd:ident : tactic =>
+  `(tactic| (unfold FramingFacts.add at $hadd:ident
+             repeat' (split at $hadd:ident)
+             all_goals (first | (cases $hadd:ident; done) | (cases $hadd:ident; simp_all) | simp_all)))
+
+private theorem add_keeps_contentLength {version : Version} {f f' : FramingFacts} {h : Header}
+    (hadd : FramingFacts.add version f h = .ok f') (hf : f.contentLength.isSome) :
+    f'.contentLength.isSome := by
+  add_cases hadd
+
+private theorem add_keeps_chunked {version : Version} {f f' : FramingFacts} {h : Header}
+    (hadd : FramingFacts.add version f h = .ok f') (hf : f.chunked = true) :
+    f'.chunked = true := by
+  add_cases hadd
+
+private theorem add_contentLength_sets {version : Version} {f f' : FramingFacts} {h : Header}
+    (hn : h.name = CL) (hadd : FramingFacts.add version f h = .ok f') :
+    f'.contentLength.isSome := by
+  unfold FramingFacts.add at hadd
+  rw [hn, ite_eq_left (by decide)] at hadd
+  repeat' (split at hadd)
+  all_goals (first | (cases hadd; done) | (cases hadd; rfl) | simp_all)
+
+private theorem add_contentLength_dup {version : Version} {f f' : FramingFacts} {h : Header}
+    (hn : h.name = CL) (hf : f.contentLength.isSome) :
+    FramingFacts.add version f h ≠ .ok f' := by
+  intro hadd
+  unfold FramingFacts.add at hadd
+  rw [hn, ite_eq_left (by decide), ite_eq_left hf] at hadd
+  cases hadd
+
+private theorem add_chunked_sets {version : Version} {f f' : FramingFacts} {h : Header}
+    (hn : h.name = TE) (hadd : FramingFacts.add version f h = .ok f') : f'.chunked = true := by
+  unfold FramingFacts.add at hadd
+  rw [hn, ite_eq_right (by decide), ite_eq_left (by decide)] at hadd
+  repeat' (split at hadd)
+  all_goals (first | (cases hadd; done) | (cases hadd; rfl) | simp_all)
+
+private theorem add_chunked_http10 {f f' : FramingFacts} {h : Header} (hn : h.name = TE) :
+    FramingFacts.add .http10 f h ≠ .ok f' := by
+  intro hadd
+  unfold FramingFacts.add at hadd
+  rw [hn, ite_eq_right (by decide), ite_eq_left (by decide),
+    ite_eq_left (by rw [show (Version.http10 == Version.http10) = true from by decide]; simp)] at hadd
+  cases hadd
+
+private theorem foldlM_ok_of_cons {version : Version} {f f' : FramingFacts} {a : Header}
+    {rest : List Header} (h : (a :: rest).foldlM (FramingFacts.add version) f = .ok f') :
+    ∃ f₁, FramingFacts.add version f a = .ok f₁ ∧
+      rest.foldlM (FramingFacts.add version) f₁ = .ok f' := by
+  rw [List.foldlM_cons] at h
+  cases hstep : FramingFacts.add version f a with
+  | error e => rw [hstep] at h; cases h
+  | ok f₁ => rw [hstep] at h; exact ⟨f₁, rfl, h⟩
+
+private theorem foldlM_keeps {version : Version} {P : FramingFacts → Prop}
+    (keep : ∀ {f f' h}, FramingFacts.add version f h = .ok f' → P f → P f') :
+    ∀ (l : List Header) (f f' : FramingFacts),
+      l.foldlM (FramingFacts.add version) f = .ok f' → P f → P f'
+  | [], f, f', h, hp => by cases h; exact hp
+  | a :: rest, f, f', h, hp => by
+    obtain ⟨f₁, h₁, h₂⟩ := foldlM_ok_of_cons h
+    exact foldlM_keeps keep rest f₁ f' h₂ (keep h₁ hp)
+
+private theorem foldlM_establishes {version : Version} {P : FramingFacts → Prop} {x : Header}
+    (keep : ∀ {f f' h}, FramingFacts.add version f h = .ok f' → P f → P f')
+    (sets : ∀ {f f'}, FramingFacts.add version f x = .ok f' → P f') :
+    ∀ (l : List Header) (f f' : FramingFacts), x ∈ l →
+      l.foldlM (FramingFacts.add version) f = .ok f' → P f'
+  | [], _, _, hm, _ => by cases hm
+  | a :: rest, f, f', hm, h => by
+    obtain ⟨f₁, h₁, h₂⟩ := foldlM_ok_of_cons h
+    cases hm with
+    | head => exact foldlM_keeps keep rest f₁ f' h₂ (sets h₁)
+    | tail _ hm => exact foldlM_establishes keep sets rest f₁ f' hm h₂
+
+private theorem scan_toList {version : Version} {headers : Array Header} {facts : FramingFacts}
+    (h : scanFraming version headers = .ok facts) :
+    headers.toList.foldlM (FramingFacts.add version) {} = .ok facts := by
+  rw [Array.foldlM_toList]; exact h
+
+private theorem decide_ok {limits : Limits} {method : ByteArray} {version : Version}
+    {status : Nat} {facts : FramingFacts} {d : Framing}
+    (h : decideFraming limits method version status facts = .ok d) :
+    d = selectFraming method version status facts ∧
+      framingViolation limits status facts d = none := by
+  unfold decideFraming at h
+  dsimp only at h
+  cases hv : framingViolation limits status facts (selectFraming method version status facts) with
+  | some e => rw [hv] at h; cases h
+  | none => rw [hv] at h; cases h; exact ⟨rfl, hv⟩
+
+private theorem frameHead_ok {limits : Limits} {method : ByteArray} {version : Version}
+    {status : Nat} {headers : Array Header} {d : Framing}
+    (h : frameHead limits method version status headers = .ok d) :
+    ∃ facts, scanFraming version headers = .ok facts ∧
+      d = selectFraming method version status facts ∧
+      framingViolation limits status facts d = none := by
+  unfold frameHead at h
+  cases hs : scanFraming version headers with
+  | error e => rw [hs] at h; cases h
+  | ok facts => rw [hs] at h; exact ⟨facts, rfl, decide_ok h⟩
+
+/-- **No duplicate Content-Length.** A response head with two Content-Length
+fields is rejected, even when their values agree. -/
+theorem frameHead_rejects_duplicate_contentLength (limits : Limits) (method : ByteArray)
+    (version : Version) (status : Nat) (headers : Array Header) (xs ys : List Header)
+    (h₁ h₂ : Header) (split : headers.toList = xs ++ h₁ :: ys) (hm : h₂ ∈ ys)
+    (n₁ : h₁.name = CL) (n₂ : h₂.name = CL) :
+    ∀ d, frameHead limits method version status headers ≠ .ok d := by
+  intro d hd
+  obtain ⟨facts, hscan, -⟩ := frameHead_ok hd
+  have hl := scan_toList hscan
+  rw [split, List.foldlM_append] at hl
+  cases hxs : xs.foldlM (FramingFacts.add version) {} with
+  | error e => rw [hxs] at hl; cases hl
+  | ok f₀ =>
+    rw [hxs] at hl
+    obtain ⟨f₁, hadd₁, hrest⟩ := foldlM_ok_of_cons hl
+    -- Every later field keeps Content-Length present; the second one fails.
+    have dup : ∀ (l : List Header) (f f' : FramingFacts), h₂ ∈ l → f.contentLength.isSome →
+        l.foldlM (FramingFacts.add version) f ≠ .ok f' := by
+      intro l
+      induction l with
+      | nil => intro _ _ hm; cases hm
+      | cons a rest ih =>
+        intro f f' hm hf hfold
+        obtain ⟨g, hg, hgrest⟩ := foldlM_ok_of_cons hfold
+        cases hm with
+        | head => exact add_contentLength_dup n₂ hf hg
+        | tail _ hm => exact ih g f' hm (add_keeps_contentLength hg hf) hgrest
+    exact dup ys f₁ facts hm (add_contentLength_sets n₁ hadd₁) hrest
+
+/-- **No Transfer-Encoding with Content-Length** (RFC 9112 §6.3 rule 3). A
+proxy must not choose either length when both are present. -/
+theorem frameHead_rejects_transferEncoding_with_contentLength (limits : Limits)
+    (method : ByteArray) (version : Version) (status : Nat) (headers : Array Header)
+    (h₁ h₂ : Header) (m₁ : h₁ ∈ headers.toList) (m₂ : h₂ ∈ headers.toList)
+    (n₁ : h₁.name = CL) (n₂ : h₂.name = TE) :
+    ∀ d, frameHead limits method version status headers ≠ .ok d := by
+  intro d hd
+  obtain ⟨facts, hscan, -, hv⟩ := frameHead_ok hd
+  have hl := scan_toList hscan
+  have hcl : facts.contentLength.isSome = true :=
+    foldlM_establishes (P := fun f => f.contentLength.isSome = true)
+      add_keeps_contentLength (add_contentLength_sets n₁) _ _ _ m₁ hl
+  have hte : facts.chunked = true :=
+    foldlM_establishes (P := fun f => f.chunked = true)
+      add_keeps_chunked (add_chunked_sets n₂) _ _ _ m₂ hl
+  simp [framingViolation, hcl, hte] at hv
+
+/-- **No chunked HTTP/1.0 responses.** HTTP/1.0 has no Transfer-Encoding, so
+a 1.0 response carrying one is rejected instead of being guessed at. -/
+theorem frameHead_rejects_transferEncoding_http10 (limits : Limits) (method : ByteArray)
+    (status : Nat) (headers : Array Header) (h : Header) (m : h ∈ headers.toList)
+    (n : h.name = TE) :
+    ∀ d, frameHead limits method .http10 status headers ≠ .ok d := by
+  intro d hd
+  obtain ⟨facts, hscan, -⟩ := frameHead_ok hd
+  exact (foldlM_establishes (P := fun _ => False) (fun _ hp => hp)
+    (fun hadd => absurd hadd (add_chunked_http10 n)) _ _ _ m (scan_toList hscan)).elim
+
+/-- **Framed interim and 204 responses are rejected.** A 1xx or 204 head that
+declares a body length is malformed, not a body. -/
+theorem frameHead_rejects_framed_bodyless_status (limits : Limits) (method : ByteArray)
+    (version : Version) (status : Nat) (headers : Array Header)
+    (hs : status < 200 ∨ status = 204) (h : Header) (m : h ∈ headers.toList)
+    (n : h.name = CL ∨ h.name = TE) :
+    ∀ d, frameHead limits method version status headers ≠ .ok d := by
+  intro d hd
+  obtain ⟨facts, hscan, -, hv⟩ := frameHead_ok hd
+  have hl := scan_toList hscan
+  have framed : (facts.chunked || facts.contentLength.isSome) = true := by
+    rcases n with n | n
+    · simp [foldlM_establishes (P := fun f => f.contentLength.isSome = true)
+        add_keeps_contentLength (add_contentLength_sets n) _ _ _ m hl]
+    · simp [foldlM_establishes (P := fun f => f.chunked = true)
+        add_keeps_chunked (add_chunked_sets n) _ _ _ m hl]
+  have hstatus : (decide (status < 200) || status == 204) = true := by
+    rcases hs with hs | hs
+    · simp [hs]
+    · subst hs; simp
+  simp only [framingViolation, framed, hstatus, Bool.and_true] at hv
+  split at hv
+  · cases hv
+  · simp at hv
+
+/-- **Bodyless responses carry no body.** Responses to HEAD and 1xx, 204 and
+304 responses never consume body bytes, whatever their headers claim. -/
+theorem frameHead_bodyless (limits : Limits) (method : ByteArray) (version : Version)
+    (status : Nat) (headers : Array Header) (d : Framing)
+    (h : frameHead limits method version status headers = .ok d)
+    (hb : method = "HEAD".toUTF8 ∨ status < 200 ∨ status = 204 ∨ status = 304) :
+    d.framing = .none := by
+  obtain ⟨facts, -, rfl, -⟩ := frameHead_ok h
+  have : (method == "HEAD".toUTF8 || decide (status < 200) || status == 204 ||
+      status == 304) = true := by
+    rcases hb with hb | hb | hb | hb
+    · subst hb; rw [show ("HEAD".toUTF8 == "HEAD".toUTF8) = true from by decide]; simp
+    · simp [hb]
+    · subst hb; simp
+    · subst hb; simp
+  simp only [selectFraming, this, Bool.true_or, ite_eq_left]
+
+/-- **Tunnels are never framed as HTTP.** After a 101 or a successful CONNECT
+the parser stops, and the connection is never pooled. -/
+theorem frameHead_tunnel (limits : Limits) (method : ByteArray) (version : Version)
+    (status : Nat) (headers : Array Header) (d : Framing)
+    (h : frameHead limits method version status headers = .ok d) (ht : d.tunnel = true) :
+    d.framing = .none ∧ d.reusable = false := by
+  obtain ⟨facts, -, rfl, -⟩ := frameHead_ok h
+  unfold selectFraming at ht ⊢
+  dsimp only at ht ⊢
+  rw [ht]
+  simp
+
+/-- **Pool safety.** A connection is reusable only when its response length is
+self-delimiting (never read-until-close), it is not a tunnel, and the upstream
+did not send `Connection: close`. -/
+theorem frameHead_reusable (limits : Limits) (method : ByteArray) (version : Version)
+    (status : Nat) (headers : Array Header) (d : Framing)
+    (h : frameHead limits method version status headers = .ok d) (hr : d.reusable = true) :
+    d.tunnel = false ∧ d.framing ≠ .closeDelimited ∧
+      ∃ facts, scanFraming version headers = .ok facts ∧ facts.close = false := by
+  obtain ⟨facts, hscan, rfl, -⟩ := frameHead_ok h
+  simp only [selectFraming, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hr ⊢
+  obtain ⟨⟨⟨ht, hc⟩, hclose⟩, -⟩ := hr
+  refine ⟨ht, ?_, facts, hscan, hclose⟩
+  intro hf
+  rw [hf] at hc
+  simp [delimitedByClose] at hc
+
+/-- **Declared lengths respect the body limit** before any body byte is read. -/
+theorem frameHead_contentLength_bounded (limits : Limits) (method : ByteArray)
+    (version : Version) (status : Nat) (headers : Array Header) (d : Framing) (n : Nat)
+    (h : frameHead limits method version status headers = .ok d)
+    (hn : d.framing = .contentLength n) : n ≤ limits.maxBodyBytes := by
+  obtain ⟨facts, -, -, hv⟩ := frameHead_ok h
+  apply Nat.le_of_not_lt
+  intro hlt
+  simp only [framingViolation, hn] at hv
+  repeat' (split at hv)
+  all_goals simp_all
+
+private theorem hexDigits_le (line : ByteArray) (remaining stop : Nat) :
+    ∀ i acc n, acc ≤ remaining → hexDigits line remaining stop i acc = .ok n →
+      n ≤ remaining := by
+  intro i acc n hacc h
+  induction i, acc using hexDigits.induct line remaining stop with
+  | case1 i acc hi digit hdigit =>
+    rw [hexDigits, ite_eq_left hi] at h
+    dsimp only at h
+    rw [ite_eq_left (show (hexDigit line[i]! == 16) = true from hdigit)] at h
+    cases h
+  | case2 i acc hi digit hdigit next hnext =>
+    rw [hexDigits, ite_eq_left hi] at h
+    dsimp only at h
+    rw [ite_eq_right (show ¬(hexDigit line[i]! == 16) = true from hdigit),
+      ite_eq_left (show acc * 16 + hexDigit line[i]! > remaining from hnext)] at h
+    cases h
+  | case3 i acc hi digit hdigit next hnext ih =>
+    rw [hexDigits, ite_eq_left hi] at h
+    dsimp only at h
+    rw [ite_eq_right (show ¬(hexDigit line[i]! == 16) = true from hdigit),
+      ite_eq_right (show ¬acc * 16 + hexDigit line[i]! > remaining from hnext)] at h
+    exact ih (by omega) h
+  | case4 i acc hi =>
+    rw [hexDigits, ite_eq_right hi] at h
+    cases h
+    exact hacc
+
+/-- **Chunk sizes respect the remaining body budget.** A chunk-size line can
+never announce more bytes than the response may still deliver, so an upstream
+cannot make the gateway wait for or buffer an over-limit chunk. -/
+theorem parseChunkSize_bounded (line : ByteArray) (remaining n : Nat)
+    (h : parseChunkSize line remaining = .ok n) : n ≤ remaining := by
+  unfold parseChunkSize at h
+  dsimp only at h
+  split at h
+  · cases h
+  · cases hsize : hexDigits line remaining (semicolonIndex line) 0 0 with
+    | error e => rw [hsize] at h; cases h
+    | ok size =>
+      rw [hsize] at h
+      dsimp only at h
+      split at h
+      · cases h; exact hexDigits_le line remaining _ 0 0 _ (Nat.zero_le _) hsize
+      · cases h
+
+
+end Proofs
 
 end LeanNet.HTTP1.ClientResponse

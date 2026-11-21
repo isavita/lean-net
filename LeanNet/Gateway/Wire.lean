@@ -59,8 +59,10 @@ private def hopField (name : String) : Bool :=
     particular RFC 9440 certificate fields and common deployment-specific
     identity prefixes are never forwarded from an untrusted request. -/
 private def untrustedIdentityField (name : String) : Bool :=
-  ["forwarded", "x-real-ip", "x-remote-user", "client-cert",
-   "client-cert-chain"].contains name ||
+  ["forwarded", "x-real-ip", "x-remote-user", "client-cert", "client-cert-chain",
+   -- Covered by the prefixes below; listed so proofs can evaluate them.
+   "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port",
+   "x-forwarded-prefix"].contains name ||
   name.startsWith "x-forwarded-" || name.startsWith "x-ssl-" ||
   name.startsWith "x-client-" || name.startsWith "ssl-client-"
 
@@ -123,6 +125,20 @@ private def forwardedValue (a : Admitted) : ByteArray := Id.run do
   value := value.append host
   return value.append "\"".toUTF8
 
+/-- Client fields forwarded upstream, in order. Every field must be valid;
+hop-by-hop, framing, Host, identity and Connection-nominated fields are
+dropped (see `forwardedFields_safe`). -/
+def forwardStep (nominated : Array String) (out : Array Header) (field : Header) :
+    Except WireError (Array Header) :=
+  if !fieldOk field then .error .invalidHeader
+  else if !barredRequestField field.name.toLower && !nominated.contains field.name.toLower then
+    .ok (out.push field)
+  else .ok out
+
+def forwardedFields (nominated : Array String) (headers : Array Header) :
+    Except WireError (Array Header) :=
+  headers.foldlM (forwardStep nominated) #[]
+
 /-- A bounded request already admitted by the gate, serialized as a head and
     body without copying the body into the head. Trailers are sent with chunked
     framing after filtering the same hop fields as the head. -/
@@ -136,11 +152,8 @@ def encodeRequest (a : Admitted) (request : Request) : Except WireError (Array B
   head := (head.append (canonicalTarget a.path)).append " HTTP/1.1\r\n".toUTF8
   head := appendHeader head "Host" a.authority.render
   let mut trailers : Array Header := #[]
-  for field in request.headers do
-    if !fieldOk field then throw .invalidHeader
-    let name := field.name.toLower
-    if !barredRequestField name && !nominated.contains name then
-      head := appendHeader head field.name field.value
+  for field in ← forwardedFields nominated request.headers do
+    head := appendHeader head field.name field.value
   for field in request.trailers do
     if !fieldOk field then throw .invalidTrailer
     let name := field.name.toLower
@@ -195,5 +208,80 @@ def decodeReply (head : ClientResponse.Head) (body : ByteArray)
   let options : ResponseOptions :=
     if trailing.isEmpty then {} else { framing := some .chunked, trailers := trailing }
   return { response := { status := head.status.toNat, headers, body }, options }
+
+
+/-! ## Verified header forwarding
+
+`encodeRequest` writes the route's Host first, then exactly the fields that
+`forwardedFields` returns, then the forwarding fields it builds itself. -/
+
+section Proofs
+
+private theorem forwardedFields_list (nominated : Array String) :
+    ∀ (l : List Header) (acc out : Array Header),
+      l.foldlM (forwardStep nominated) acc = .ok out →
+      ∀ f ∈ out, f ∈ acc ∨ (f ∈ l ∧ fieldOk f = true ∧
+        barredRequestField f.name.toLower = false ∧ nominated.contains f.name.toLower = false)
+  | [], acc, out, h, f, hf => by cases h; exact .inl hf
+  | a :: rest, acc, out, h, f, hf => by
+    rw [List.foldlM_cons] at h
+    unfold forwardStep at h
+    by_cases hok : fieldOk a = true
+    · by_cases hkeep : (!barredRequestField a.name.toLower && !nominated.contains a.name.toLower) = true
+      · rw [ite_eq_right (by simp [hok]), ite_eq_left hkeep] at h
+        rcases forwardedFields_list nominated rest _ out h f hf with hacc | hrest
+        · rcases Array.mem_push.mp hacc with hacc | rfl
+          · exact .inl hacc
+          · simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hkeep
+            exact .inr ⟨by simp, hok, hkeep.1, hkeep.2⟩
+        · exact .inr ⟨by simp [hrest.1], hrest.2⟩
+      · rw [ite_eq_right (by simp [hok]), ite_eq_right hkeep] at h
+        rcases forwardedFields_list nominated rest _ out h f hf with hacc | hrest
+        · exact .inl hacc
+        · exact .inr ⟨by simp [hrest.1], hrest.2⟩
+    · rw [ite_eq_left (by simpa using hok)] at h
+      cases h
+
+/-- **Only safe client fields cross the hop.** Every forwarded field is one
+of the client's fields, is CR/LF-free, is not hop-by-hop, framing, Host or
+identity metadata, and was not nominated by the client's Connection field. -/
+theorem forwardedFields_safe (nominated : Array String) (headers out : Array Header)
+    (h : forwardedFields nominated headers = .ok out) :
+    ∀ f ∈ out, f ∈ headers ∧ fieldOk f = true ∧
+      barredRequestField f.name.toLower = false ∧ nominated.contains f.name.toLower = false := by
+  intro f hf
+  unfold forwardedFields at h
+  rw [← Array.foldlM_toList] at h
+  rcases forwardedFields_list nominated headers.toList #[] out h f hf with h0 | hrest
+  · simp at h0
+  · exact ⟨Array.mem_toList_iff.mp hrest.1, hrest.2⟩
+
+/-- Client fields that must never reach an upstream from the client. -/
+def neverForwarded : List String :=
+  ["host", "content-length", "transfer-encoding", "connection", "keep-alive",
+   "proxy-connection", "te", "trailer", "upgrade", "expect", "via",
+   "proxy-authorization", "forwarded", "x-forwarded-for", "x-forwarded-host",
+   "x-forwarded-proto", "x-real-ip", "x-remote-user", "client-cert", "client-cert-chain"]
+
+/-- **No request smuggling or identity spoofing through forwarded fields.**
+None of `neverForwarded` (in any letter case) is copied from the client;
+the gateway writes Host, framing and forwarding fields itself. -/
+theorem forwardedFields_drops (nominated : Array String) (headers out : Array Header)
+    (h : forwardedFields nominated headers = .ok out) :
+    ∀ f ∈ out, ∀ n ∈ neverForwarded, f.name.toLower ≠ n := by
+  intro f hf n hn heq
+  have hbar := (forwardedFields_safe nominated headers out h f hf).2.2.1
+  rw [heq] at hbar
+  have : ∀ n ∈ neverForwarded, barredRequestField n = true := by decide
+  rw [this n hn] at hbar
+  cases hbar
+
+/-- Every forwarded field value is free of CR and LF. -/
+theorem forwardedFields_no_crlf (nominated : Array String) (headers out : Array Header)
+    (h : forwardedFields nominated headers = .ok out) :
+    ∀ f ∈ out, ∀ c ∈ f.value.data, c ≠ 13 ∧ c ≠ 10 :=
+  fun f hf => fieldOk_no_crlf (forwardedFields_safe nominated headers out h f hf).2.1
+
+end Proofs
 
 end LeanNet.Gateway
