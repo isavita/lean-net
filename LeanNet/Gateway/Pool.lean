@@ -285,6 +285,10 @@ def Pool.finishResponse (pool : Pool) (lease : Lease) (head : HTTP1.ClientRespon
   match entry.phase with
   | .busy socket _ =>
     if lease.target.security != .plain then return ← pool.discard lease
+    -- A streamed response can finish from input held while downstream
+    -- backpressure disabled reads. Idle sockets must observe EOF and stray
+    -- bytes, and the next lease must receive its response.
+    try socket.setReadEnabled true catch _ => return ← pool.discard lease
     pool.state.set { state with
       entries := state.entries.insert lease.id ({ entry with phase := .idle socket nowMs }),
       idle := state.idle.insert entry.target (ids.push lease.id) }

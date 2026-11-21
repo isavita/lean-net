@@ -267,6 +267,61 @@ private def run (port : UInt16) : IO Unit := do
       check aborted s!"timed-out stream did not abort after {(← Reactor.nowMs) - brokenStartMs} ms"
       check ((← engine.pool.size) == 0) "broken stream retained upstream socket"
 
+      -- One backend write spans two 4 KiB reactor reads in the same poll. The
+      -- second read arrives while the stream is paused and completes the
+      -- response during `resume`; the pooled socket must still be readable.
+      backend.reset
+      let coalesced : Ticket := { downstream := listener.id, requestId := 8 }
+      check ((← engine.start coalesced (plan port) (request "GET") (← Reactor.nowMs)).isNone)
+        "coalesced stream case did not start"
+      let acceptedBefore ← backend.accepted.get
+      let mut coalescedReceived := false
+      for _ in [:100] do
+        if coalescedReceived then break
+        let outcomes ← pollGateway reactor engine backend
+        check outcomes.isEmpty "coalesced stream completed before backend head"
+        coalescedReceived := endsWith (← backend.received.get) "\r\n\r\n".toUTF8
+      check coalescedReceived "coalesced stream backend did not receive request"
+      for _ in [:5] do
+        check (← pollGateway reactor engine backend).isEmpty "coalesced stream completed early"
+      let payload := ByteArray.mk (Array.replicate 6000 120)
+      backend.send reactor ("HTTP/1.1 200 OK\r\nContent-Length: 6000\r\n\r\n".toUTF8 ++ payload)
+      let mut streamedBytes := 0
+      let mut coalescedFinished := false
+      let mut sawPendingRead := false
+      for _ in [:200] do
+        if coalescedFinished then break
+        let mut outcomes ← pollGateway reactor engine backend
+        if ← engine.isPaused coalesced then
+          let resumed ← engine.resume coalesced (← Reactor.nowMs)
+          if resumed.any (fun o => match o.stream with | some (.finish _) => true | _ => false) then
+            sawPendingRead := true
+          outcomes := outcomes ++ resumed
+        for outcome in outcomes do
+          check (outcome.ticket == coalesced) "coalesced stream ticket mismatch"
+          match outcome.stream with
+          | some (.start head) => check (head.status == 200) "coalesced stream head mismatch"
+          | some (.data bytes) => streamedBytes := streamedBytes + bytes.size
+          | some (.finish _) => coalescedFinished := true
+          | _ => fail "coalesced stream returned an unexpected outcome"
+      check (coalescedFinished && streamedBytes == 6000) s!"coalesced stream did not complete ({streamedBytes} bytes)"
+      check sawPendingRead "coalesced response did not complete from a read held while paused"
+      check ((← engine.pool.size) == 1) "clean coalesced stream did not retain idle upstream"
+
+      backend.reset
+      let reused : Ticket := { downstream := listener.id, requestId := 9 }
+      check ((← engine.start reused (plan port) (request "GET") (← Reactor.nowMs)).isNone)
+        "reuse after paused completion did not start"
+      let reusedOutcome ← drive reactor engine backend "\r\n\r\n".toUTF8
+        (some "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".toUTF8)
+      check ((← backend.accepted.get) == acceptedBefore + 1) "coalesced case opened unexpected sockets"
+      check (reusedOutcome.ticket == reused && reusedOutcome.reply.response.status == 200 &&
+        reusedOutcome.reply.response.body == "ok".toUTF8)
+        s!"pooled upstream left read-disabled after paused completion (status {reusedOutcome.reply.response.status})"
+      -- Past both the idle timeout and the reap throttle set by earlier pumps.
+      let _ ← engine.pump ((← Reactor.nowMs) + 20000)
+      check ((← engine.pool.size) == 0) "coalesced case left an idle upstream socket"
+
       let canceled : Ticket := { downstream := listener.id, requestId := 7 }
       check ((← engine.start canceled (plan port) (request "GET") (← Reactor.nowMs)).isNone)
         "cancellation case did not start"
