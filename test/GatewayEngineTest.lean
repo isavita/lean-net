@@ -305,7 +305,11 @@ private def run (port : UInt16) : IO Unit := do
           | some (.finish _) => coalescedFinished := true
           | _ => fail "coalesced stream returned an unexpected outcome"
       check (coalescedFinished && streamedBytes == 6000) s!"coalesced stream did not complete ({streamedBytes} bytes)"
-      check sawPendingRead "coalesced response did not complete from a read held while paused"
+      -- The POSIX loops read up to 64 KiB per poll, so the second 4 KiB read
+      -- is emitted after the pause. IOCP keeps one read outstanding per
+      -- socket and never emits one there; the reuse check below still runs.
+      if !System.Platform.isWindows then
+        check sawPendingRead "coalesced response did not complete from a read held while paused"
       check ((← engine.pool.size) == 1) "clean coalesced stream did not retain idle upstream"
 
       backend.reset
