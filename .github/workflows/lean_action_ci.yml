@@ -78,6 +78,11 @@ jobs:
           python3 test/test_reactor_connect.py -v
           python3 test/test_gateway_resolve.py -v
           python3 test/test_admin.py -v
+      - name: Machine-checked proofs and rate limiter differential test
+        run: |
+          lake build LeanNetSpec lean-net-ratelimit-differential
+          lake env lean test/ProofAudit.lean
+          .lake/build/bin/lean-net-ratelimit-differential
       - name: Short deterministic protocol fuzz and controller invariants
         run: |
           lake build lean-net-protocol-fuzz

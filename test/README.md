@@ -17,6 +17,14 @@ python3 test/test_gateway_runtime.py -v
 python3 test/soak.py --count 10000
 ```
 
+Proofs and the rate limiter's differential test are described in [verification](../docs/verification.md):
+
+```sh
+lake build LeanNetSpec lean-net-ratelimit-differential
+lake env lean test/ProofAudit.lean
+.lake/build/bin/lean-net-ratelimit-differential
+```
+
 The complete HTTP/2, TLS and WebSocket suites also require OpenSSL and the TLS fixtures:
 
 ```sh
